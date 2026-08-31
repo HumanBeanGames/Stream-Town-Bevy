@@ -1637,7 +1637,7 @@ fn migration_tab(ui: &mut egui::Ui, state: &mut ToolState) {
 fn authority_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.heading("Authoritative game settings");
     ui.label(
-        "These values drive deterministic world creation and simulation. Save the project baseline for source-controlled defaults, or write a local runtime override for immediate testing.",
+        "These values drive deterministic world creation and simulation. Save + apply writes both the source-controlled baseline and the runtime configuration used on the next game launch.",
     );
     ui.horizontal_wrapped(|ui| {
         ui.label("Project config");
@@ -1659,15 +1659,31 @@ fn authority_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                 Err(error) => format!("Game configuration error: {error}"),
             };
         }
-        if ui.button("Save project baseline").clicked() {
+        if ui.button("Save + apply to game").clicked() {
+            state.status = match save_and_apply_game_config(&state.config, &state.config_path) {
+                Ok((project, runtime)) => format!(
+                    "Saved {} and applied {}; restart the game to load the changes",
+                    project.display(),
+                    runtime.display()
+                ),
+                Err(error) => format!("Could not save and apply game configuration: {error:#}"),
+            };
+        }
+        if ui.button("Save baseline only").clicked() {
             state.status = match save_game_config(&state.config, &state.config_path) {
-                Ok(path) => format!("Saved project game configuration to {}", path.display()),
+                Ok(path) => format!(
+                    "Saved project baseline to {}; it is not the active runtime override",
+                    path.display()
+                ),
                 Err(error) => format!("Could not save project game configuration: {error:#}"),
             };
         }
-        if ui.button("Write local runtime override").clicked() {
+        if ui.button("Apply locally only").clicked() {
             state.status = match save_runtime_config(&state.config) {
-                Ok(path) => format!("Saved runtime override to {}", path.display()),
+                Ok(path) => format!(
+                    "Applied runtime configuration to {}; restart the game to load it",
+                    path.display()
+                ),
                 Err(error) => format!("Could not save runtime override: {error:#}"),
             };
         }
@@ -7472,10 +7488,14 @@ fn world_tab(
         );
     });
     ui.horizontal_wrapped(|ui| {
-        if ui.button("Save project world config").clicked() {
-            state.status = match save_game_config(&state.config, &state.config_path) {
-                Ok(path) => format!("Saved project game configuration to {}", path.display()),
-                Err(error) => format!("Could not save game configuration: {error:#}"),
+        if ui.button("Save + apply world config").clicked() {
+            state.status = match save_and_apply_game_config(&state.config, &state.config_path) {
+                Ok((project, runtime)) => format!(
+                    "Saved {} and applied {}; restart the game to load the changes",
+                    project.display(),
+                    runtime.display()
+                ),
+                Err(error) => format!("Could not save and apply game configuration: {error:#}"),
             };
         }
         if ui.button("Save foliage catalog").clicked() {
@@ -9341,7 +9361,16 @@ fn start_twitch_broadcast_clear(state: &mut ToolState) {
 }
 
 fn save_runtime_config(config: &GameConfig) -> anyhow::Result<std::path::PathBuf> {
-    save_game_config(config, ".stream-town/config.ron")
+    stream_town_game::save_runtime_config(config)
+}
+
+fn save_and_apply_game_config(
+    config: &GameConfig,
+    project_path: &str,
+) -> anyhow::Result<(PathBuf, PathBuf)> {
+    let project = save_game_config(config, project_path)?;
+    let runtime = save_runtime_config(config)?;
+    Ok((project, runtime))
 }
 
 fn validation_tab(ui: &mut egui::Ui, state: &mut ToolState) {

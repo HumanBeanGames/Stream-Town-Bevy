@@ -3172,7 +3172,12 @@ struct CharacterBaseMaterialVariant {
 struct CharacterBaseMaterialCache(Vec<CharacterBaseMaterialVariant>);
 
 #[derive(Resource, Default)]
-struct RoleActionAudioCache(BTreeMap<String, Handle<AudioSource>>);
+struct RoleActionAudioCache(BTreeMap<String, CachedRoleActionAudio>);
+
+struct CachedRoleActionAudio {
+    source: Handle<AudioSource>,
+    wav: Arc<[u8]>,
+}
 
 #[derive(Component)]
 struct AmbienceAudio;
@@ -3180,7 +3185,9 @@ struct AmbienceAudio;
 #[derive(Resource, Default)]
 struct WorldAudioRuntime {
     ambience: Option<Handle<AudioSource>>,
+    ambience_wav: Option<Arc<[u8]>>,
     seagull_calls: Vec<Handle<AudioSource>>,
+    seagull_call_wavs: Vec<Arc<[u8]>>,
 }
 
 #[derive(Component, Clone)]
@@ -5183,18 +5190,27 @@ fn setup_world_audio_sources(
     let Some(mut audio_sources) = audio_sources else {
         return;
     };
+    let ambience_wav: Arc<[u8]> =
+        procedural_ambience_wav(PROCEDURAL_AUDIO_SAMPLE_RATE, 24.0).into();
     let ambience = audio_sources.add(AudioSource {
-        bytes: procedural_ambience_wav(PROCEDURAL_AUDIO_SAMPLE_RATE, 24.0).into(),
+        bytes: ambience_wav.clone(),
     });
-    let seagull_calls = (0_u8..3)
+    let seagull_call_wavs = (0_u8..3)
         .map(|variant| {
-            audio_sources.add(AudioSource {
-                bytes: procedural_seagull_call_wav(variant, PROCEDURAL_AUDIO_SAMPLE_RATE).into(),
-            })
+            Arc::<[u8]>::from(procedural_seagull_call_wav(
+                variant,
+                PROCEDURAL_AUDIO_SAMPLE_RATE,
+            ))
         })
+        .collect::<Vec<_>>();
+    let seagull_calls = seagull_call_wavs
+        .iter()
+        .map(|wav| audio_sources.add(AudioSource { bytes: wav.clone() }))
         .collect();
     world_audio.ambience = Some(ambience);
+    world_audio.ambience_wav = Some(ambience_wav);
     world_audio.seagull_calls = seagull_calls;
+    world_audio.seagull_call_wavs = seagull_call_wavs;
 }
 
 fn drive_world_audio(
@@ -5204,17 +5220,31 @@ fn drive_world_audio(
     world_audio: Res<WorldAudioRuntime>,
     ambience_players: Query<Entity, With<AmbienceAudio>>,
     mut ambience_sinks: Query<&mut AudioSink, With<AmbienceAudio>>,
+    #[cfg(target_os = "windows")] native_audio: Res<direct_broadcast::NativeGameAudioRouting>,
 ) {
     if simulation.is_none() {
+        #[cfg(target_os = "windows")]
+        native_audio.clear_looping();
         for entity in &ambience_players {
             commands.entity(entity).despawn();
         }
         return;
     }
+    let gain = AMBIENCE_GAIN * player_settings.0.audio.master * player_settings.0.audio.ambience;
+    #[cfg(target_os = "windows")]
+    let local_gain = if native_audio.local_monitor_enabled() {
+        gain
+    } else {
+        0.0
+    };
+    #[cfg(not(target_os = "windows"))]
+    let local_gain = gain;
+    #[cfg(target_os = "windows")]
+    if let Some(wav) = world_audio.ambience_wav.as_deref() {
+        native_audio.set_looping_pcm16_wav("world:ambience", wav, gain);
+    }
     for mut sink in &mut ambience_sinks {
-        sink.set_volume(Volume::Linear(
-            AMBIENCE_GAIN * player_settings.0.audio.master * player_settings.0.audio.ambience,
-        ));
+        sink.set_volume(Volume::Linear(local_gain));
     }
     if ambience_players.is_empty()
         && let Some(source) = world_audio.ambience.clone()
@@ -5224,9 +5254,7 @@ fn drive_world_audio(
             WorldEntity,
             AmbienceAudio,
             AudioPlayer(source),
-            PlaybackSettings::LOOP.with_volume(Volume::Linear(
-                AMBIENCE_GAIN * player_settings.0.audio.master * player_settings.0.audio.ambience,
-            )),
+            PlaybackSettings::LOOP.with_volume(Volume::Linear(local_gain)),
         ));
     }
 }
@@ -5417,6 +5445,7 @@ fn drive_seagull_flight(
     world_audio: Res<WorldAudioRuntime>,
     camera: Query<&GlobalTransform, With<TownCamera>>,
     mut flights: Query<(&mut SeagullFlight, &mut Transform)>,
+    #[cfg(target_os = "windows")] native_audio: Res<direct_broadcast::NativeGameAudioRouting>,
 ) {
     let camera_position = camera.single().ok().map(GlobalTransform::translation);
     for (mut flight, mut transform) in &mut flights {
@@ -5450,6 +5479,14 @@ fn drive_seagull_flight(
             * settings.0.audio.master
             * settings.0.audio.ambience
             * unity_seagull_rolloff(distance);
+        #[cfg(target_os = "windows")]
+        if let Some(wav) = world_audio.seagull_call_wavs.get(variant) {
+            native_audio.play_pcm16_wav(&format!("seagull:{variant}:{call_serial}"), wav, gain);
+        }
+        #[cfg(target_os = "windows")]
+        if !native_audio.local_monitor_enabled() {
+            continue;
+        }
         commands.spawn((
             Name::new(format!("Seagull call {}", variant + 1)),
             WorldEntity,
@@ -25253,6 +25290,7 @@ fn drive_converted_animations(
     mut players: Query<(&mut AnimationPlayer, &mut ConvertedAnimationDriver)>,
     mut audio_cache: ResMut<RoleActionAudioCache>,
     mut procedural_audio: Option<ResMut<Assets<AudioSource>>>,
+    #[cfg(target_os = "windows")] native_audio: Res<direct_broadcast::NativeGameAudioRouting>,
 ) {
     let mut audio_cues = Vec::new();
     for (mut player, mut driver) in &mut players {
@@ -25471,33 +25509,41 @@ fn drive_converted_animations(
             }) {
                 continue;
             }
-            let source = audio_cache
+            let cached = audio_cache
                 .0
                 .entry(variant_guid.to_owned())
                 .or_insert_with(|| {
-                    audio_sources.add(AudioSource {
-                        bytes: procedural_role_action_wav(
-                            role,
-                            &cue.display_name,
-                            variant_guid,
-                            PROCEDURAL_AUDIO_SAMPLE_RATE,
-                        )
-                        .into(),
-                    })
-                })
-                .clone();
+                    let wav: Arc<[u8]> = procedural_role_action_wav(
+                        role,
+                        &cue.display_name,
+                        variant_guid,
+                        PROCEDURAL_AUDIO_SAMPLE_RATE,
+                    )
+                    .into();
+                    let source = audio_sources.add(AudioSource { bytes: wav.clone() });
+                    CachedRoleActionAudio { source, wav }
+                });
+            let gain =
+                0.24 * player_settings.0.audio.master * player_settings.0.audio.sound_effects;
+            #[cfg(target_os = "windows")]
+            native_audio.play_pcm16_wav(
+                &format!("role-action:{}:{}", cue.actor, variant_guid),
+                cached.wav.as_ref(),
+                gain,
+            );
+            #[cfg(target_os = "windows")]
+            if !native_audio.local_monitor_enabled() {
+                continue;
+            }
             commands.spawn((
                 WorldEntity,
                 Name::new(format!(
                     "Role action audio: {} / {} ({})",
                     role, cue.display_name, cue.actor
                 )),
-                AudioPlayer(source),
+                AudioPlayer(cached.source.clone()),
                 PlaybackSettings::DESPAWN
-                    .with_volume(Volume::Linear(
-                        0.24 * player_settings.0.audio.master
-                            * player_settings.0.audio.sound_effects,
-                    ))
+                    .with_volume(Volume::Linear(gain))
                     .with_spatial(true)
                     .with_spatial_scale(SpatialScale::new(1.0 / ROLE_ACTION_AUDIO_MAX_DISTANCE)),
                 Transform::from_translation(cue.position),

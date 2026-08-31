@@ -3,8 +3,8 @@
 //! Video comes either from Windows Graphics Capture of the game preview or from
 //! an asynchronous Bevy offscreen-target readback in stream-only mode. Process
 //! audio is captured with WASAPI application loopback. Stream-only Tidal music
-//! is mixed from the library's pre-monitor PCM tap so it remains on-stream while
-//! silent at the operator output. Dynamically linked `FFmpeg` libraries
+//! and native game audio are mixed from pre-monitor PCM routes so they remain
+//! on-stream while silent at the operator output. Dynamically linked `FFmpeg` libraries
 //! encode/mux H.264 + AAC into Twitch's RTMP ingest. No subprocess, virtual
 //! cable, or OBS installation is involved.
 
@@ -36,7 +36,7 @@ use bevy::{
         gpu_readback::{Readback, ReadbackComplete},
         render_resource::{TextureFormat, TextureUsages},
     },
-    window::{CursorOptions, PrimaryWindow, WindowRef, WindowResolution},
+    window::{CursorOptions, PrimaryWindow, WindowCloseRequested, WindowRef, WindowResolution},
     winit::{UpdateMode, WinitSettings},
 };
 use bevy_tidal::{NativeAudioFrame, NativeAudioRouting};
@@ -79,6 +79,243 @@ const DIRECT_BROADCAST_LOG_PATH: &str = ".stream-town/diagnostics/direct-broadca
 const DIRECT_BROADCAST_LOG_QUEUE_CAPACITY: usize = 256;
 const OPERATOR_WINDOW_WIDTH: u32 = 1_100;
 const OPERATOR_WINDOW_HEIGHT: u32 = 680;
+const NATIVE_GAME_AUDIO_QUEUE_CAPACITY: usize = 64;
+const OFFLINE_FRAME_HOLD: Duration = Duration::from_secs(1);
+const BROADCAST_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Clone)]
+struct NativeGameAudioClip {
+    key: String,
+    samples: Arc<[f32]>,
+    gain: f32,
+}
+
+#[derive(Default)]
+struct NativeGameAudioState {
+    looping: Option<NativeGameAudioClip>,
+    pending: VecDeque<NativeGameAudioClip>,
+}
+
+struct NativeGameAudioRoutingInner {
+    local_monitor_enabled: AtomicBool,
+    stream_output_enabled: AtomicBool,
+    state: Mutex<NativeGameAudioState>,
+}
+
+/// Pre-monitor route for the game's Bevy ambience and sound effects.
+///
+/// Headed broadcasts continue to use process loopback. Stream-only broadcasts
+/// mute the local Bevy sinks and mix this route beside Tidal in the encoder
+/// worker, so the operator dashboard remains silent without muting Twitch.
+#[derive(Resource, Clone)]
+pub(crate) struct NativeGameAudioRouting(Arc<NativeGameAudioRoutingInner>);
+
+impl Default for NativeGameAudioRouting {
+    fn default() -> Self {
+        Self(Arc::new(NativeGameAudioRoutingInner {
+            local_monitor_enabled: AtomicBool::new(true),
+            stream_output_enabled: AtomicBool::new(false),
+            state: Mutex::new(NativeGameAudioState::default()),
+        }))
+    }
+}
+
+impl NativeGameAudioRouting {
+    pub(crate) fn set_local_monitor_enabled(&self, enabled: bool) {
+        self.0
+            .local_monitor_enabled
+            .store(enabled, Ordering::Relaxed);
+    }
+
+    pub(crate) fn local_monitor_enabled(&self) -> bool {
+        self.0.local_monitor_enabled.load(Ordering::Relaxed)
+    }
+
+    fn set_stream_output_enabled(&self, enabled: bool) {
+        self.0
+            .stream_output_enabled
+            .store(enabled, Ordering::Relaxed);
+        if !enabled && let Ok(mut state) = self.0.state.lock() {
+            state.pending.clear();
+        }
+    }
+
+    pub(crate) fn set_looping_pcm16_wav(&self, key: &str, wav: &[u8], gain: f32) {
+        if !self.0.stream_output_enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        let Ok(mut state) = self.0.state.lock() else {
+            return;
+        };
+        if let Some(looping) = state.looping.as_mut()
+            && looping.key == key
+        {
+            looping.gain = gain;
+            return;
+        }
+        state.looping = pcm16_wav_clip(key, wav, gain);
+    }
+
+    pub(crate) fn clear_looping(&self) {
+        if let Ok(mut state) = self.0.state.lock() {
+            state.looping = None;
+        }
+    }
+
+    pub(crate) fn play_pcm16_wav(&self, key: &str, wav: &[u8], gain: f32) {
+        if !self.0.stream_output_enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        let Some(clip) = pcm16_wav_clip(key, wav, gain) else {
+            return;
+        };
+        if let Ok(mut state) = self.0.state.lock() {
+            if state.pending.len() == NATIVE_GAME_AUDIO_QUEUE_CAPACITY {
+                state.pending.pop_front();
+            }
+            state.pending.push_back(clip);
+        }
+    }
+
+    fn subscribe(&self) -> NativeGameAudioMix {
+        NativeGameAudioMix {
+            routing: self.clone(),
+            looping_key: None,
+            looping_samples: None,
+            looping_gain: 0.0,
+            looping_position: 0,
+            voices: Vec::new(),
+        }
+    }
+}
+
+fn pcm16_wav_clip(key: &str, wav: &[u8], gain: f32) -> Option<NativeGameAudioClip> {
+    let (channels, sample_rate, data) = pcm16_wav_data(wav)?;
+    if sample_rate != AUDIO_SAMPLE_RATE || !(channels == 1 || channels == 2) {
+        return None;
+    }
+    let decoded = data
+        .chunks_exact(usize::from(channels) * 2)
+        .flat_map(|frame| {
+            let left = f32::from(i16::from_le_bytes([frame[0], frame[1]])) / 32_768.0;
+            let right = if channels == 2 {
+                f32::from(i16::from_le_bytes([frame[2], frame[3]])) / 32_768.0
+            } else {
+                left
+            };
+            [left, right]
+        })
+        .collect::<Vec<_>>();
+    (!decoded.is_empty()).then(|| NativeGameAudioClip {
+        key: key.to_owned(),
+        samples: decoded.into(),
+        gain,
+    })
+}
+
+fn pcm16_wav_data(wav: &[u8]) -> Option<(u16, u32, &[u8])> {
+    if wav.get(0..4)? != b"RIFF" || wav.get(8..12)? != b"WAVE" {
+        return None;
+    }
+    let mut cursor = 12_usize;
+    let mut format = None;
+    let mut data = None;
+    while cursor.saturating_add(8) <= wav.len() {
+        let chunk = wav.get(cursor..cursor + 4)?;
+        let size = usize::try_from(u32::from_le_bytes(
+            wav.get(cursor + 4..cursor + 8)?.try_into().ok()?,
+        ))
+        .ok()?;
+        let start = cursor + 8;
+        let end = start.checked_add(size)?;
+        let payload = wav.get(start..end)?;
+        if chunk == b"fmt " && payload.len() >= 16 {
+            let encoding = u16::from_le_bytes(payload[0..2].try_into().ok()?);
+            let channels = u16::from_le_bytes(payload[2..4].try_into().ok()?);
+            let sample_rate = u32::from_le_bytes(payload[4..8].try_into().ok()?);
+            let bits = u16::from_le_bytes(payload[14..16].try_into().ok()?);
+            if encoding != 1 || bits != 16 {
+                return None;
+            }
+            format = Some((channels, sample_rate));
+        } else if chunk == b"data" {
+            data = Some(payload);
+        }
+        cursor = end.saturating_add(size & 1);
+    }
+    let (channels, sample_rate) = format?;
+    Some((channels, sample_rate, data?))
+}
+
+struct NativeGameAudioVoice {
+    samples: Arc<[f32]>,
+    gain: f32,
+    position: usize,
+}
+
+struct NativeGameAudioMix {
+    routing: NativeGameAudioRouting,
+    looping_key: Option<String>,
+    looping_samples: Option<Arc<[f32]>>,
+    looping_gain: f32,
+    looping_position: usize,
+    voices: Vec<NativeGameAudioVoice>,
+}
+
+impl NativeGameAudioMix {
+    fn receive(&mut self) {
+        let Ok(mut state) = self.routing.0.state.lock() else {
+            return;
+        };
+        match state.looping.as_ref() {
+            Some(looping) if self.looping_key.as_deref() == Some(looping.key.as_str()) => {
+                self.looping_gain = looping.gain;
+            }
+            Some(looping) => {
+                self.looping_key = Some(looping.key.clone());
+                self.looping_samples = Some(looping.samples.clone());
+                self.looping_gain = looping.gain;
+                self.looping_position = 0;
+            }
+            None => {
+                self.looping_key = None;
+                self.looping_samples = None;
+                self.looping_position = 0;
+            }
+        }
+        self.voices
+            .extend(state.pending.drain(..).map(|clip| NativeGameAudioVoice {
+                samples: clip.samples,
+                gain: clip.gain,
+                position: 0,
+            }));
+    }
+
+    fn mix_into(&mut self, output: &mut [f32]) {
+        self.receive();
+        for output_frame in output.chunks_exact_mut(AUDIO_CHANNELS) {
+            if let Some(samples) = self.looping_samples.as_ref()
+                && samples.len() >= AUDIO_CHANNELS
+            {
+                output_frame[0] += samples[self.looping_position] * self.looping_gain;
+                output_frame[1] += samples[self.looping_position + 1] * self.looping_gain;
+                self.looping_position = (self.looping_position + AUDIO_CHANNELS) % samples.len();
+            }
+            for voice in &mut self.voices {
+                if voice.position + 1 >= voice.samples.len() {
+                    continue;
+                }
+                output_frame[0] += voice.samples[voice.position] * voice.gain;
+                output_frame[1] += voice.samples[voice.position + 1] * voice.gain;
+                voice.position += AUDIO_CHANNELS;
+            }
+            output_frame[0] = output_frame[0].clamp(-1.0, 1.0);
+            output_frame[1] = output_frame[1].clamp(-1.0, 1.0);
+        }
+        self.voices
+            .retain(|voice| voice.position + 1 < voice.samples.len());
+    }
+}
 
 fn direct_broadcast_log_path() -> PathBuf {
     std::env::var_os("STREAM_TOWN_BROADCAST_LOG")
@@ -476,28 +713,46 @@ fn duration_as_micros(duration: Duration) -> u64 {
     u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
 
+#[derive(Default)]
+enum BroadcastStopDisposition {
+    #[default]
+    Stay,
+    ReturnToMainMenu,
+    Exit {
+        requested_at: Instant,
+    },
+}
+
 #[derive(Resource, Default)]
 pub(crate) struct DirectBroadcastControl {
     restart_requested: bool,
     stop_requested: bool,
-    return_to_main_menu_after_stop: bool,
+    stop_disposition: BroadcastStopDisposition,
 }
 
 impl DirectBroadcastControl {
     pub(crate) fn request_restart(&mut self) {
         self.restart_requested = true;
         self.stop_requested = false;
-        self.return_to_main_menu_after_stop = false;
+        self.stop_disposition = BroadcastStopDisposition::Stay;
     }
 
     pub(crate) fn request_stop(&mut self) {
         self.stop_requested = true;
         self.restart_requested = false;
+        self.stop_disposition = BroadcastStopDisposition::Stay;
     }
 
     pub(crate) fn request_stop_and_return_to_main_menu(&mut self) {
         self.request_stop();
-        self.return_to_main_menu_after_stop = true;
+        self.stop_disposition = BroadcastStopDisposition::ReturnToMainMenu;
+    }
+
+    fn request_stop_and_exit(&mut self) {
+        self.request_stop();
+        self.stop_disposition = BroadcastStopDisposition::Exit {
+            requested_at: Instant::now(),
+        };
     }
 
     #[cfg(test)]
@@ -515,19 +770,24 @@ pub struct DirectTwitchBroadcastPlugin;
 
 impl Plugin for DirectTwitchBroadcastPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<DirectBroadcastRuntime>()
+        app.add_message::<AppExit>()
+            .add_message::<WindowCloseRequested>()
+            .init_resource::<DirectBroadcastRuntime>()
             .init_resource::<DirectBroadcastControl>()
+            .init_resource::<NativeGameAudioRouting>()
             .init_resource::<StreamOnlyCaptureState>()
             .init_resource::<OperatorChatRuntime>()
             .add_systems(
                 Update,
                 (
                     start_local_broadcast_diagnostic,
+                    operator_window_close_requests_exit,
                     apply_direct_broadcast_control,
                     poll_direct_broadcast_authorization,
                     start_prepared_broadcast_when_gameplay_ready,
                     poll_direct_broadcast_worker,
                     poll_twitch_live_verification,
+                    exit_after_broadcast_stops,
                     return_to_main_menu_after_broadcast_stops,
                     sync_stream_only_capture,
                     stream_operator_live_button,
@@ -544,10 +804,53 @@ impl Plugin for DirectTwitchBroadcastPlugin {
     }
 }
 
+fn operator_window_close_requests_exit(
+    mut closed: MessageReader<WindowCloseRequested>,
+    operator_windows: Query<(), With<StreamOperatorWindow>>,
+    mut control: ResMut<DirectBroadcastControl>,
+) {
+    if closed
+        .read()
+        .any(|request| operator_windows.contains(request.window))
+    {
+        control.request_stop_and_exit();
+    }
+}
+
+fn exit_after_broadcast_stops(
+    mut runtime: ResMut<DirectBroadcastRuntime>,
+    mut control: ResMut<DirectBroadcastControl>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let BroadcastStopDisposition::Exit { requested_at } = &control.stop_disposition else {
+        return;
+    };
+    let stopped = runtime.controller.is_none()
+        && matches!(
+            runtime.phase,
+            DirectBroadcastPhase::Stopped
+                | DirectBroadcastPhase::Disabled
+                | DirectBroadcastPhase::Error(_)
+        );
+    let timed_out = requested_at.elapsed() >= BROADCAST_EXIT_TIMEOUT;
+    if !stopped && !timed_out {
+        return;
+    }
+    if timed_out && !stopped {
+        warn!("timed out publishing the offline broadcast frame; forcing game exit");
+        if let Some(controller) = runtime.controller.take() {
+            controller.request_abort();
+        }
+    }
+    control.stop_disposition = BroadcastStopDisposition::Stay;
+    exit.write(AppExit::Success);
+}
+
 fn start_local_broadcast_diagnostic(
     config: Res<RuntimeConfig>,
     gameplay_ready: Option<Res<crate::GameplayReady>>,
     tidal_routing: Option<Res<NativeAudioRouting>>,
+    game_audio_routing: Res<NativeGameAudioRouting>,
     mut runtime: ResMut<DirectBroadcastRuntime>,
 ) {
     if runtime.phase != DirectBroadcastPhase::Disabled
@@ -589,6 +892,7 @@ fn start_local_broadcast_diagnostic(
         config.0.twitch.broadcast.clone(),
         config.0.window.title.clone(),
         tidal_routing.as_ref().map(AsRef::as_ref),
+        Some(&game_audio_routing),
     ) {
         Ok(controller) => runtime.controller = Some(controller),
         Err(error) => {
@@ -751,6 +1055,7 @@ fn start_prepared_broadcast_when_gameplay_ready(
     config: Res<RuntimeConfig>,
     gameplay_ready: Option<Res<crate::GameplayReady>>,
     tidal_routing: Option<Res<NativeAudioRouting>>,
+    game_audio_routing: Res<NativeGameAudioRouting>,
     mut runtime: ResMut<DirectBroadcastRuntime>,
 ) {
     if !prepared_broadcast_can_start(&runtime.phase, gameplay_ready.is_some()) {
@@ -768,6 +1073,7 @@ fn start_prepared_broadcast_when_gameplay_ready(
         config.0.twitch.broadcast.clone(),
         config.0.window.title.clone(),
         tidal_routing.as_ref().map(AsRef::as_ref),
+        Some(&game_audio_routing),
     ) {
         Ok(controller) => runtime.controller = Some(controller),
         Err(error) => {
@@ -944,17 +1250,18 @@ fn return_to_main_menu_after_broadcast_stops(
     runtime: Res<DirectBroadcastRuntime>,
     mut control: ResMut<DirectBroadcastControl>,
 ) {
-    if !control.return_to_main_menu_after_stop
-        || !matches!(
-            runtime.phase,
-            DirectBroadcastPhase::Stopped
-                | DirectBroadcastPhase::Disabled
-                | DirectBroadcastPhase::Error(_)
-        )
-    {
+    if !matches!(
+        &control.stop_disposition,
+        BroadcastStopDisposition::ReturnToMainMenu
+    ) || !matches!(
+        runtime.phase,
+        DirectBroadcastPhase::Stopped
+            | DirectBroadcastPhase::Disabled
+            | DirectBroadcastPhase::Error(_)
+    ) {
         return;
     }
-    control.return_to_main_menu_after_stop = false;
+    control.stop_disposition = BroadcastStopDisposition::Stay;
     let (Some(state), Some(mut next_state)) = (state, next_state) else {
         return;
     };
@@ -1081,6 +1388,7 @@ fn sync_stream_only_capture(
     gameplay_ready: Option<Res<crate::GameplayReady>>,
     runtime: Res<DirectBroadcastRuntime>,
     tidal_routing: Option<Res<NativeAudioRouting>>,
+    game_audio_routing: Res<NativeGameAudioRouting>,
     mut state: ResMut<StreamOnlyCaptureState>,
     mut images: Option<ResMut<Assets<Image>>>,
     mut camera_targets: StreamCameraTargetQuery,
@@ -1091,7 +1399,8 @@ fn sync_stream_only_capture(
         config.0.twitch.broadcast.render_mode == BroadcastRenderMode::StreamOnly;
     let operator_required = gameplay_ready.is_some();
     let target_required = operator_required && stream_only_configured;
-    let stream_only_active = stream_only_configured
+    let operator_stream_only = stream_only_configured && operator_required;
+    let stream_only_active = operator_stream_only
         && runtime.controller.is_some()
         && matches!(
             runtime.phase,
@@ -1103,8 +1412,10 @@ fn sync_stream_only_capture(
                 | DirectBroadcastPhase::Stopping
         );
     if let Some(routing) = tidal_routing {
-        routing.set_local_monitor_enabled(!stream_only_active);
+        routing.set_local_monitor_enabled(!operator_stream_only);
     }
+    game_audio_routing.set_local_monitor_enabled(!operator_stream_only);
+    game_audio_routing.set_stream_output_enabled(stream_only_active);
 
     if target_required && state.target.is_none() {
         let Some(images) = images.as_deref_mut() else {
@@ -2457,6 +2768,14 @@ fn capture_direct_broadcast_frame(
 }
 
 fn sensitive_rgba_frame(width: u32, height: u32) -> Vec<u8> {
+    labeled_black_rgba_frame(width, height, "SENSITIVE INFORMATION HIDDEN")
+}
+
+fn offline_rgba_frame(width: u32, height: u32) -> Vec<u8> {
+    labeled_black_rgba_frame(width, height, "OFFLINE")
+}
+
+fn labeled_black_rgba_frame(width: u32, height: u32, label: &str) -> Vec<u8> {
     let bytes = usize::try_from(width)
         .unwrap_or(0)
         .saturating_mul(usize::try_from(height).unwrap_or(0))
@@ -2465,16 +2784,15 @@ fn sensitive_rgba_frame(width: u32, height: u32) -> Vec<u8> {
     for alpha in rgba.iter_mut().skip(3).step_by(4) {
         *alpha = 255;
     }
-    draw_centered_sensitive_label(&mut rgba, width, height);
+    draw_centered_label(&mut rgba, width, height, label);
     rgba
 }
 
-fn draw_centered_sensitive_label(rgba: &mut [u8], width: u32, height: u32) {
-    const LABEL: &str = "SENSITIVE INFORMATION HIDDEN";
+fn draw_centered_label(rgba: &mut [u8], width: u32, height: u32, label: &str) {
     const GLYPH_WIDTH: u32 = 5;
     const GLYPH_HEIGHT: u32 = 7;
     const GLYPH_GAP: u32 = 1;
-    let unscaled_width = u32::try_from(LABEL.chars().count())
+    let unscaled_width = u32::try_from(label.chars().count())
         .unwrap_or_default()
         .saturating_mul(GLYPH_WIDTH + GLYPH_GAP)
         .saturating_sub(GLYPH_GAP);
@@ -2490,8 +2808,8 @@ fn draw_centered_sensitive_label(rgba: &mut [u8], width: u32, height: u32) {
     let origin_y = height.saturating_sub(label_height) / 2;
     let stride = usize::try_from(width).unwrap_or_default().saturating_mul(4);
 
-    for (glyph_index, character) in LABEL.chars().enumerate() {
-        let glyph = sensitive_label_glyph(character);
+    for (glyph_index, character) in label.chars().enumerate() {
+        let glyph = label_glyph(character);
         let glyph_x = origin_x.saturating_add(
             u32::try_from(glyph_index)
                 .unwrap_or_default()
@@ -2522,7 +2840,7 @@ fn draw_centered_sensitive_label(rgba: &mut [u8], width: u32, height: u32) {
     }
 }
 
-const fn sensitive_label_glyph(character: char) -> [u8; 7] {
+const fn label_glyph(character: char) -> [u8; 7] {
     match character {
         'A' => [
             0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
@@ -2541,6 +2859,9 @@ const fn sensitive_label_glyph(character: char) -> [u8; 7] {
         ],
         'I' => [
             0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111,
+        ],
+        'L' => [
+            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
         ],
         'M' => [
             0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
@@ -3017,6 +3338,12 @@ fn publish_latest_video(
         metrics.dropped_video.fetch_add(1, Ordering::Relaxed);
         return false;
     };
+    // Shutdown publishes the offline card through this same mailbox. Recheck
+    // after taking the lock so a readback that passed the first check cannot
+    // race in behind it and become the final encoded frame.
+    if stop.load(Ordering::Acquire) {
+        return false;
+    }
     if latest.replace(frame).is_some() && video_consumer_ready.load(Ordering::Relaxed) {
         metrics.replaced_video.fetch_add(1, Ordering::Relaxed);
     }
@@ -3028,10 +3355,14 @@ struct BroadcastController {
     audio: SyncSender<AudioInput>,
     video: Arc<Mutex<Option<VideoFrame>>>,
     events: Arc<Mutex<Receiver<WorkerEvent>>>,
+    capture_stop: Arc<AtomicBool>,
+    graceful_stop: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     sensitive_screen: Arc<AtomicBool>,
     video_consumer_ready: Arc<AtomicBool>,
     metrics: Arc<BroadcastMetrics>,
+    width: u32,
+    height: u32,
 }
 
 impl BroadcastController {
@@ -3040,21 +3371,30 @@ impl BroadcastController {
         config: BroadcastConfig,
         window_title: String,
         tidal_routing: Option<&NativeAudioRouting>,
+        game_audio_routing: Option<&NativeGameAudioRouting>,
     ) -> Result<Self> {
         let (audio, receiver) = mpsc::sync_channel(AUDIO_QUEUE_CAPACITY);
         let (event_sender, event_receiver) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
+        let capture_stop = Arc::new(AtomicBool::new(false));
+        let graceful_stop = Arc::new(AtomicBool::new(false));
         let metrics = Arc::new(BroadcastMetrics::default());
         let video = Arc::new(Mutex::new(None));
         let sensitive_screen = Arc::new(AtomicBool::new(false));
         let video_consumer_ready = Arc::new(AtomicBool::new(false));
         let capture_fps = config.frames_per_second;
+        let width = u32::from(config.width);
+        let height = u32::from(config.height);
         let stream_only = config.render_mode == BroadcastRenderMode::StreamOnly;
         let tidal_audio = stream_only
             .then(|| tidal_routing.map(NativeAudioRouting::subscribe))
             .flatten();
+        let game_audio = stream_only
+            .then(|| game_audio_routing.map(NativeGameAudioRouting::subscribe))
+            .flatten();
 
         let worker_stop = Arc::clone(&stop);
+        let worker_graceful_stop = Arc::clone(&graceful_stop);
         let worker_metrics = Arc::clone(&metrics);
         let worker_video = Arc::clone(&video);
         let worker_video_consumer_ready = Arc::clone(&video_consumer_ready);
@@ -3070,6 +3410,7 @@ impl BroadcastController {
                     worker_video,
                     &event_sender,
                     &worker_stop,
+                    &worker_graceful_stop,
                     &worker_metrics,
                     &worker_video_consumer_ready,
                 );
@@ -3082,7 +3423,7 @@ impl BroadcastController {
                 capture_fps,
                 Arc::clone(&video),
                 Arc::clone(&metrics),
-                Arc::clone(&stop),
+                Arc::clone(&capture_stop),
                 Arc::clone(&sensitive_screen),
                 Arc::clone(&video_consumer_ready),
                 capture_event_sender,
@@ -3093,16 +3434,21 @@ impl BroadcastController {
         }
 
         let audio_sender = audio.clone();
-        let audio_stop = Arc::clone(&stop);
+        let audio_stop = Arc::clone(&capture_stop);
+        let worker_abort = Arc::clone(&stop);
         let audio_metrics = Arc::clone(&metrics);
         let audio_events = Arc::new(Mutex::new(event_receiver));
         let audio_spawn = thread::Builder::new()
             .name("stream-town-wasapi".to_owned())
             .spawn(move || {
-                if let Err(error) =
-                    capture_process_audio(audio_sender, &audio_stop, &audio_metrics, tidal_audio)
-                {
-                    audio_stop.store(true, Ordering::Relaxed);
+                if let Err(error) = capture_process_audio(
+                    audio_sender,
+                    &audio_stop,
+                    &audio_metrics,
+                    tidal_audio,
+                    game_audio,
+                ) {
+                    worker_abort.store(true, Ordering::Relaxed);
                     let message = format!("game-process audio capture stopped: {error:#}");
                     error!(%error, "game-process audio capture stopped");
                     let _ = audio_event_sender.send(WorkerEvent::Error(message));
@@ -3120,17 +3466,21 @@ impl BroadcastController {
             audio,
             video,
             events: audio_events,
+            capture_stop,
+            graceful_stop,
             stop,
             sensitive_screen,
             video_consumer_ready,
             metrics,
+            width,
+            height,
         })
     }
 
     fn send_video(&self, frame: VideoFrame) -> bool {
         publish_latest_video(
             &self.video,
-            &self.stop,
+            &self.capture_stop,
             &self.metrics,
             &self.video_consumer_ready,
             frame,
@@ -3159,6 +3509,20 @@ impl BroadcastController {
     }
 
     fn request_stop(&self) {
+        self.capture_stop.store(true, Ordering::Relaxed);
+        if let Ok(mut video) = self.video.lock() {
+            *video = Some(VideoFrame {
+                width: self.width,
+                height: self.height,
+                pixel_format: VideoPixelFormat::Rgba,
+                pixels: offline_rgba_frame(self.width, self.height),
+            });
+        }
+        self.graceful_stop.store(true, Ordering::Release);
+    }
+
+    fn request_abort(&self) {
+        self.capture_stop.store(true, Ordering::Relaxed);
         self.stop.store(true, Ordering::Relaxed);
         let _ = self.audio.try_send(AudioInput::Stop);
     }
@@ -3166,7 +3530,7 @@ impl BroadcastController {
 
 impl Drop for BroadcastController {
     fn drop(&mut self) {
-        self.request_stop();
+        self.request_abort();
     }
 }
 
@@ -3175,6 +3539,7 @@ fn capture_process_audio(
     stop: &AtomicBool,
     metrics: &BroadcastMetrics,
     tidal_audio: Option<Receiver<NativeAudioFrame>>,
+    game_audio: Option<NativeGameAudioMix>,
 ) -> Result<()> {
     initialize_mta()
         .ok()
@@ -3209,6 +3574,7 @@ fn capture_process_audio(
         .map_err(|error| anyhow!("could not get WASAPI capture client: {error}"))?;
     let mut bytes = VecDeque::new();
     let mut tidal_mix = TidalPcmMix::new(tidal_audio);
+    let mut game_mix = game_audio;
     let chunk_bytes = AUDIO_FRAME_SAMPLES * block_align;
     let mut pts = 0_i64;
     client
@@ -3233,6 +3599,9 @@ fn capture_process_audio(
                 .chunks_exact(4)
                 .map(|sample| f32::from_le_bytes([sample[0], sample[1], sample[2], sample[3]]))
                 .collect::<Vec<_>>();
+            if let Some(game_mix) = game_mix.as_mut() {
+                game_mix.mix_into(&mut samples);
+            }
             tidal_mix.mix_into(&mut samples);
             if !queue_audio_frame(&audio, metrics, AudioFrame { pts, samples }) {
                 let _ = client.stop_stream();
@@ -3346,6 +3715,7 @@ fn run_broadcast_worker(
     video: Arc<Mutex<Option<VideoFrame>>>,
     events: &mpsc::Sender<WorkerEvent>,
     stop: &AtomicBool,
+    graceful_stop: &AtomicBool,
     metrics: &BroadcastMetrics,
     video_consumer_ready: &AtomicBool,
 ) {
@@ -3363,6 +3733,7 @@ fn run_broadcast_worker(
             &receiver,
             &video,
             stop,
+            graceful_stop,
             metrics,
             events,
             video_consumer_ready,
@@ -3375,6 +3746,10 @@ fn run_broadcast_worker(
                 return;
             }
             Err(error) => {
+                if graceful_stop.load(Ordering::Acquire) {
+                    let _ = events.send(WorkerEvent::Stopped);
+                    return;
+                }
                 let wait_seconds = reconnect_wait_seconds(&mut reconnect_delay, session_published);
                 let message = redact_broadcast_target(&format!("{error:#}"), &target.url);
                 let _ = events.send(WorkerEvent::Reconnecting(message));
@@ -3521,6 +3896,7 @@ fn encode_broadcast_session(
     receiver: &Receiver<AudioInput>,
     video_mailbox: &Mutex<Option<VideoFrame>>,
     stop: &AtomicBool,
+    graceful_stop: &AtomicBool,
     metrics: &BroadcastMetrics,
     events: &mpsc::Sender<WorkerEvent>,
     video_consumer_ready: &AtomicBool,
@@ -3537,6 +3913,7 @@ fn encode_broadcast_session(
     let mut encoder_selection = Some(encoder_selection);
     let mut cadence = VideoCadence::new(config.frames_per_second);
     let mut latest_video = take_latest_video(video_mailbox);
+    let mut graceful_deadline = None;
     if latest_video.is_some() {
         cadence.start(Instant::now());
     }
@@ -3545,7 +3922,17 @@ fn encode_broadcast_session(
             encoder.finish()?;
             return Ok(SessionEnd::Stopped);
         }
-        if let Some(video) = take_latest_video(video_mailbox) {
+        if graceful_stop.load(Ordering::Acquire) && graceful_deadline.is_none() {
+            latest_video = take_latest_video(video_mailbox).or(latest_video);
+            if latest_video.is_none() {
+                encoder.finish()?;
+                return Ok(SessionEnd::Stopped);
+            }
+            cadence.start(Instant::now());
+            graceful_deadline = Some(Instant::now() + OFFLINE_FRAME_HOLD);
+        } else if graceful_deadline.is_none()
+            && let Some(video) = take_latest_video(video_mailbox)
+        {
             cadence.start(Instant::now());
             latest_video = Some(video);
         }
@@ -3573,6 +3960,10 @@ fn encode_broadcast_session(
                 });
             }
             continue;
+        }
+        if graceful_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            encoder.finish()?;
+            return Ok(SessionEnd::Stopped);
         }
         match receiver.recv_timeout(cadence.receive_timeout(Instant::now())) {
             Ok(AudioInput::Frame(audio)) => {
@@ -4218,6 +4609,36 @@ mod tests {
     }
 
     #[test]
+    fn offline_frame_is_opaque_black_with_a_centered_white_notice() {
+        let width = 320;
+        let height = 180;
+        let frame = offline_rgba_frame(width, height);
+        assert_eq!(frame.len(), usize::try_from(width * height * 4).unwrap());
+        assert!(frame.chunks_exact(4).all(|pixel| pixel[3] == 255));
+        assert!(
+            frame
+                .chunks_exact(4)
+                .any(|pixel| pixel == [255, 255, 255, 255])
+        );
+    }
+
+    #[test]
+    fn stream_only_game_audio_is_muted_locally_and_mixed_before_the_monitor() {
+        let routing = NativeGameAudioRouting::default();
+        routing.set_stream_output_enabled(true);
+        routing.set_local_monitor_enabled(false);
+        let wav = crate::procedural_seagull_call_wav(0, AUDIO_SAMPLE_RATE);
+        let mut mix = routing.subscribe();
+        routing.play_pcm16_wav("test:seagull", &wav, 1.0);
+        let mut output = vec![0.0; AUDIO_FRAME_SAMPLES * AUDIO_CHANNELS];
+
+        mix.mix_into(&mut output);
+
+        assert!(!routing.local_monitor_enabled());
+        assert!(output.iter().any(|sample| sample.abs() > f32::EPSILON));
+    }
+
+    #[test]
     fn direct_broadcast_stays_offline_until_operator_requests_it() {
         let mut config = stream_town_domain::GameConfig::default();
         config.twitch.broadcast.enabled = true;
@@ -4473,11 +4894,34 @@ mod tests {
             *app.world().resource::<State<crate::GameState>>().get(),
             crate::GameState::MainMenu
         );
-        assert!(
-            !app.world()
+        assert!(matches!(
+            &app.world()
                 .resource::<DirectBroadcastControl>()
-                .return_to_main_menu_after_stop
-        );
+                .stop_disposition,
+            BroadcastStopDisposition::Stay
+        ));
+    }
+
+    #[test]
+    fn closing_the_operator_window_requests_a_graceful_game_exit() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(RuntimeConfig(stream_town_domain::GameConfig::default()))
+            .init_resource::<SensitiveScreenActive>()
+            .add_plugins(DirectTwitchBroadcastPlugin);
+        let operator = app.world_mut().spawn(StreamOperatorWindow).id();
+        app.world_mut()
+            .write_message(WindowCloseRequested { window: operator });
+
+        app.update();
+
+        let runtime = app.world().resource::<DirectBroadcastRuntime>();
+        let control = app.world().resource::<DirectBroadcastControl>();
+        assert_eq!(runtime.phase, DirectBroadcastPhase::Stopped);
+        assert!(matches!(
+            &control.stop_disposition,
+            BroadcastStopDisposition::Stay
+        ));
     }
 
     #[test]
@@ -4557,6 +5001,32 @@ mod tests {
     }
 
     #[test]
+    fn stopped_capture_cannot_replace_the_terminal_mailbox_frame() {
+        let terminal = VideoFrame {
+            width: 1,
+            height: 1,
+            pixel_format: VideoPixelFormat::Rgba,
+            pixels: vec![0, 0, 0, 255],
+        };
+        let mailbox = Mutex::new(Some(terminal.clone()));
+        let stop = AtomicBool::new(true);
+        let metrics = BroadcastMetrics::default();
+        let ready = AtomicBool::new(true);
+
+        assert!(!publish_latest_video(
+            &mailbox,
+            &stop,
+            &metrics,
+            &ready,
+            VideoFrame {
+                pixels: vec![255, 0, 0, 255],
+                ..terminal.clone()
+            }
+        ));
+        assert_eq!(take_latest_video(&mailbox).unwrap().pixels, terminal.pixels);
+    }
+
+    #[test]
     fn controller_counts_replaced_video_without_rejecting_the_newest_frame() {
         let (audio, _audio_receiver) = mpsc::sync_channel(1);
         let (_event_sender, event_receiver) = mpsc::channel();
@@ -4565,10 +5035,14 @@ mod tests {
             audio,
             video: Arc::new(Mutex::new(None)),
             events: Arc::new(Mutex::new(event_receiver)),
+            capture_stop: Arc::new(AtomicBool::new(false)),
+            graceful_stop: Arc::new(AtomicBool::new(false)),
             stop: Arc::new(AtomicBool::new(false)),
             sensitive_screen: Arc::new(AtomicBool::new(false)),
             video_consumer_ready: Arc::new(AtomicBool::new(true)),
             metrics: Arc::clone(&metrics),
+            width: 1,
+            height: 1,
         };
         let first = VideoFrame {
             width: 1,
@@ -4588,6 +5062,40 @@ mod tests {
         assert_eq!(
             take_latest_video(&controller.video).unwrap().pixels,
             [5, 6, 7, 8]
+        );
+    }
+
+    #[test]
+    fn graceful_stop_replaces_capture_with_the_offline_frame_before_aborting() {
+        let (audio, _audio_receiver) = mpsc::sync_channel(1);
+        let (_event_sender, event_receiver) = mpsc::channel();
+        let controller = BroadcastController {
+            audio,
+            video: Arc::new(Mutex::new(None)),
+            events: Arc::new(Mutex::new(event_receiver)),
+            capture_stop: Arc::new(AtomicBool::new(false)),
+            graceful_stop: Arc::new(AtomicBool::new(false)),
+            stop: Arc::new(AtomicBool::new(false)),
+            sensitive_screen: Arc::new(AtomicBool::new(false)),
+            video_consumer_ready: Arc::new(AtomicBool::new(true)),
+            metrics: Arc::new(BroadcastMetrics::default()),
+            width: 320,
+            height: 180,
+        };
+
+        controller.request_stop();
+
+        assert!(controller.capture_stop.load(Ordering::Relaxed));
+        assert!(controller.graceful_stop.load(Ordering::Acquire));
+        assert!(!controller.stop.load(Ordering::Relaxed));
+        let frame = take_latest_video(&controller.video).unwrap();
+        assert_eq!(frame.pixel_format, VideoPixelFormat::Rgba);
+        assert_eq!((frame.width, frame.height), (320, 180));
+        assert!(
+            frame
+                .pixels
+                .chunks_exact(4)
+                .any(|pixel| pixel == [255, 255, 255, 255])
         );
     }
 

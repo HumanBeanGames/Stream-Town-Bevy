@@ -38,10 +38,12 @@ cargo run -p stream_town_tools -- --validate-authoring
 | Player settings | None | `.stream-town/settings.ron`, edited from the local operator panel or game menus |
 | Twitch accounts and credentials | None | Main Menu > Secrets and the OS credential vault |
 
-`Save project baseline` changes the source-controlled defaults embedded in the
-next game build. `Write local runtime override` is intended for rapid testing;
-it takes precedence when the game starts from the same working directory. The
-tool never writes Twitch access or refresh tokens to RON.
+`Save + apply to game` changes the source-controlled baseline and the local
+runtime override together. The runtime override takes precedence and is read on
+the next game launch, so authority values such as day duration no longer depend
+on rebuilding the executable. `Save baseline only` and `Apply locally only` are
+available when that separation is intentional. The tool never writes Twitch
+access or refresh tokens to RON.
 
 ## Workflows
 
