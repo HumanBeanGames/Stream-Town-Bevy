@@ -9,7 +9,7 @@
 //! cable, or OBS installation is involved.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     fmt,
     fs::{self, OpenOptions},
     io::Write as _,
@@ -82,6 +82,7 @@ const OPERATOR_WINDOW_HEIGHT: u32 = 680;
 const NATIVE_GAME_AUDIO_QUEUE_CAPACITY: usize = 64;
 const OFFLINE_FRAME_HOLD: Duration = Duration::from_secs(1);
 const BROADCAST_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_STREAM_READBACKS_IN_FLIGHT: usize = 4;
 
 #[derive(Clone)]
 struct NativeGameAudioClip {
@@ -455,7 +456,11 @@ pub struct DirectBroadcastRuntime {
 #[derive(Resource, Default)]
 struct StreamOnlyCaptureState {
     target: Option<Handle<Image>>,
-    readback_entity: Option<Entity>,
+    readback_requests: HashMap<Entity, (u64, Instant)>,
+    completed_readbacks: BTreeMap<u64, Option<VideoFrame>>,
+    next_readback_sequence: u64,
+    next_publish_sequence: u64,
+    next_readback_at: Option<Instant>,
     operator_window: Option<Entity>,
     operator_camera: Option<Entity>,
     operator_root: Option<Entity>,
@@ -471,6 +476,9 @@ pub(crate) struct StreamOperatorCamera;
 
 #[derive(Component)]
 pub(crate) struct StreamOperatorWindow;
+
+#[derive(Component)]
+struct StreamOnlyReadbackArmed;
 
 #[derive(Component)]
 struct StreamOperatorInfoText;
@@ -777,6 +785,7 @@ impl Plugin for DirectTwitchBroadcastPlugin {
             .init_resource::<NativeGameAudioRouting>()
             .init_resource::<StreamOnlyCaptureState>()
             .init_resource::<OperatorChatRuntime>()
+            .add_systems(First, disarm_stream_only_readbacks)
             .add_systems(
                 Update,
                 (
@@ -790,6 +799,7 @@ impl Plugin for DirectTwitchBroadcastPlugin {
                     exit_after_broadcast_stops,
                     return_to_main_menu_after_broadcast_stops,
                     sync_stream_only_capture,
+                    cleanup_completed_stream_only_readbacks,
                     stream_operator_live_button,
                     stream_operator_restart_button,
                     update_stream_operator_info,
@@ -800,7 +810,8 @@ impl Plugin for DirectTwitchBroadcastPlugin {
                     capture_direct_broadcast_frame.after(SensitiveScreenUpdateSet),
                 )
                     .chain(),
-            );
+            )
+            .add_systems(Last, arm_stream_only_readback);
     }
 }
 
@@ -1427,12 +1438,7 @@ fn sync_stream_only_capture(
             Image::new_target_texture(width, height, TextureFormat::Bgra8UnormSrgb, None);
         target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
         let target = images.add(target);
-        let readback_entity = commands
-            .spawn(Readback::texture(target.clone()))
-            .observe(publish_stream_only_frame)
-            .id();
         state.target = Some(target);
-        state.readback_entity = Some(readback_entity);
         state.width = width;
         state.height = height;
         info!(width, height, "stream-only offscreen target ready");
@@ -1527,9 +1533,13 @@ fn sync_stream_only_capture(
         winit.unfocused_mode = previous;
     }
     if !target_required && state.target.is_some() {
-        if let Some(entity) = state.readback_entity.take() {
-            commands.entity(entity).despawn();
+        for entity in state.readback_requests.keys().copied().collect::<Vec<_>>() {
+            commands.entity(entity).try_despawn();
         }
+        state.readback_requests.clear();
+        state.completed_readbacks.clear();
+        state.next_publish_sequence = state.next_readback_sequence;
+        state.next_readback_at = None;
         if let Some(target) = state.target.take()
             && let Some(images) = images.as_deref_mut()
         {
@@ -1554,6 +1564,90 @@ fn sync_stream_only_capture(
     if operator_was_open {
         info!("local stream operator panel closed");
     }
+}
+
+fn disarm_stream_only_readbacks(
+    mut commands: Commands,
+    armed: Query<Entity, With<StreamOnlyReadbackArmed>>,
+) {
+    // A persistent Readback queues a new asynchronous copy every render frame.
+    // Remove it on the following main-world frame so each request has exactly
+    // one source frame and therefore one sequence number.
+    for entity in &armed {
+        commands.entity(entity).remove::<Readback>();
+    }
+}
+
+fn cleanup_completed_stream_only_readbacks(
+    mut commands: Commands,
+    armed: Query<Entity, With<StreamOnlyReadbackArmed>>,
+    state: Res<StreamOnlyCaptureState>,
+) {
+    for entity in &armed {
+        if !state.readback_requests.contains_key(&entity) {
+            commands.entity(entity).try_despawn();
+        }
+    }
+}
+
+fn arm_stream_only_readback(
+    mut commands: Commands,
+    config: Res<RuntimeConfig>,
+    gameplay_ready: Option<Res<crate::GameplayReady>>,
+    sensitive_screen: Res<SensitiveScreenActive>,
+    runtime: Res<DirectBroadcastRuntime>,
+    mut state: ResMut<StreamOnlyCaptureState>,
+) {
+    let active = gameplay_ready.is_some()
+        && config.0.twitch.broadcast.render_mode == BroadcastRenderMode::StreamOnly
+        && !sensitive_screen.0
+        && runtime.controller.is_some()
+        && matches!(
+            runtime.phase,
+            DirectBroadcastPhase::Connecting
+                | DirectBroadcastPhase::VerifyingTwitch
+                | DirectBroadcastPhase::Broadcasting
+                | DirectBroadcastPhase::BandwidthTesting
+                | DirectBroadcastPhase::Reconnecting
+        );
+    if !active || state.readback_requests.len() >= MAX_STREAM_READBACKS_IN_FLIGHT {
+        if !active {
+            state.next_readback_at = None;
+        }
+        return;
+    }
+    let now = Instant::now();
+    if !stream_readback_due(
+        &mut state.next_readback_at,
+        now,
+        config.0.twitch.broadcast.frames_per_second,
+    ) {
+        return;
+    }
+    let Some(target) = state.target.clone() else {
+        return;
+    };
+    let sequence = state.next_readback_sequence;
+    state.next_readback_sequence = state.next_readback_sequence.saturating_add(1);
+    let entity = commands
+        .spawn((Readback::texture(target), StreamOnlyReadbackArmed))
+        .observe(publish_stream_only_frame)
+        .id();
+    state.readback_requests.insert(entity, (sequence, now));
+}
+
+fn stream_readback_due(next: &mut Option<Instant>, now: Instant, frames_per_second: u8) -> bool {
+    let period = Duration::from_secs_f64(1.0 / f64::from(frames_per_second.max(1)));
+    let deadline = next.get_or_insert(now);
+    if now < *deadline {
+        return false;
+    }
+    let overdue = now.saturating_duration_since(*deadline);
+    let period_nanos = period.as_nanos().max(1);
+    let elapsed_slots = 1_u128.saturating_add(overdue.as_nanos() / period_nanos);
+    let advance = u32::try_from(elapsed_slots).unwrap_or(u32::MAX);
+    *deadline += period.saturating_mul(advance);
+    true
 }
 
 fn spawn_stream_operator_view(
@@ -2669,32 +2763,58 @@ const fn camera_targets_primary_window(target: &RenderTarget) -> bool {
 
 fn publish_stream_only_frame(
     mut event: On<ReadbackComplete>,
-    state: Res<StreamOnlyCaptureState>,
+    mut state: ResMut<StreamOnlyCaptureState>,
     sensitive_screen: Res<SensitiveScreenActive>,
     runtime: Res<DirectBroadcastRuntime>,
 ) {
-    if sensitive_screen.0 || state.width == 0 || state.height == 0 {
-        return;
-    }
-    let Some(controller) = runtime.controller.as_ref() else {
+    let Some((sequence, capture_started)) = state.readback_requests.remove(&event.entity) else {
         return;
     };
-    let capture_started = Instant::now();
-    let readback = std::mem::take(&mut event.event_mut().data);
-    let pixels = remove_gpu_row_padding(readback, state.width, state.height);
-    if pixels.is_empty() {
-        controller.drop_video_frames(1);
-        return;
+    let completed = if sensitive_screen.0 || state.width == 0 || state.height == 0 {
+        None
+    } else if let Some(controller) = runtime.controller.as_ref() {
+        let readback = std::mem::take(&mut event.event_mut().data);
+        let pixels = remove_gpu_row_padding(readback, state.width, state.height);
+        if pixels.is_empty() {
+            controller.drop_video_frames(1);
+            None
+        } else {
+            controller
+                .metrics
+                .observe_capture_latency(capture_started.elapsed());
+            Some(VideoFrame {
+                width: state.width,
+                height: state.height,
+                pixel_format: VideoPixelFormat::Bgra,
+                pixels,
+            })
+        }
+    } else {
+        None
+    };
+    state.completed_readbacks.insert(sequence, completed);
+    let (next_sequence, frames) =
+        take_ordered_readback_frames(state.next_publish_sequence, &mut state.completed_readbacks);
+    state.next_publish_sequence = next_sequence;
+    if let Some(controller) = runtime.controller.as_ref() {
+        for frame in frames {
+            let _ = controller.send_video(frame);
+        }
     }
-    controller
-        .metrics
-        .observe_capture_latency(capture_started.elapsed());
-    let _ = controller.send_video(VideoFrame {
-        width: state.width,
-        height: state.height,
-        pixel_format: VideoPixelFormat::Bgra,
-        pixels,
-    });
+}
+
+fn take_ordered_readback_frames(
+    mut next_sequence: u64,
+    completed: &mut BTreeMap<u64, Option<VideoFrame>>,
+) -> (u64, Vec<VideoFrame>) {
+    let mut ordered = Vec::new();
+    while let Some(frame) = completed.remove(&next_sequence) {
+        next_sequence = next_sequence.saturating_add(1);
+        if let Some(frame) = frame {
+            ordered.push(frame);
+        }
+    }
+    (next_sequence, ordered)
 }
 
 fn remove_gpu_row_padding(mut data: Vec<u8>, width: u32, height: u32) -> Vec<u8> {
@@ -4017,6 +4137,16 @@ impl BroadcastEncoder {
         // FFmpeg protocol timeout is in microseconds. Keep a dead ingest from
         // pinning the encoder worker indefinitely; reconnect owns the retry.
         output_options.set("rw_timeout", "15000000");
+        if target.url.starts_with("rtmp://") || target.url.starts_with("rtmps://") {
+            // Publish as a live source and flush packets promptly. The default
+            // protocol buffering is useful for playback clients, but it adds
+            // avoidable latency and turns a brief ingest stall into a visible
+            // burst for an always-live game producer.
+            output_options.set("rtmp_live", "live");
+            output_options.set("tcp_nodelay", "1");
+            output_options.set("flush_packets", "1");
+            output_options.set("flvflags", "no_duration_filesize");
+        }
         let mut output = format::output_as_with(&target.url, "flv", output_options)
             .context("could not connect to the selected Twitch RTMP ingest")?;
         let global_header = output
@@ -4168,9 +4298,16 @@ impl BroadcastEncoder {
         while self.video.receive_packet(&mut packet).is_ok() {
             packet.set_stream(self.video_stream);
             packet.rescale_ts(self.video.time_base(), self.video_time_base);
+            let pts = packet.pts();
+            let dts = packet.dts();
+            let duration = packet.duration();
             packet
                 .write_interleaved(&mut self.output)
-                .context("could not publish an H.264 packet to Twitch")?;
+                .with_context(|| {
+                    format!(
+                        "could not publish an H.264 packet to Twitch (pts={pts:?}, dts={dts:?}, duration={duration})"
+                    )
+                })?;
             published = published.saturating_add(1);
         }
         Ok(published)
@@ -4229,11 +4366,15 @@ fn configure_amf_quality(options: &mut Dictionary<'_>) {
     options.set("filler_data", "1");
     options.set("frame_skipping", "0");
     options.set("forced_idr", "1");
-    options.set("max_b_frames", "2");
-    options.set("bf", "2");
-    options.set("bf_delta_qp", "0");
-    options.set("bf_ref_delta_qp", "0");
-    options.set("async_depth", "4");
+    // AMF's reordered B-frame path produced periodic chroma/luminance pulses
+    // during large lighting changes and occasionally handed the FLV muxer an
+    // invalid reordered packet. Twitch permits zero B-frames. A monotonic IP
+    // stream is lower-latency and removes both failure modes while retaining
+    // the GPU encoder, CBR, and the required two-second IDR cadence.
+    options.set("max_b_frames", "0");
+    options.set("bf", "0");
+    options.set("latency", "1");
+    options.set("async_depth", "2");
     // The shipping terrain grid is mostly static, high-frequency detail.
     // AMF's automatic static-scene and adaptive-mini-GOP decisions repeatedly
     // starved that detail between Twitch's required two-second IDR frames.
@@ -4270,10 +4411,10 @@ fn open_video_encoder(
             video.set_bit_rate(config.video_bitrate_kbps as usize * 1_000);
             video.set_max_bit_rate(config.video_bitrate_kbps as usize * 1_000);
             video.set_gop(u32::from(config.frames_per_second) * 2);
-            // The AMD path below uses Twitch's two-B-frame broadcast profile.
-            // Preserve the separately tuned latency contracts of the other
-            // hardware backends until each can be exercised on its own GPU.
-            video.set_max_b_frames(usize::from(name == "h264_amf") * 2);
+            // Every live backend uses decode-order timestamps. In particular,
+            // AMD's reordered B-frame path caused intermittent FLV publish
+            // failures and visible dark-scene pulsing on the RX 7800 XT.
+            video.set_max_b_frames(0);
             if global_header {
                 video.set_flags(codec::Flags::GLOBAL_HEADER);
             }
@@ -4710,6 +4851,63 @@ mod tests {
         assert_eq!(pixels.len(), row_bytes * usize::try_from(height).unwrap());
         assert!(pixels[..row_bytes].iter().all(|byte| *byte == 0x11));
         assert!(pixels[row_bytes..].iter().all(|byte| *byte == 0x22));
+    }
+
+    #[test]
+    fn gpu_readbacks_are_published_in_render_order_even_when_they_finish_out_of_order() {
+        let frame = |value| VideoFrame {
+            width: 1,
+            height: 1,
+            pixel_format: VideoPixelFormat::Bgra,
+            pixels: vec![value; 4],
+        };
+        let mut completed = BTreeMap::from([(2, Some(frame(2))), (1, None)]);
+
+        let (next_sequence, frames) = take_ordered_readback_frames(0, &mut completed);
+
+        assert_eq!(next_sequence, 0);
+        assert!(frames.is_empty());
+        completed.insert(0, Some(frame(0)));
+
+        let (next_sequence, frames) = take_ordered_readback_frames(next_sequence, &mut completed);
+
+        assert_eq!(next_sequence, 3);
+        assert_eq!(
+            frames
+                .into_iter()
+                .map(|frame| frame.pixels[0])
+                .collect::<Vec<_>>(),
+            [0, 2]
+        );
+        assert!(completed.is_empty());
+    }
+
+    #[test]
+    fn gpu_readback_cadence_never_captures_faster_than_the_stream_rate() {
+        let started = Instant::now();
+        let mut next = None;
+
+        assert!(stream_readback_due(&mut next, started, 30));
+        assert!(!stream_readback_due(
+            &mut next,
+            started + Duration::from_millis(20),
+            30
+        ));
+        assert!(stream_readback_due(
+            &mut next,
+            started + Duration::from_millis(34),
+            30
+        ));
+        assert!(!stream_readback_due(
+            &mut next,
+            started + Duration::from_millis(50),
+            30
+        ));
+        assert!(stream_readback_due(
+            &mut next,
+            started + Duration::from_millis(68),
+            30
+        ));
     }
 
     #[test]
@@ -5159,6 +5357,10 @@ mod tests {
         assert_eq!(options.get("vbaq"), Some("1"));
         assert_eq!(options.get("preanalysis"), Some("0"));
         assert_eq!(options.get("forced_idr"), Some("1"));
+        assert_eq!(options.get("max_b_frames"), Some("0"));
+        assert_eq!(options.get("bf"), Some("0"));
+        assert_eq!(options.get("latency"), Some("1"));
+        assert_eq!(options.get("async_depth"), Some("2"));
     }
 
     #[test]

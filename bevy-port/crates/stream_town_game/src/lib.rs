@@ -2,7 +2,6 @@
 pub mod direct_broadcast;
 mod tidal_music;
 pub mod twitch;
-mod unity_color_filter;
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
@@ -393,7 +392,6 @@ use twitch::{
     CredentialVault, DeviceAuthorization, OAuthClient, TokenValidation, TwitchControl, TwitchEvent,
     TwitchModerationStatus, TwitchStatus, TwitchTransport,
 };
-use unity_color_filter::{UnityColorFilter, UnityColorFilterPlugin};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, States)]
 pub enum GameState {
@@ -2619,6 +2617,20 @@ type TownSunMutQuery<'w, 's> = Query<
     (&'static mut DirectionalLight, &'static mut Transform),
     (With<TownSun>, Without<TownCamera>),
 >;
+type TownPostProcessQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        Option<&'static mut ColorGrading>,
+        Has<Hdr>,
+        Has<Bloom>,
+        Has<Vignette>,
+        Has<MotionBlur>,
+        Option<&'static mut Tonemapping>,
+    ),
+    With<TownCamera>,
+>;
 type LoadingSubstatusQuery<'w, 's> = Query<
     'w,
     's,
@@ -3358,7 +3370,7 @@ pub struct StreamTownGamePlugin;
 
 impl Plugin for StreamTownGamePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((UnityColorFilterPlugin, TabNavigationPlugin));
+        app.add_plugins(TabNavigationPlugin);
         #[cfg(target_os = "windows")]
         app.add_plugins(direct_broadcast::DirectTwitchBroadcastPlugin);
         let render_schedule_available = app.get_sub_app(RenderApp).is_some();
@@ -4956,9 +4968,11 @@ fn sync_authored_post_processing(
     simulation: Option<Res<SimulationRuntime>>,
     environment: Res<EnvironmentPresentation>,
     mut runtime: ResMut<PostProcessPresentation>,
-    cameras: Query<Entity, With<TownCamera>>,
+    mut cameras: TownPostProcessQuery,
 ) {
-    let Ok(camera) = cameras.single() else {
+    let Ok((camera, color_grading, has_hdr, has_bloom, has_vignette, has_motion_blur, tonemapping)) =
+        cameras.single_mut()
+    else {
         return;
     };
     let daylight = if *state.get() == GameState::InGame {
@@ -4990,6 +5004,9 @@ fn sync_authored_post_processing(
     if runtime.applied == Some(signature) {
         return;
     }
+    let static_stack_changed = runtime
+        .applied
+        .is_none_or(|(applied_state, _, _, _)| applied_state != *state.get());
 
     let scene_path = match state.get() {
         GameState::InGame => Some(WORLD_SCENE_PATH),
@@ -5003,76 +5020,84 @@ fn sync_authored_post_processing(
         .iter()
         .find_map(|(profile, weight)| (*weight > f32::EPSILON).then_some(*profile));
     let mut entity = commands.entity(camera);
-    entity.insert(color_grading_for_state(&settings.0, &stack, *state.get()));
-    if primary.is_some() {
-        entity.insert(Hdr);
-        let color_filter = authored_rgb_filter(&stack);
-        if color_filter
-            .into_iter()
-            .any(|component| (component - 1.0).abs() > f32::EPSILON)
-        {
-            entity.insert(UnityColorFilter::new(color_filter));
-        } else {
-            entity.remove::<UnityColorFilter>();
-        }
+    let next_color_grading = color_grading_for_state(&settings.0, &stack, *state.get());
+    if let Some(mut color_grading) = color_grading {
+        *color_grading = next_color_grading;
     } else {
+        entity.insert(next_color_grading);
+    }
+    if primary.is_some() {
+        if !has_hdr {
+            entity.insert(Hdr);
+        }
+    } else if has_hdr {
         entity.remove::<Hdr>();
-        entity.remove::<UnityColorFilter>();
     }
 
     if let Some(bloom) = primary.and_then(|profile| profile.bloom) {
-        entity.insert(Bloom {
-            // Unity URP's authored intensity is not numerically equivalent to
-            // Bevy's full-resolution additive blend. Mapping it onto Bevy's
-            // natural, energy-conserving preset prevents white shoreline and
-            // water highlights from flooding the entire HDR buffer.
-            intensity: (bloom.intensity * 0.15).clamp(0.0, 0.35),
-            low_frequency_boost: bloom.scatter,
-            prefilter: BloomPrefilter {
-                threshold: bloom.threshold,
-                threshold_softness: 0.2,
-            },
-            composite_mode: BloomCompositeMode::EnergyConserving,
-            ..Bloom::NATURAL
-        });
-    } else {
+        if !has_bloom || static_stack_changed {
+            entity.insert(Bloom {
+                // Unity URP's authored intensity is not numerically equivalent to
+                // Bevy's full-resolution additive blend. Mapping it onto Bevy's
+                // natural, energy-conserving preset prevents white shoreline and
+                // water highlights from flooding the entire HDR buffer.
+                intensity: (bloom.intensity * 0.15).clamp(0.0, 0.35),
+                low_frequency_boost: bloom.scatter,
+                prefilter: BloomPrefilter {
+                    threshold: bloom.threshold,
+                    threshold_softness: 0.2,
+                },
+                composite_mode: BloomCompositeMode::EnergyConserving,
+                ..Bloom::NATURAL
+            });
+        }
+    } else if has_bloom {
         entity.remove::<Bloom>();
     }
     if let Some(vignette) = primary.and_then(|profile| profile.vignette) {
-        entity.insert(Vignette {
-            intensity: vignette.intensity,
-            radius: 0.75,
-            smoothness: vignette.smoothness,
-            roundness: if vignette.rounded { 1.0 } else { 0.0 },
-            center: Vec2::from_array(vignette.center),
-            edge_compensation: 1.0,
-            color: Color::srgba(
-                vignette.color[0],
-                vignette.color[1],
-                vignette.color[2],
-                vignette.color[3],
-            ),
-        });
-    } else {
+        if !has_vignette || static_stack_changed {
+            entity.insert(Vignette {
+                intensity: vignette.intensity,
+                radius: 0.75,
+                smoothness: vignette.smoothness,
+                roundness: if vignette.rounded { 1.0 } else { 0.0 },
+                center: Vec2::from_array(vignette.center),
+                edge_compensation: 1.0,
+                color: Color::srgba(
+                    vignette.color[0],
+                    vignette.color[1],
+                    vignette.color[2],
+                    vignette.color[3],
+                ),
+            });
+        }
+    } else if has_vignette {
         entity.remove::<Vignette>();
     }
     if motion_blur_supported()
         && let Some(motion_blur) = primary.and_then(|profile| profile.motion_blur)
     {
-        entity.insert(MotionBlur {
-            shutter_angle: motion_blur.intensity,
-            samples: u32::from(motion_blur.quality),
-        });
-    } else {
+        if !has_motion_blur || static_stack_changed {
+            entity.insert(MotionBlur {
+                shutter_angle: motion_blur.intensity,
+                samples: u32::from(motion_blur.quality),
+            });
+        }
+    } else if has_motion_blur {
         entity.remove::<MotionBlur>();
     }
-    match primary.and_then(|profile| profile.tonemapping) {
-        Some(PostProcessTonemapping::Aces) => entity.insert(Tonemapping::AcesFitted),
-        Some(PostProcessTonemapping::Neutral) => {
-            entity.insert(Tonemapping::SomewhatBoringDisplayTransform)
-        }
-        Some(PostProcessTonemapping::None) | None => entity.insert(Tonemapping::None),
+    let next_tonemapping = match primary.and_then(|profile| profile.tonemapping) {
+        Some(PostProcessTonemapping::Aces) => Tonemapping::AcesFitted,
+        Some(PostProcessTonemapping::Neutral) => Tonemapping::SomewhatBoringDisplayTransform,
+        Some(PostProcessTonemapping::None) | None => Tonemapping::None,
     };
+    if let Some(mut tonemapping) = tonemapping {
+        if *tonemapping != next_tonemapping {
+            *tonemapping = next_tonemapping;
+        }
+    } else {
+        entity.insert(next_tonemapping);
+    }
     runtime.applied = Some(signature);
 }
 
@@ -22839,6 +22864,7 @@ fn update_environment_presentation(
     mut commands: Commands,
     simulation: Res<SimulationRuntime>,
     config: Res<RuntimeConfig>,
+    catalog: Res<RuntimePresentation>,
     render: Res<RenderAssets>,
     mut presentation: ResMut<EnvironmentPresentation>,
     mut clear_color: Option<ResMut<ClearColor>>,
@@ -22854,6 +22880,11 @@ fn update_environment_presentation(
     let environment = (simulation.0.season, simulation.0.weather);
     let time_cycle = config.0.time.sample(simulation.0.elapsed_seconds);
     let daylight = time_cycle.daylight.clamp(0.0, 1.0);
+    let color_filter = authored_rgb_filter(&authored_post_process_stack(
+        &catalog.0,
+        WORLD_SCENE_PATH,
+        daylight,
+    ));
     let daylight_bits = daylight_signature(daylight);
     let environment_changed = presentation.applied_environment != Some(environment);
     let daylight_changed = presentation.applied_daylight_bits != Some(daylight_bits);
@@ -22868,9 +22899,9 @@ fn update_environment_presentation(
     if let Some(clear_color) = clear_color.as_deref_mut() {
         let sky_ratio = 0.35 + 0.65 * light_ratio;
         clear_color.0 = Color::srgb(
-            palette.clear_color[0] * sky_ratio,
-            palette.clear_color[1] * sky_ratio,
-            palette.clear_color[2] * sky_ratio,
+            palette.clear_color[0] * sky_ratio * color_filter[0],
+            palette.clear_color[1] * sky_ratio * color_filter[1],
+            palette.clear_color[2] * sky_ratio * color_filter[2],
         );
     }
     if environment_changed
@@ -22921,31 +22952,31 @@ fn update_environment_presentation(
         grass.extension.parameters.surface_controls.z = tint;
     }
     for (mut fog, mut ambient) in &mut cameras {
+        fog.color = Color::srgba(
+            palette.fog_color[0] * color_filter[0],
+            palette.fog_color[1] * color_filter[1],
+            palette.fog_color[2] * color_filter[2],
+            palette.fog_color[3],
+        );
         if environment_changed {
-            fog.color = Color::srgba(
-                palette.fog_color[0],
-                palette.fog_color[1],
-                palette.fog_color[2],
-                palette.fog_color[3],
-            );
             fog.falloff = FogFalloff::Linear {
                 start: palette.fog_start,
                 end: palette.fog_end,
             };
         }
         ambient.color = Color::srgb(
-            palette.ambient_color[0],
-            palette.ambient_color[1],
-            palette.ambient_color[2],
+            palette.ambient_color[0] * color_filter[0],
+            palette.ambient_color[1] * color_filter[1],
+            palette.ambient_color[2] * color_filter[2],
         );
         let ambient_ratio = 0.55 + 0.45 * light_ratio;
         ambient.brightness = in_game_ambient_brightness(palette.ambient_brightness) * ambient_ratio;
     }
     for (mut light, mut transform) in &mut sun {
         light.color = Color::srgb(
-            palette.sun_color[0],
-            palette.sun_color[1],
-            palette.sun_color[2],
+            palette.sun_color[0] * color_filter[0],
+            palette.sun_color[1] * color_filter[1],
+            palette.sun_color[2] * color_filter[2],
         );
         light.illuminance = palette.sun_illuminance * light_ratio;
         *transform = in_game_sun_transform_for_daylight(daylight);
@@ -45544,6 +45575,10 @@ mod tests {
         let night_grading = authored_color_grading(&PlayerSettings::default(), &night);
         assert!((day_grading.global.exposure - 1.1).abs() < f32::EPSILON);
         assert!((night_grading.global.exposure - 0.75).abs() < f32::EPSILON);
+        assert!(day_grading.global.temperature.abs() < f32::EPSILON);
+        assert!(day_grading.global.tint.abs() < f32::EPSILON);
+        assert!(night_grading.global.temperature.abs() < f32::EPSILON);
+        assert!(night_grading.global.tint.abs() < f32::EPSILON);
         assert!(
             authored_rgb_filter(&day)
                 .into_iter()

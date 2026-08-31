@@ -182,8 +182,10 @@ record. The same schema converts the two reachable global URP volume profiles
 and all three shipping scene bindings. Runtime mapping applies the authored
 bloom, vignette, motion blur, ACES tonemapping, exposure, and the town's
 inverse-daylight night color grade while retaining player brightness/gamma.
-An HDR post-process pass applies the authored RGB filter directly in WGSL after
-tonemapping instead of approximating the blue night tint with white balance.
+The authored night RGB filter is folded continuously into the clear color, fog,
+ambient light, and sun color. Keeping the tint in scene lighting avoids an extra
+fullscreen render-target swap, which caused alternating color states on the
+offscreen stream target during dusk.
 
 Convert all FBX models with the pinned Blender version, then validate every
 source/output hash and GLB header:
@@ -264,8 +266,9 @@ with `channel:read:stream_key`, `user:write:chat`, and
 messages, and operator moderation therefore use the streamer grant, while the
 bot retains only `chat:read` and `chat:edit`. The default
 stream-only mode renders the town once into a full-resolution offscreen target,
-moves that GPU readback allocation directly into a latest-frame mailbox, and
-replaces the local game window with a separate 1100x680 operator dashboard and a
+makes at most one GPU readback request per configured output-frame interval,
+publishes completed readbacks in render order through a bounded latest-frame
+mailbox, and replaces the local game window with a separate 1100x680 operator dashboard and a
 low-resolution preview. The optional headed mode uses Windows Graphics Capture instead.
 WASAPI application loopback captures only Stream Town's Bevy audio. In
 stream-only mode, Bevy Tidal's bounded pre-monitor PCM tap feeds music directly
@@ -285,7 +288,10 @@ causes are written asynchronously to
 so a failed session can be diagnosed after the game exits without putting disk
 I/O on the render or encoder thread. Auto encoder selection prefers AMD AMF on a
 compatible Radeon GPU, falls back to forced-hardware Windows Media Foundation,
-and uses OpenH264 only as the software fallback. The
+and uses OpenH264 only as the software fallback. AMF uses CBR, zero B-frames,
+and its low-latency path; RTMP uses live, no-delay, immediate-flush output so a
+delayed packet cannot periodically stall the ingest connection. A mux failure
+records the failed packet timestamps in the redacted diagnostics log. The
 independently stored broadcaster token and fetched stream key are always redacted.
 The encoder worker owns the constant-rate video clock and repeats the latest
 completed GPU frame if the game thread stalls. Audio starts against the first
