@@ -26,8 +26,8 @@ masters as appropriate.
 | `!body <index>` | Change body type. |
 | `!haircolor <index>` | Change hair colour. |
 | `!eyecolor <index>` | Change eye colour. |
-| `!buy <amount> <resource>` | Buy a town resource. |
-| `!sell <amount> <resource>` | Sell a town resource. |
+| `!buy <amount> <resource>` | Spend town gold to buy a resource at Unity's authored rate and storage limit. |
+| `!sell <amount> <resource>` | Sell available town stock for gold at Unity's authored rate and tax. |
 | `!revive [player]` | Revive yourself, or another player when your role permits it. |
 | `!praise` | Praise the Fish God. |
 | `!vote <option>` | Vote in the active ruler vote, or use the displayed `1`-`3` option in a technology vote. |
@@ -39,7 +39,7 @@ masters as appropriate.
 | `!rinfo <id>` | Show a recruit. |
 | `!rrole <id> <role>` | Assign a recruit’s role. |
 | `!rdismiss <id>` | Dismiss a recruit. |
-| `!info <id>` | Show authored information for content. |
+| `!info <id> [building-id]` | Show authored information for content; a building ID selects one constructed instance. |
 | `!ping` | Show your character’s location marker. |
 | `!stdiscord` | Show the Stream Town community link. |
 | `!help` | Link to this command reference. |
@@ -61,11 +61,17 @@ masters as appropriate.
 | `!remove <building> <id>` | Remove a building instance. |
 | `!recruit <role> [amount]` | Recruit town-controlled characters. |
 | `!cam <direction> [amount]` | Smoothly move the broadcast camera using `up`, `down`, `left`, `right`, `in`, or `out`. Several direction/amount pairs may be supplied. |
-| `!cam home` | Smoothly return to the authored home position and base zoom. The camera also returns home after one minute without camera input. |
+| `!cam home` | Smoothly return to the authored home position and base zoom. Any camera command suspends the idle director for another minute. |
 | `!resetcam` | Restore the authored town camera. |
 | `!rulervote` | Start a ruler vote. |
 | `!resign` | Resign as ruler. |
 | `!save` | Save the town. |
+
+After one minute without camera commands, the broadcast camera returns to the
+base town composition, then automatically alternates between smooth close-up
+shots that follow living citizens. Every fourth automatic shot returns to the
+town view. Citizen choices are deterministic for the save and do not repeat
+immediately when multiple citizens are available.
 
 ## Moderator and game-master commands
 

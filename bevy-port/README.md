@@ -350,7 +350,12 @@ the shipping `MainCamera.prefab` contract directly: a 60-degree perspective
 lens with 0.3/1000 clipping planes, the authored 45-degree downward view from
 the town's negative-X side and physical 11-60 height zoom. The pose is translated to the generated
 Town Hall so different deterministic terrain seeds retain Unity's opening
-composition. There is no in-game Escape menu; local stream control lives in the
+composition. After 60 seconds without a `!cam` request, the idle director first
+restores that town composition, then uses deterministic 24-second close-ups that
+track living citizens with smooth movement and zoom. Every fourth automatic shot
+holds the base town view for 12 seconds, and multiple citizens never repeat on
+adjacent shots. Any new camera command immediately cancels the director and
+restarts its idle timer. There is no in-game Escape menu; local stream control lives in the
 operator panel. On the Main Menu and Credits, Tab/Shift+Tab moves
 focus, arrow keys continue from visible keyboard focus, and Enter or Space
 activates the focused control. Settings retain keyboard control: Tab/Shift+Tab changes category,
@@ -361,6 +366,14 @@ stable chat grammar executes the player query, role/station/target selection,
 cosmetic/pet, building/catalog, recruit administration, ruler economy, camera,
 governance, moderation, save, and event commands documented by `!help` with
 catalog/prerequisite validation and HUD/Twitch feedback.
+
+Selling through `!sell` converts available wood, ore, or food into town gold
+with Unity's authored 0.25 rate and 0.5 sell tax (including Unity's two integer
+truncation points); `!buy` spends that same gold at the authored buy-tax rate and
+respects live storage capacity. Both paths update technology objectives. A
+source-driven parity test reads Unity's shipping `CommandDictionary.cs` and
+requires every registered command to retain both a Bevy parser path and an entry
+in the public `!help` reference.
 
 For an automated legacy-load smoke test, set `STREAM_TOWN_SAVE_PATH` to an
 imported `.stbevy` file and `STREAM_TOWN_AUTO_LOAD=1`. A retained schema-1

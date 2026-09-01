@@ -65,7 +65,9 @@ pub fn unity_command_usage(input: &str) -> Option<&'static str> {
         "rrole" => "!rrole <id> <role>",
         "rinfo" => "!rinfo <id>",
         "rdismiss" => "!rdismiss <id>",
-        "resetid" => "!resetid <id>",
+        // The Unity handler consumes both values even though its validator and
+        // usage table accidentally claimed there was only one argument.
+        "resetid" => "!resetid <kind> <value>",
         "roles" => "!roles",
         "help" => "!help",
         "stdiscord" => "!stdiscord",
@@ -158,7 +160,10 @@ pub enum ChatCommand {
     },
     Roles,
     TownStats,
-    Info(StableId),
+    Info {
+        item: StableId,
+        instance: Option<u16>,
+    },
     Camera(Vec<CameraAction>),
     ResetCamera,
     ModRole {
@@ -413,6 +418,18 @@ impl FromStr for ChatCommand {
                     parse_camera_actions(arguments.into_iter()).map(Self::Camera)
                 }
             }
+            "info" => {
+                let item = content_id(
+                    parts
+                        .next()
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
+                )?;
+                let instance = parts.next().map(parse_index).transpose()?;
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                Ok(Self::Info { item, instance })
+            }
             "move" => parse_building_actions(None, parts).map(Self::MoveBuilding),
             "up" | "down" | "left" | "right" | "rotate" => {
                 parse_building_actions(Some(command.as_str()), parts).map(Self::MoveBuilding)
@@ -506,7 +523,6 @@ impl FromStr for ChatCommand {
                     "target" => optional_index(argument).map(Self::Target),
                     "pet" => optional_id(argument).map(Self::Pet),
                     "pets" => no_argument(argument, Self::Pets),
-                    "info" => with_id(&command, argument, Self::Info),
                     "bid" => with_id(&command, argument, Self::BuildingIds),
                     "rinfo" => with_index(&command, argument, Self::RecruitInfo),
                     "rdismiss" => with_index(&command, argument, Self::DismissRecruit),
@@ -708,6 +724,66 @@ fn parse_level_command<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+
+    const UNITY_COMMAND_DICTIONARY_SOURCE: &str =
+        include_str!("../../../../Assets/Scripts/Twitch/Commands/CommandDictionary.cs");
+
+    fn source_registered_commands() -> BTreeSet<String> {
+        UNITY_COMMAND_DICTIONARY_SOURCE
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .filter_map(|line| line.split(".Add(\"").nth(1))
+            .filter_map(|tail| tail.split('"').next())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn valid_source_command(command: &str) -> String {
+        let arguments = match command {
+            "build" | "bid" => " house",
+            "move" | "cam" => " up 2",
+            "remove" => " house 1",
+            "hair" | "facialhair" | "eyes" | "body" | "haircolor" | "eyecolor" | "vote"
+            | "rinfo" | "rdismiss" | "givexpall" => " 1",
+            "addresource" => " wood 1",
+            "modrole" => " viewer logger",
+            "kill" | "grevive" => " viewer",
+            "givexp" | "levelup" => " viewer 1",
+            "qevent" => " fishgod",
+            "buy" | "sell" => " 8 wood",
+            "levelall" => " house 2",
+            "recruit" => " logger 1",
+            "givepet" => " viewer duck",
+            "info" => " wood",
+            "rrole" => " 1 logger",
+            "resetid" => " building house",
+            _ => "",
+        };
+        format!("!{command}{arguments}")
+    }
+
+    #[test]
+    fn every_source_registered_command_has_usage_and_a_valid_bevy_parser_path() {
+        let commands = source_registered_commands();
+        assert_eq!(commands.len(), 68, "Unity command surface changed");
+        for command in commands {
+            let input = valid_source_command(&command);
+            assert!(
+                unity_command_usage(&input).is_some(),
+                "missing Unity usage for {input}"
+            );
+            assert!(
+                input.parse::<ChatCommand>().is_ok(),
+                "missing Bevy parser path for {input}"
+            );
+        }
+        for alias in UNITY_CREATE_COMMAND_ALIASES {
+            let input = format!("!{alias}");
+            assert_eq!(input.parse(), Ok(ChatCommand::Join));
+            assert_eq!(unity_command_usage(&input), Some("!join"));
+        }
+    }
 
     #[test]
     fn parses_shipping_command_grammar() {
@@ -828,6 +904,13 @@ mod tests {
             ]))
         );
         assert_eq!("!cam home".parse(), Ok(ChatCommand::ResetCamera));
+        assert_eq!(
+            "!info house 2".parse(),
+            Ok(ChatCommand::Info {
+                item: StableId::new("house").unwrap(),
+                instance: Some(2),
+            })
+        );
         assert_eq!(
             "!body 3".parse(),
             Ok(ChatCommand::Customize {

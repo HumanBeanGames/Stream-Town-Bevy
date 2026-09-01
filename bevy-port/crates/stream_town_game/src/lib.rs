@@ -150,6 +150,11 @@ const UNITY_TOWN_CAMERA_MAX_HEIGHT: f32 = 60.0;
 const UNITY_TOWN_CAMERA_MOVE_SMOOTHNESS: f32 = 5.0;
 const TWITCH_CAMERA_PAN_DISTANCE: f32 = 12.0;
 const TWITCH_CAMERA_HOME_TIMEOUT_SECONDS: f32 = 60.0;
+const AUTO_CAMERA_TOWN_SHOT_SECONDS: f32 = 12.0;
+const AUTO_CAMERA_CITIZEN_SHOT_SECONDS: f32 = 24.0;
+const AUTO_CAMERA_CITIZEN_HEIGHT: f32 = 15.0;
+const AUTO_CAMERA_CITIZEN_FOCUS_HEIGHT: f32 = 1.4;
+const AUTO_CAMERA_TOWN_SHOT_INTERVAL: u64 = 4;
 const FOLIAGE_CAPTURE_TIMES_SECONDS: [f32; 12] =
     [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0];
 pub const PLAYER_ANIMATED_MODEL_PATH: &str = "migrated/models/Models/Characters/Characters.glb";
@@ -2992,6 +2997,17 @@ struct TownCameraControllerRuntime {
     move_target: Vec3,
     zoom_target_height: f32,
     seconds_since_input: f32,
+    auto_shot: AutoCameraShot,
+    auto_shot_elapsed_seconds: f32,
+    auto_sequence: u64,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+enum AutoCameraShot {
+    #[default]
+    Inactive,
+    Town,
+    Citizen(StableId),
 }
 
 #[derive(Default)]
@@ -3021,6 +3037,9 @@ impl TownCameraControllerRuntime {
             move_target: home.translation,
             zoom_target_height: home.translation.y,
             seconds_since_input: 0.0,
+            auto_shot: AutoCameraShot::Inactive,
+            auto_shot_elapsed_seconds: 0.0,
+            auto_sequence: 0,
             home,
         }
     }
@@ -3029,12 +3048,21 @@ impl TownCameraControllerRuntime {
         self.move_target = home.translation;
         self.zoom_target_height = home.translation.y;
         self.seconds_since_input = 0.0;
+        self.auto_shot = AutoCameraShot::Inactive;
+        self.auto_shot_elapsed_seconds = 0.0;
+        self.auto_sequence = 0;
         self.home = home;
     }
 
     fn return_home(&mut self) {
         self.move_target = self.home.translation;
         self.zoom_target_height = self.home.translation.y;
+    }
+
+    fn cancel_auto_camera(&mut self) {
+        self.auto_shot = AutoCameraShot::Inactive;
+        self.auto_shot_elapsed_seconds = 0.0;
+        self.auto_sequence = 0;
     }
 }
 
@@ -27080,12 +27108,48 @@ fn capture_foliage_acceptance(
     );
 }
 
+fn next_auto_camera_shot(
+    world_seed: u64,
+    sequence: u64,
+    citizens: &[StableId],
+    previous: &AutoCameraShot,
+) -> AutoCameraShot {
+    if citizens.is_empty() || sequence.is_multiple_of(AUTO_CAMERA_TOWN_SHOT_INTERVAL) {
+        return AutoCameraShot::Town;
+    }
+    let mut index = usize::try_from(
+        seagull_hash(
+            world_seed ^ 0x6175_746f_5f63_616d,
+            sequence,
+            0x6369_7469_7a65_6e73,
+        ) % u64::try_from(citizens.len()).expect("citizen count fits u64"),
+    )
+    .expect("camera choice fits usize");
+    if citizens.len() > 1
+        && matches!(previous, AutoCameraShot::Citizen(previous) if previous == &citizens[index])
+    {
+        index = (index + 1) % citizens.len();
+    }
+    AutoCameraShot::Citizen(citizens[index].clone())
+}
+
+fn auto_camera_citizen_translation(home: &Transform, citizen: Vec3) -> Vec3 {
+    let focus = citizen + Vec3::Y * AUTO_CAMERA_CITIZEN_FOCUS_HEIGHT;
+    let forward = home.forward().as_vec3();
+    let height = (citizen.y + AUTO_CAMERA_CITIZEN_HEIGHT)
+        .clamp(UNITY_TOWN_CAMERA_MIN_HEIGHT, UNITY_TOWN_CAMERA_MAX_HEIGHT);
+    let distance = (height - focus.y) / (-forward.y).max(0.001);
+    focus - forward * distance
+}
+
 fn camera_zoom_and_commands(
     time: Res<Time>,
     config: Res<RuntimeConfig>,
     menu: Res<MenuRuntime>,
     settings: Res<RuntimePlayerSettings>,
+    simulation: Option<Res<SimulationRuntime>>,
     mut requests: ResMut<CameraCommandQueue>,
+    agents: Query<(&Agent, &Transform), Without<TownCamera>>,
     mut cameras: Query<
         (
             &mut Transform,
@@ -27116,6 +27180,7 @@ fn camera_zoom_and_commands(
 
     if let Some(request) = requests.0.pop_front() {
         controller.seconds_since_input = 0.0;
+        controller.cancel_auto_camera();
         if request.reset {
             controller.return_home();
         } else {
@@ -27154,10 +27219,77 @@ fn camera_zoom_and_commands(
         controller.move_target =
             constrain_town_camera_position(controller.move_target, &config.0.world);
     } else {
+        let was_idle = controller.seconds_since_input >= TWITCH_CAMERA_HOME_TIMEOUT_SECONDS;
         controller.seconds_since_input = (controller.seconds_since_input + delta_seconds)
             .min(TWITCH_CAMERA_HOME_TIMEOUT_SECONDS);
-        if controller.seconds_since_input >= TWITCH_CAMERA_HOME_TIMEOUT_SECONDS {
+        let entered_auto_camera =
+            !was_idle && controller.seconds_since_input >= TWITCH_CAMERA_HOME_TIMEOUT_SECONDS;
+        if entered_auto_camera {
+            controller.auto_shot = AutoCameraShot::Town;
+            controller.auto_shot_elapsed_seconds = 0.0;
             controller.return_home();
+        }
+        if controller.seconds_since_input >= TWITCH_CAMERA_HOME_TIMEOUT_SECONDS {
+            let mut citizens = agents
+                .iter()
+                .filter(|(agent, _)| agent.kind == ActorKind::Player)
+                .filter(|(agent, _)| {
+                    simulation.as_ref().is_none_or(|simulation| {
+                        simulation
+                            .0
+                            .actors
+                            .get(&agent.id)
+                            .is_some_and(|actor| actor.alive)
+                    })
+                })
+                .map(|(agent, _)| agent.id.clone())
+                .collect::<Vec<_>>();
+            citizens.sort();
+            if controller.auto_shot == AutoCameraShot::Inactive {
+                controller.auto_shot = AutoCameraShot::Town;
+                controller.auto_shot_elapsed_seconds = 0.0;
+                controller.return_home();
+            } else if !entered_auto_camera {
+                controller.auto_shot_elapsed_seconds += delta_seconds;
+            }
+            let duration = match controller.auto_shot {
+                AutoCameraShot::Inactive | AutoCameraShot::Town => AUTO_CAMERA_TOWN_SHOT_SECONDS,
+                AutoCameraShot::Citizen(_) => AUTO_CAMERA_CITIZEN_SHOT_SECONDS,
+            };
+            if controller.auto_shot_elapsed_seconds >= duration {
+                let previous = controller.auto_shot.clone();
+                controller.auto_sequence = controller.auto_sequence.saturating_add(1);
+                controller.auto_shot = next_auto_camera_shot(
+                    simulation
+                        .as_ref()
+                        .map_or(0, |simulation| simulation.0.world_seed),
+                    controller.auto_sequence,
+                    &citizens,
+                    &previous,
+                );
+                controller.auto_shot_elapsed_seconds = 0.0;
+            }
+            match controller.auto_shot.clone() {
+                AutoCameraShot::Inactive => {}
+                AutoCameraShot::Town => controller.return_home(),
+                AutoCameraShot::Citizen(citizen) => {
+                    if citizens.binary_search(&citizen).is_ok()
+                        && let Some((_, citizen_transform)) =
+                            agents.iter().find(|(agent, _)| agent.id == citizen)
+                    {
+                        controller.move_target = constrain_town_camera_position(
+                            auto_camera_citizen_translation(
+                                &controller.home,
+                                citizen_transform.translation,
+                            ),
+                            &config.0.world,
+                        );
+                        controller.zoom_target_height = controller.move_target.y;
+                    } else {
+                        controller.auto_shot_elapsed_seconds = AUTO_CAMERA_CITIZEN_SHOT_SECONDS;
+                    }
+                }
+            }
         }
     }
 
@@ -31917,6 +32049,7 @@ fn item_info(
     content: &ContentCatalog,
     simulation: &WorldSimulation,
     requested: &StableId,
+    instance: Option<u16>,
 ) -> Result<String, String> {
     if let Some(role_id) = prefixed_id(requested, "role:")
         && let Some(role) = content.roles.get(&role_id)
@@ -31936,11 +32069,45 @@ fn item_info(
     if let Some(building_id) = prefixed_id(requested, "building:")
         && let Some(building) = content.buildings.get(&building_id)
     {
-        let count = simulation
-            .buildings
-            .values()
-            .filter(|state| state.archetype == building.archetype)
-            .count();
+        let instances = building_instance_ids(content, simulation, &building_id);
+        if let Some(instance) = instance {
+            let state = instances
+                .get(usize::from(instance.saturating_sub(1)))
+                .and_then(|runtime_id| simulation.buildings.get(runtime_id))
+                .ok_or_else(|| {
+                    format!(
+                        "{} building ID {instance} does not exist",
+                        building.display_name
+                    )
+                })?;
+            let max_health = building_max_health(content, state);
+            let max_level = maximum_building_level(content, simulation, &building_id);
+            let status = if state.complete {
+                "complete"
+            } else {
+                "under construction"
+            };
+            let next_upgrade = if !building.can_level || state.level >= max_level {
+                "maximum level".to_owned()
+            } else {
+                let cost =
+                    building_upgrade_cost(content, simulation, &building_id, building, state.level)
+                        .into_iter()
+                        .map(|(resource, amount)| format!("{resource}={amount}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                format!("next upgrade {cost}")
+            };
+            return Ok(format!(
+                "{} #{instance}: level {}/{max_level}, health {}/{max_health}, {status}, at {},{}, {next_upgrade}",
+                building.display_name,
+                state.level,
+                state.health,
+                state.position.x,
+                state.position.z
+            ));
+        }
+        let count = instances.len();
         let cost = building
             .cost
             .iter()
@@ -32372,10 +32539,13 @@ fn unity_outbound_reply(
         ChatCommand::Buy { .. } | ChatCommand::Sell { .. } => {
             Some(format!("{display_name} : {message}"))
         }
-        ChatCommand::Discord | ChatCommand::Help | ChatCommand::Roles | ChatCommand::Info(_) => {
-            Some(message.to_owned())
-        }
-        ChatCommand::ToggleBuildCosts | ChatCommand::ToggleRoleLimits => Some(message.to_owned()),
+        ChatCommand::Discord
+        | ChatCommand::Help
+        | ChatCommand::Roles
+        | ChatCommand::TownStats
+        | ChatCommand::Info { .. }
+        | ChatCommand::ToggleBuildCosts
+        | ChatCommand::ToggleRoleLimits => Some(message.to_owned()),
         // Unity performs these successfully without writing another chat line.
         ChatCommand::Build(_)
         | ChatCommand::MoveBuilding(_)
@@ -32387,7 +32557,6 @@ fn unity_outbound_reply(
         | ChatCommand::ResetCamera
         | ChatCommand::ModRole { .. }
         | ChatCommand::StartRulerVote
-        | ChatCommand::TownStats
         | ChatCommand::Station(None)
         | ChatCommand::Target(None)
         | ChatCommand::RecruitIds
@@ -32482,12 +32651,14 @@ fn building_instance_ids(
     building_id: &StableId,
 ) -> Vec<StableId> {
     let archetype = &content.buildings[building_id].archetype;
-    simulation
+    let mut instances = simulation
         .buildings
         .values()
         .filter(|building| building.archetype == *archetype)
         .map(|building| building.id.clone())
-        .collect()
+        .collect::<Vec<_>>();
+    instances.sort();
+    instances
 }
 
 fn constructed_building_count(simulation: &WorldSimulation) -> usize {
@@ -32532,6 +32703,64 @@ fn upgrade_building_instance(
             health_gain_per_level,
             &cost,
         )
+        .map_err(|error| error.to_string())
+}
+
+fn sell_town_resource(
+    content: &ContentCatalog,
+    simulation: &mut WorldSimulation,
+    resource: &StableId,
+    amount: u32,
+) -> Result<String, String> {
+    simulation
+        .sell_resource(resource, amount)
+        .map(|(sold, gold)| {
+            let _ = simulation.record_objective_event(
+                &content.objectives,
+                &ObjectiveEvent::ResourceGained {
+                    resource: StableId::new("resource:gold").expect("static stable ID"),
+                    amount: gold,
+                },
+            );
+            let _ = simulation.record_objective_event(
+                &content.objectives,
+                &ObjectiveEvent::ResourceSold {
+                    resource: resource.clone(),
+                    amount: sold,
+                },
+            );
+            format!("sold {sold} {resource} for {gold} gold")
+        })
+        .map_err(|error| error.to_string())
+}
+
+fn buy_town_resource(
+    config: &GameConfig,
+    content: &ContentCatalog,
+    simulation: &mut WorldSimulation,
+    resource: StableId,
+    amount: u32,
+) -> Result<String, String> {
+    let capacity = resource_storage_capacity(config, content, simulation, &resource);
+    simulation
+        .buy_resource(resource.clone(), amount, capacity)
+        .map(|(bought, gold)| {
+            let _ = simulation.record_objective_event(
+                &content.objectives,
+                &ObjectiveEvent::ResourceGained {
+                    resource: resource.clone(),
+                    amount: bought,
+                },
+            );
+            let _ = simulation.record_objective_event(
+                &content.objectives,
+                &ObjectiveEvent::ResourceBought {
+                    resource: resource.clone(),
+                    amount: bought,
+                },
+            );
+            format!("bought {bought} {resource} for {gold} gold")
+        })
         .map_err(|error| error.to_string())
 }
 
@@ -33075,28 +33304,7 @@ fn process_injected_commands(
                     let resource = prefixed_id(resource, "resource:")
                         .ok_or_else(|| format!("invalid resource {}", resource.as_str()));
                     resource.and_then(|resource| {
-                        simulation
-                            .0
-                            .sell_resource(&resource, *amount)
-                            .map(|(sold, gold)| {
-                                let _ = simulation.0.record_objective_event(
-                                    &content.0.objectives,
-                                    &ObjectiveEvent::ResourceGained {
-                                        resource: StableId::new("resource:gold")
-                                            .expect("static stable ID"),
-                                        amount: gold,
-                                    },
-                                );
-                                let _ = simulation.0.record_objective_event(
-                                    &content.0.objectives,
-                                    &ObjectiveEvent::ResourceSold {
-                                        resource: resource.clone(),
-                                        amount: sold,
-                                    },
-                                );
-                                format!("sold {sold} {resource} for {gold} gold")
-                            })
-                            .map_err(|error| error.to_string())
+                        sell_town_resource(&content.0, &mut simulation.0, &resource, *amount)
                     })
                 }
                 ChatCommand::Buy { amount, resource } => {
@@ -33104,33 +33312,13 @@ fn process_injected_commands(
                     let resource = prefixed_id(resource, "resource:")
                         .ok_or_else(|| format!("invalid resource {}", resource.as_str()));
                     resource.and_then(|resource| {
-                        let capacity = resource_storage_capacity(
+                        buy_town_resource(
                             &config.0,
                             &content.0,
-                            &simulation.0,
-                            &resource,
-                        );
-                        simulation
-                            .0
-                            .buy_resource(resource.clone(), *amount, capacity)
-                            .map(|(bought, gold)| {
-                                let _ = simulation.0.record_objective_event(
-                                    &content.0.objectives,
-                                    &ObjectiveEvent::ResourceGained {
-                                        resource: resource.clone(),
-                                        amount: bought,
-                                    },
-                                );
-                                let _ = simulation.0.record_objective_event(
-                                    &content.0.objectives,
-                                    &ObjectiveEvent::ResourceBought {
-                                        resource: resource.clone(),
-                                        amount: bought,
-                                    },
-                                );
-                                format!("bought {bought} {resource} for {gold} gold")
-                            })
-                            .map_err(|error| error.to_string())
+                            &mut simulation.0,
+                            resource,
+                            *amount,
+                        )
                     })
                 }
                 ChatCommand::Vote(requested) => {
@@ -33553,7 +33741,9 @@ fn process_injected_commands(
                 ChatCommand::Discord => {
                     Ok("Stream Town Discord: https://discord.gg/By4jvks".to_owned())
                 }
-                ChatCommand::Info(requested) => item_info(&content.0, &simulation.0, requested),
+                ChatCommand::Info { item, instance } => {
+                    item_info(&content.0, &simulation.0, item, *instance)
+                }
                 ChatCommand::ToggleBuildCosts => {
                     require_game_master(&config.0, &pending)?;
                     let enabled = simulation.0.toggle_building_costs();
@@ -36409,6 +36599,43 @@ mod tests {
             ),
             None
         );
+        assert_eq!(
+            unity_outbound_reply(
+                &ChatCommand::TownStats,
+                true,
+                "town: 2 players, 4 buildings",
+                "Viewer"
+            ),
+            Some("town: 2 players, 4 buildings".to_owned())
+        );
+    }
+
+    #[test]
+    fn building_info_accepts_the_source_authored_optional_instance_id() {
+        let content = embedded_content();
+        let house_id = StableId::new("building:house").unwrap();
+        let house = &content.buildings[&house_id];
+        let runtime_id = StableId::new("building:runtime_000004").unwrap();
+        let mut simulation = WorldSimulation::new(42);
+        simulation.buildings.insert(
+            runtime_id.clone(),
+            BuildingState {
+                id: runtime_id,
+                archetype: house.archetype.clone(),
+                position: GridPos { x: 21, z: 34 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: 80,
+                complete: true,
+            },
+        );
+
+        let details = item_info(&content, &simulation, &house_id, Some(1)).unwrap();
+
+        assert!(details.contains("House #1"), "{details}");
+        assert!(details.contains("level 1/1"), "{details}");
+        assert!(details.contains("health 80/"), "{details}");
+        assert!(details.contains("at 21,34"), "{details}");
     }
 
     #[test]
@@ -36554,6 +36781,144 @@ mod tests {
         assert!(transform.translation.x < current.translation.x);
         assert!(transform.translation.y > home.translation.y);
         assert!(transform.translation.y < current.translation.y);
+    }
+
+    #[test]
+    fn idle_camera_director_cycles_citizens_and_town_then_yields_to_chat_input() {
+        let home = Transform::from_xyz(-33.5, 33.240_562, 0.0)
+            .looking_to(Vec3::new(1.0, -1.0, 0.0), Vec3::Y);
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_secs_f32(TWITCH_CAMERA_HOME_TIMEOUT_SECONDS));
+        let mut app = App::new();
+        app.insert_resource(time)
+            .insert_resource(RuntimeConfig(GameConfig::default()))
+            .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
+            .insert_resource(MenuRuntime::default())
+            .init_resource::<CameraCommandQueue>()
+            .add_systems(Update, camera_zoom_and_commands);
+        let camera = app
+            .world_mut()
+            .spawn((
+                TownCamera,
+                home,
+                Projection::Perspective(PerspectiveProjection::default()),
+                TownCameraControllerRuntime::new(home),
+            ))
+            .id();
+        for (id, position) in [
+            ("npc:auto_camera_a", GridPos { x: 30, z: 30 }),
+            ("npc:auto_camera_b", GridPos { x: 40, z: 42 }),
+        ] {
+            app.world_mut().spawn((
+                Agent {
+                    id: StableId::new(id).unwrap(),
+                    kind: ActorKind::Player,
+                    archetype: StableId::new("archetype:player").unwrap(),
+                    goal: AgentGoal::Wander,
+                    spawn: position,
+                    origin: position,
+                    path: Vec::new(),
+                    path_index: 0,
+                    target: position,
+                    action_cooldown_seconds: 0.0,
+                    action_started: false,
+                    repath_remaining_seconds: 0.0,
+                    health_regen_accumulator: 0.0,
+                    wander_sequence: 0,
+                    previous_wander_origin: None,
+                },
+                Transform::from_xyz(f32::from(position.x), 1.0, f32::from(position.z)),
+            ));
+        }
+
+        app.update();
+        assert_eq!(
+            app.world()
+                .entity(camera)
+                .get::<TownCameraControllerRuntime>()
+                .unwrap()
+                .auto_shot,
+            AutoCameraShot::Town
+        );
+
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs_f32(AUTO_CAMERA_TOWN_SHOT_SECONDS));
+        app.update();
+        let first_citizen = app
+            .world()
+            .entity(camera)
+            .get::<TownCameraControllerRuntime>()
+            .unwrap()
+            .auto_shot
+            .clone();
+        assert!(matches!(first_citizen, AutoCameraShot::Citizen(_)));
+
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs_f32(AUTO_CAMERA_CITIZEN_SHOT_SECONDS));
+        app.update();
+        let second_citizen = app
+            .world()
+            .entity(camera)
+            .get::<TownCameraControllerRuntime>()
+            .unwrap()
+            .auto_shot
+            .clone();
+        assert!(matches!(second_citizen, AutoCameraShot::Citizen(_)));
+        assert_ne!(second_citizen, first_citizen);
+
+        for _ in 0..2 {
+            app.world_mut()
+                .resource_mut::<Time>()
+                .advance_by(Duration::from_secs_f32(AUTO_CAMERA_CITIZEN_SHOT_SECONDS));
+            app.update();
+        }
+        assert_eq!(
+            app.world()
+                .entity(camera)
+                .get::<TownCameraControllerRuntime>()
+                .unwrap()
+                .auto_shot,
+            AutoCameraShot::Town
+        );
+
+        app.world_mut()
+            .resource_mut::<CameraCommandQueue>()
+            .0
+            .push_back(CameraRequest {
+                reset: false,
+                actions: vec![CameraAction {
+                    direction: CameraDirection::Right,
+                    amount: 1,
+                }],
+            });
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_millis(16));
+        app.update();
+        let controller = app
+            .world()
+            .entity(camera)
+            .get::<TownCameraControllerRuntime>()
+            .unwrap();
+        assert_eq!(controller.auto_shot, AutoCameraShot::Inactive);
+        assert!(controller.seconds_since_input <= f32::EPSILON);
+    }
+
+    #[test]
+    fn citizen_auto_camera_translation_centres_the_follow_target_at_close_zoom() {
+        let home = Transform::from_xyz(-33.5, 33.240_562, 0.0)
+            .looking_to(Vec3::new(1.0, -1.0, 0.0), Vec3::Y);
+        let citizen = Vec3::new(25.0, 2.0, -12.0);
+        let translation = auto_camera_citizen_translation(&home, citizen);
+        let focus = citizen + Vec3::Y * AUTO_CAMERA_CITIZEN_FOCUS_HEIGHT;
+        let forward = home.forward().as_vec3();
+        let distance = (focus - translation).dot(forward);
+        assert!(distance > 0.0);
+        assert!((translation + forward * distance).distance(focus) < 0.000_1);
+        assert!((translation.y - 17.0).abs() < 0.000_1);
+        assert!(translation.y < home.translation.y);
     }
 
     #[test]
@@ -42523,6 +42888,40 @@ mod tests {
     }
 
     #[test]
+    fn selling_through_the_runtime_command_path_produces_spendable_gold() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let wood = StableId::new("resource:wood").unwrap();
+        let ore = StableId::new("resource:ore").unwrap();
+        let gold = StableId::new("resource:gold").unwrap();
+        let mut simulation = WorldSimulation::new(config.world.seed);
+        simulation.town_resources.insert(wood.clone(), 100);
+        simulation.town_resources.insert(gold.clone(), 0);
+
+        let ChatCommand::Sell { amount, resource } = "!sell 100 wood".parse().unwrap() else {
+            panic!("sell command did not use the trade parser path");
+        };
+        let resource = prefixed_id(&resource, "resource:").unwrap();
+        assert_eq!(
+            sell_town_resource(&content, &mut simulation, &resource, amount).unwrap(),
+            "sold 100 resource:wood for 13 gold"
+        );
+        assert_eq!(simulation.town_resources[&wood], 0);
+        assert_eq!(simulation.town_resources[&gold], 13);
+
+        let ChatCommand::Buy { amount, resource } = "!buy 24 ore".parse().unwrap() else {
+            panic!("buy command did not use the trade parser path");
+        };
+        let resource = prefixed_id(&resource, "resource:").unwrap();
+        assert_eq!(
+            buy_town_resource(&config, &content, &mut simulation, resource, amount).unwrap(),
+            "bought 24 resource:ore for 10 gold"
+        );
+        assert_eq!(simulation.town_resources[&ore], 24);
+        assert_eq!(simulation.town_resources[&gold], 3);
+    }
+
+    #[test]
     fn final_construction_tick_matches_unitys_non_successful_state_exit() {
         let config = GameConfig::default();
         let content = embedded_content();
@@ -46790,6 +47189,20 @@ mod tests {
     fn help_points_to_the_versioned_complete_command_reference() {
         assert!(TWITCH_COMMAND_HELP_URL.starts_with("https://github.com/HumanBeanGames/"));
         assert!(TWITCH_COMMAND_HELP_URL.ends_with("/TWITCH_COMMANDS.md"));
+        let reference = include_str!("../../../../TWITCH_COMMANDS.md");
+        let unity_commands =
+            include_str!("../../../../Assets/Scripts/Twitch/Commands/CommandDictionary.cs")
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .filter_map(|line| line.split(".Add(\"").nth(1))
+                .filter_map(|tail| tail.split('"').next())
+                .collect::<BTreeSet<_>>();
+        for command in unity_commands {
+            assert!(
+                reference.contains(&format!("`!{command}")),
+                "public !help reference omits Unity command !{command}"
+            );
+        }
     }
 
     #[test]
