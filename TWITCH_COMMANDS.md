@@ -35,6 +35,7 @@ masters as appropriate.
 | `!vote <option>` | Vote in the active ruler vote, or use the displayed `1`-`3` option in a technology vote. |
 | `!townstats` | Show town statistics. |
 | `!buildings` | List building types. |
+| `!cost <building>` | Show the building's current discounted construction cost and technology-limited maximum level. Alias: `!buildcost`. |
 | `!bid <building>` | List instance IDs for a building type. |
 | `!recruits` | Show the recruit count. |
 | `!rid` | List recruit IDs. |

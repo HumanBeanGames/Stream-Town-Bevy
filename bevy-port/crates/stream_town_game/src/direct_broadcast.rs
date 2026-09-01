@@ -4428,6 +4428,9 @@ fn configure_amf_quality(options: &mut Dictionary<'_>) {
     options.set("profile", "high");
     options.set("usage", "lowlatency_high_quality");
     options.set("quality", "quality");
+    // Retain broad AMF-driver compatibility for Twitch's constant-rate
+    // contract while spending the RX 7800 XT's quality budget on stable fine
+    // detail. The linked AMF build rejects the newer HQCBR enum at open time.
     options.set("rc", "cbr");
     options.set("enforce_hrd", "1");
     options.set("filler_data", "1");
@@ -4440,6 +4443,9 @@ fn configure_amf_quality(options: &mut Dictionary<'_>) {
     // the GPU encoder, CBR, and the required two-second IDR cadence.
     options.set("max_b_frames", "0");
     options.set("bf", "0");
+    options.set("coder", "cabac");
+    options.set("me_half_pel", "1");
+    options.set("me_quarter_pel", "1");
     options.set("latency", "1");
     options.set("async_depth", "2");
     // The shipping terrain grid is mostly static, high-frequency detail.
@@ -5464,6 +5470,9 @@ mod tests {
         assert_eq!(options.get("forced_idr"), Some("1"));
         assert_eq!(options.get("max_b_frames"), Some("0"));
         assert_eq!(options.get("bf"), Some("0"));
+        assert_eq!(options.get("coder"), Some("cabac"));
+        assert_eq!(options.get("me_half_pel"), Some("1"));
+        assert_eq!(options.get("me_quarter_pel"), Some("1"));
         assert_eq!(options.get("latency"), Some("1"));
         assert_eq!(options.get("async_depth"), Some("2"));
     }

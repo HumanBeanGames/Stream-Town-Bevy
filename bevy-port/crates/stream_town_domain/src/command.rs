@@ -27,6 +27,7 @@ pub fn unity_command_usage(input: &str) -> Option<&'static str> {
     Some(match command.as_str() {
         "role" => "!role <role> (or !role to view your current role)",
         "build" => "!build <building>",
+        "cost" | "buildcost" => "!cost <building>",
         "move" => "!move <up|down|left|right|rotate> [amount]",
         "up" => "!up [amount]",
         "down" => "!down [amount]",
@@ -112,6 +113,7 @@ pub enum ChatCommand {
     Role,
     Health,
     Build(StableId),
+    BuildingCost(StableId),
     MoveBuilding(Vec<BuildingAction>),
     ConfirmBuilding,
     CancelBuilding,
@@ -584,6 +586,7 @@ impl FromStr for ChatCommand {
                     "rinfo" => with_index(&command, argument, Self::RecruitInfo),
                     "rdismiss" => with_index(&command, argument, Self::DismissRecruit),
                     "build" => with_id(&command, argument, Self::Build),
+                    "cost" | "buildcost" => with_id(&command, argument, Self::BuildingCost),
                     "upgrade" => with_id(&command, argument, Self::Upgrade),
                     "vote" => with_id(&command, argument, Self::Vote),
                     "event" => with_id(&command, argument, Self::TriggerEvent),
@@ -882,6 +885,16 @@ mod tests {
         assert_eq!(
             "!build building:house".parse(),
             Ok(ChatCommand::Build(StableId::new("building:house").unwrap()))
+        );
+        assert_eq!(
+            "!cost ore_storage".parse(),
+            Ok(ChatCommand::BuildingCost(
+                StableId::new("ore_storage").unwrap()
+            ))
+        );
+        assert_eq!(
+            "!buildcost house".parse(),
+            Ok(ChatCommand::BuildingCost(StableId::new("house").unwrap()))
         );
         assert_eq!(
             "!upgrade house".parse(),

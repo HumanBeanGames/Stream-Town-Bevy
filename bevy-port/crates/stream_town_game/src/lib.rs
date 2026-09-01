@@ -131,6 +131,7 @@ const WORLD_SCENE_PATH: &str = "Assets/Scenes/Worlds/World_Town.unity";
 const MAIN_MENU_SCENE_PATH: &str = "Assets/Scenes/Menu/Main_Menu_02.unity";
 const CREDITS_SCENE_PATH: &str = "Assets/Scenes/Menu/Credits.unity";
 const PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR: u128 = 1_000_000_000_000;
+const NIGHT_ENEMY_WAVE_INTERVAL_SECONDS: f64 = 120.0;
 const CHIMNEY_ALPHA_STEPS: usize = 8;
 const TERRAIN_CHUNK_CELLS: u16 = 16;
 const OCEAN_PADDING_CELLS: u16 = 128;
@@ -160,6 +161,9 @@ const AUTO_CAMERA_CITIZEN_SHOT_SECONDS: f32 = 24.0;
 const AUTO_CAMERA_CITIZEN_HEIGHT: f32 = 15.0;
 const AUTO_CAMERA_CITIZEN_FOCUS_HEIGHT: f32 = 1.4;
 const AUTO_CAMERA_TOWN_SHOT_INTERVAL: u64 = 4;
+const ACTOR_OVERLAY_ANCHOR_HEIGHT_CELLS: f32 = 1.15;
+const ACTOR_HEALTH_OVERLAY_TOP_PX: f32 = -11.0;
+const ACTOR_NAME_OVERLAY_TOP_PX: f32 = 4.0;
 const FOLIAGE_CAPTURE_TIMES_SECONDS: [f32; 12] =
     [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0];
 pub const PLAYER_ANIMATED_MODEL_PATH: &str = "migrated/models/Models/Characters/Characters.glb";
@@ -573,6 +577,13 @@ struct LoadWorldEntities<'w, 's> {
 
 #[derive(Resource)]
 struct SimulationRuntime(WorldSimulation);
+
+#[derive(Resource, Default)]
+struct NightEnemyWaveRuntime {
+    night_day: Option<u32>,
+    remaining_seconds: f64,
+    wave_index: u32,
+}
 
 #[derive(Resource, Default)]
 struct SessionStats {
@@ -2598,6 +2609,16 @@ type HudMetricTextQuery<'w, 's> = Query<
     (&'static HudMetric, &'static mut Text),
     (Without<Hud>, Without<HudTechnologyTextKind>),
 >;
+type HudMetricMaximumTextQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static HudMetricMaximum, &'static mut Text),
+    (
+        Without<Hud>,
+        Without<HudMetric>,
+        Without<HudTechnologyTextKind>,
+    ),
+>;
 type HudTechnologyTextQuery<'w, 's> = Query<
     'w,
     's,
@@ -2616,6 +2637,18 @@ enum HudMetric {
     Buildings,
     PlayTime,
 }
+
+impl HudMetric {
+    const fn shows_maximum(self) -> bool {
+        matches!(
+            self,
+            Self::Food | Self::Gold | Self::Ore | Self::Wood | Self::Npcs
+        )
+    }
+}
+
+#[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
+struct HudMetricMaximum(HudMetric);
 
 #[derive(Component)]
 struct SeasonMeter;
@@ -2919,6 +2952,24 @@ struct BuildingHealthFill;
 struct BuildingPlacementVisual {
     owner: StableId,
 }
+
+#[derive(Component)]
+struct BuildingPlacementGhost {
+    owner: StableId,
+    building: StableId,
+    scene_asset_path: String,
+}
+
+#[derive(Component)]
+struct BuildingPlacementGhostMesh {
+    owner: StableId,
+}
+
+#[derive(Component)]
+struct BuildingPlacementGhostNodeProcessed;
+
+#[derive(Component)]
+struct BuildingPlacementGhostHiddenNodes(BTreeSet<String>);
 
 #[derive(Component)]
 struct BuildingPlacementOwnerOverlay {
@@ -3592,6 +3643,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<CommandAcknowledgementRuntime>()
             .init_resource::<MenuRuntime>()
             .init_resource::<TownRestartRuntime>()
+            .init_resource::<NightEnemyWaveRuntime>()
             .init_resource::<SettingsUiCache>()
             .init_resource::<SecretsRuntime>()
             .init_resource::<SensitiveScreenActive>()
@@ -4102,9 +4154,10 @@ impl Plugin for StreamTownGamePlugin {
                         .after(apply_agent_commands),
                     apply_building_commands.after(process_injected_commands),
                     sync_building_placers.after(process_injected_commands),
+                    apply_building_placement_ghosts.after(sync_building_placers),
                     sync_building_placement_overlays
                         .after(process_injected_commands)
-                        .after(sync_building_placers),
+                        .after(apply_building_placement_ghosts),
                     sync_foliage_clearance
                         .after(apply_building_commands)
                         .after(load_input)
@@ -10623,24 +10676,53 @@ fn spawn_hud_metric_sized(
                     },
                 ));
             }
-            metric_parent.spawn((
-                metric,
-                Text::new("0"),
-                TextFont {
-                    font_size: FontSize::Px(font_size),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.91, 0.89, 0.81)),
-                TextLayout::no_wrap(),
-                Node {
+            metric_parent
+                .spawn(Node {
                     flex_grow: 1.0,
-                    height: px(28),
+                    height: px(40),
                     align_self: AlignSelf::Center,
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::Center,
                     padding: UiRect::left(px(5)),
                     overflow: Overflow::clip(),
                     ..default()
-                },
-            ));
+                })
+                .with_children(|values| {
+                    values.spawn((
+                        metric,
+                        Text::new("0"),
+                        TextFont {
+                            font_size: FontSize::Px(font_size),
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.91, 0.89, 0.81)),
+                        TextLayout::no_wrap(),
+                        Node {
+                            height: px(23),
+                            flex_shrink: 0.0,
+                            overflow: Overflow::clip(),
+                            ..default()
+                        },
+                    ));
+                    if metric.shows_maximum() {
+                        values.spawn((
+                            HudMetricMaximum(metric),
+                            Text::new("/0"),
+                            TextFont {
+                                font_size: FontSize::Px((font_size * 0.55).max(9.0)),
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.72, 0.72, 0.68)),
+                            TextLayout::no_wrap(),
+                            Node {
+                                height: px(12),
+                                flex_shrink: 0.0,
+                                overflow: Overflow::clip(),
+                                ..default()
+                            },
+                        ));
+                    }
+                });
         });
 }
 
@@ -21163,6 +21245,7 @@ fn update_enemy_encounters(
     render: Res<RenderAssets>,
     world: Res<WorldRuntime>,
     mut simulation: ResMut<SimulationRuntime>,
+    mut night_waves: ResMut<NightEnemyWaveRuntime>,
     agents: Query<(Entity, &Agent)>,
 ) {
     let dead_enemies: Vec<_> = agents
@@ -21290,109 +21373,82 @@ fn update_enemy_encounters(
         return;
     }
 
-    if simulation.0.active_raid.is_some()
-        || config
-            .0
-            .time
-            .sample(simulation.0.elapsed_seconds)
-            .is_daytime
+    if simulation.0.active_raid.is_some() {
+        return;
+    }
+    if config
+        .0
+        .time
+        .sample(simulation.0.elapsed_seconds)
+        .is_daytime
     {
+        *night_waves = NightEnemyWaveRuntime::default();
+        return;
+    }
+    if !night_enemy_wave_due(&mut night_waves, simulation.0.day, time.delta_secs_f64()) {
         return;
     }
     let player_count = simulation_player_count(&simulation.0);
-    let camp_ids: Vec<_> = simulation.0.enemy_camps.keys().cloned().collect();
-    let (minimum_enemies, maximum_enemies) = camp_ids
-        .iter()
-        .filter_map(|camp_id| {
-            let camp = simulation.0.enemy_camps.get(camp_id)?;
-            content
-                .0
-                .archetypes
-                .get(&camp.archetype)?
-                .enemy_spawner
-                .as_ref()
-        })
-        .fold((usize::MAX, 0_usize), |(minimum, maximum), spawner| {
-            (
-                minimum.min(usize::from(spawner.min_total_enemies)),
-                maximum.max(usize::from(spawner.max_total_enemies)),
-            )
-        });
-    let global_cap = authored_night_enemy_cap(
-        simulation.0.day,
-        player_count,
-        if minimum_enemies == usize::MAX {
-            0
-        } else {
-            minimum_enemies
-        },
-        maximum_enemies,
-    );
-    let mut live_camp_enemies = simulation
+    let camps = simulation
         .0
         .enemy_camps
-        .values()
-        .flat_map(|camp| camp.spawned_enemies.iter())
-        .filter(|enemy| {
-            simulation
-                .0
-                .actors
-                .get(*enemy)
-                .is_some_and(|actor| actor.alive)
+        .iter()
+        .filter_map(|(camp_id, camp)| {
+            let archetype = content.0.archetypes.get(&camp.archetype)?;
+            Some((
+                camp_id.clone(),
+                camp.clone(),
+                archetype.enemy_spawner.clone()?,
+                archetype.footprint,
+            ))
         })
-        .count();
-    for camp_id in camp_ids {
-        let Some(mut camp) = simulation.0.enemy_camps.get(&camp_id).cloned() else {
-            continue;
-        };
-        let Some(spawner) = content
-            .0
-            .archetypes
-            .get(&camp.archetype)
-            .and_then(|archetype| archetype.enemy_spawner.as_ref())
-        else {
-            continue;
-        };
-        let spawn_interval_seconds = f64::from(spawner.spawn_milliseconds) / 1_000.0;
-        if live_camp_enemies >= global_cap {
-            // EnemySpawner resets its elapsed timer while the cap is full, so
-            // a later vacancy waits one complete authored interval.
-            camp.spawn_remaining_seconds = spawn_interval_seconds;
-            simulation.0.enemy_camps.insert(camp_id, camp);
-            continue;
-        }
-        camp.spawn_remaining_seconds =
-            (camp.spawn_remaining_seconds - time.delta_secs_f64()).max(0.0);
-        if camp.spawn_remaining_seconds <= f64::EPSILON {
-            let serial = simulation.0.next_enemy_serial;
-            let archetype = weighted_enemy_archetype(spawner, simulation.0.world_seed, serial);
-            let footprint = content
-                .0
-                .archetypes
-                .get(&camp.archetype)
-                .map_or([1, 1], |archetype| archetype.footprint);
-            let position =
-                enemy_spawn_position(&world.generated, &camp, spawner, footprint, serial);
-            if let Some(enemy) = spawn_runtime_enemy(
-                &mut commands,
-                &config.0,
-                &world.generated,
-                &content.0,
-                &presentation.0,
-                asset_server.as_deref(),
-                &asset_root.0,
-                &render,
-                &mut simulation.0,
-                archetype,
-                position,
-            ) {
-                camp.spawned_enemies.insert(enemy);
-                live_camp_enemies = live_camp_enemies.saturating_add(1);
-            }
-            camp.spawn_remaining_seconds = spawn_interval_seconds;
-        }
-        simulation.0.enemy_camps.insert(camp_id, camp);
+        .collect::<Vec<_>>();
+    if camps.is_empty() {
+        return;
     }
+    let wave_archetype = StableId::new("enemy:night_wave").expect("static stable ID");
+    for _ in 0..raid_enemies_per_wave(player_count) {
+        let serial = simulation.0.next_enemy_serial;
+        let camp_index = usize::try_from(
+            generated_enemy_camp_hash(simulation.0.world_seed, &wave_archetype, serial)
+                % u64::try_from(camps.len()).expect("camp count fits u64"),
+        )
+        .expect("night-wave camp index fits usize");
+        let (camp_id, camp, spawner, footprint) = &camps[camp_index];
+        let archetype = weighted_enemy_archetype(spawner, simulation.0.world_seed, serial);
+        let position = enemy_spawn_position(&world.generated, camp, spawner, *footprint, serial);
+        if let Some(enemy) = spawn_runtime_enemy(
+            &mut commands,
+            &config.0,
+            &world.generated,
+            &content.0,
+            &presentation.0,
+            asset_server.as_deref(),
+            &asset_root.0,
+            &render,
+            &mut simulation.0,
+            archetype,
+            position,
+        ) && let Some(runtime_camp) = simulation.0.enemy_camps.get_mut(camp_id)
+        {
+            runtime_camp.spawned_enemies.insert(enemy);
+        }
+    }
+}
+
+fn night_enemy_wave_due(runtime: &mut NightEnemyWaveRuntime, day: u32, delta_seconds: f64) -> bool {
+    if runtime.night_day != Some(day) {
+        runtime.night_day = Some(day);
+        runtime.remaining_seconds = 0.0;
+        runtime.wave_index = 0;
+    }
+    runtime.remaining_seconds = (runtime.remaining_seconds - delta_seconds.max(0.0)).max(0.0);
+    if runtime.remaining_seconds > f64::EPSILON {
+        return false;
+    }
+    runtime.remaining_seconds = NIGHT_ENEMY_WAVE_INTERVAL_SECONDS;
+    runtime.wave_index = runtime.wave_index.saturating_add(1);
+    true
 }
 
 fn simulation_player_count(simulation: &WorldSimulation) -> usize {
@@ -21401,21 +21457,6 @@ fn simulation_player_count(simulation: &WorldSimulation) -> usize {
         .values()
         .filter(|actor| actor.role.as_str() != "role:enemy")
         .count()
-}
-
-fn authored_night_enemy_cap(
-    day: u32,
-    player_count: usize,
-    minimum: usize,
-    maximum: usize,
-) -> usize {
-    if maximum == 0 {
-        return 0;
-    }
-    usize::try_from(day)
-        .unwrap_or(usize::MAX)
-        .saturating_add(player_count / 10)
-        .clamp(minimum.min(maximum), maximum)
 }
 
 fn raid_enemies_per_wave(player_count: usize) -> u16 {
@@ -24184,16 +24225,17 @@ fn sync_pooled_night_lights(
     let mut sources = Vec::new();
     for (agent, transform) in &agents {
         if agent.kind == ActorKind::Player {
-            let color = simulation
-                .0
-                .actors
-                .get(&agent.id)
-                .and_then(|actor| actor.customization.night_light_color)
-                .map_or(Color::srgb(1.0, 0.82, 0.56), color_from_rgb8);
+            let actor = simulation.0.actors.get(&agent.id);
+            let color = perceptually_normalized_light_color(
+                actor
+                    .and_then(|actor| actor.customization.night_light_color)
+                    .unwrap_or([255, 209, 143]),
+            );
+            let level_multiplier = actor.map_or(1.0, player_night_light_level_multiplier);
             sources.push(NightLightSpec {
                 position: transform.translation() + Vec3::Y * cell_size * 0.9,
                 color,
-                intensity: 115_000.0,
+                intensity: 115_000.0 * level_multiplier,
                 range: cell_size * 5.0,
             });
         }
@@ -24279,6 +24321,39 @@ fn sync_pooled_night_lights(
 
 fn color_from_rgb8(color: [u8; 3]) -> Color {
     Color::srgb_u8(color[0], color[1], color[2])
+}
+
+fn srgb_channel_to_linear(channel: u8) -> f32 {
+    let channel = f32::from(channel) / 255.0;
+    if channel <= 0.040_45 {
+        channel / 12.92
+    } else {
+        ((channel + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn perceptually_normalized_light_color(color: [u8; 3]) -> Color {
+    let linear = color.map(srgb_channel_to_linear);
+    let luminance = linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+    if luminance <= f32::EPSILON {
+        return Color::BLACK;
+    }
+    Color::linear_rgb(
+        linear[0] / luminance,
+        linear[1] / luminance,
+        linear[2] / luminance,
+    )
+}
+
+fn player_night_light_level_multiplier(actor: &ActorState) -> f32 {
+    let combined_level = actor
+        .role_progression
+        .values()
+        .fold(0_u16, |total, progress| {
+            total.saturating_add(progress.level)
+        });
+    let combined_level = f32::from(combined_level);
+    1.0 + 2.0 * combined_level / (combined_level + 50.0)
 }
 
 fn daylight_signature(value: f32) -> u32 {
@@ -29156,15 +29231,25 @@ fn sync_building_placers(
     mut commands: Commands,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    asset_server: Option<Res<AssetServer>>,
+    asset_root: Res<RuntimeAssetRoot>,
     world: Res<WorldRuntime>,
     placers: Res<BuildingPlacers>,
     render: Res<RenderAssets>,
-    mut visuals: Query<(
-        Entity,
-        &BuildingPlacementVisual,
-        &mut Transform,
-        &mut MeshMaterial3d<BoundsMaterial>,
-    )>,
+    mut visuals: Query<
+        (
+            Entity,
+            &BuildingPlacementVisual,
+            &mut Transform,
+            &mut MeshMaterial3d<BoundsMaterial>,
+        ),
+        Without<BuildingPlacementGhost>,
+    >,
+    mut ghosts: Query<
+        (Entity, &BuildingPlacementGhost, &mut Transform),
+        Without<BuildingPlacementVisual>,
+    >,
 ) {
     for (entity, visual, mut transform, mut material) in &mut visuals {
         let Some(placement) = placers.0.get(&visual.owner) else {
@@ -29216,6 +29301,214 @@ fn sync_building_placers(
             transform,
         ));
     }
+
+    let mut active_ghosts = BTreeSet::new();
+    for (entity, ghost, mut transform) in &mut ghosts {
+        let Some(placement) = placers.0.get(&ghost.owner) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let Some(definition) = content.0.buildings.get(&placement.building) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let age = building_age(&content.0, &simulation.0, &placement.building);
+        let scene = content
+            .0
+            .archetypes
+            .get(&definition.archetype)
+            .and_then(|archetype| archetype_scene_for_age(archetype, age));
+        if ghost.building != placement.building
+            || scene.is_none_or(|scene| scene.asset_path != ghost.scene_asset_path)
+        {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        update_placer_ghost_transform(
+            &config.0,
+            &world.generated,
+            placement,
+            definition,
+            &mut transform,
+        );
+        active_ghosts.insert(ghost.owner.clone());
+    }
+    let Some(asset_server) = asset_server.as_deref() else {
+        return;
+    };
+    for (owner, placement) in &placers.0 {
+        if active_ghosts.contains(owner) {
+            continue;
+        }
+        let Some(definition) = content.0.buildings.get(&placement.building) else {
+            continue;
+        };
+        let Some(archetype) = content.0.archetypes.get(&definition.archetype) else {
+            continue;
+        };
+        let age = building_age(&content.0, &simulation.0, &placement.building);
+        let Some(scene) = archetype_scene_for_age(archetype, age)
+            .filter(|scene| converted_asset_exists(&asset_root.0, &scene.asset_path))
+        else {
+            continue;
+        };
+        let mut transform = Transform::default();
+        update_placer_ghost_transform(
+            &config.0,
+            &world.generated,
+            placement,
+            definition,
+            &mut transform,
+        );
+        commands.spawn((
+            WorldEntity,
+            BuildingPlacementGhost {
+                owner: owner.clone(),
+                building: placement.building.clone(),
+                scene_asset_path: scene.asset_path.clone(),
+            },
+            BuildingPlacementGhostHiddenNodes(main_menu_hidden_model_node_names(
+                &content.0,
+                &definition.archetype,
+                scene,
+            )),
+            WorldAssetRoot(
+                asset_server.load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
+            ),
+            transform,
+        ));
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn apply_building_placement_ghosts(
+    mut commands: Commands,
+    content: Res<RuntimeContent>,
+    world: Res<WorldRuntime>,
+    placers: Res<BuildingPlacers>,
+    render: Res<RenderAssets>,
+    parents: Query<&ChildOf>,
+    roots: Query<(&BuildingPlacementGhost, &BuildingPlacementGhostHiddenNodes)>,
+    renderers: Query<
+        Entity,
+        (
+            With<Mesh3d>,
+            Without<BuildingPlacementGhostMesh>,
+            Without<BuildingPlacementGhost>,
+        ),
+    >,
+    mut ghost_materials: Query<(
+        &BuildingPlacementGhostMesh,
+        &mut MeshMaterial3d<BoundsMaterial>,
+    )>,
+    nodes: Query<
+        (Entity, &Name),
+        (
+            Without<BuildingPlacementGhostNodeProcessed>,
+            Without<BuildingPlacementGhost>,
+        ),
+    >,
+) {
+    for entity in &renderers {
+        let mut ancestor = entity;
+        let mut owner = None;
+        for _ in 0..64 {
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+            if let Ok((ghost, _)) = roots.get(ancestor) {
+                owner = Some(ghost.owner.clone());
+                break;
+            }
+        }
+        let Some(owner) = owner else {
+            continue;
+        };
+        let material =
+            placement_ghost_material(&content.0, &world.generated, &placers.0, &render, &owner);
+        commands
+            .entity(entity)
+            .remove::<MeshMaterial3d<StandardMaterial>>()
+            .insert((
+                BuildingPlacementGhostMesh { owner },
+                MeshMaterial3d(material),
+            ));
+    }
+    for (mesh, mut material) in &mut ghost_materials {
+        material.0 = placement_ghost_material(
+            &content.0,
+            &world.generated,
+            &placers.0,
+            &render,
+            &mesh.owner,
+        );
+    }
+    for (entity, name) in &nodes {
+        let mut ancestor = entity;
+        let mut hidden = None;
+        for _ in 0..64 {
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+            if let Ok((_, hidden_nodes)) = roots.get(ancestor) {
+                hidden = Some(hidden_nodes.0.contains(name.as_str()));
+                break;
+            }
+        }
+        let Some(hidden) = hidden else {
+            continue;
+        };
+        let mut entity = commands.entity(entity);
+        entity.insert(BuildingPlacementGhostNodeProcessed);
+        if hidden {
+            entity.insert(Visibility::Hidden);
+        }
+    }
+}
+
+fn placement_ghost_material(
+    content: &ContentCatalog,
+    world: &GeneratedWorld,
+    placers: &BTreeMap<StableId, BuildingPlacement>,
+    render: &RenderAssets,
+    owner: &StableId,
+) -> Handle<BoundsMaterial> {
+    let available = placers.get(owner).is_some_and(|placement| {
+        content
+            .buildings
+            .get(&placement.building)
+            .is_some_and(|definition| {
+                building_site_is_available(
+                    world,
+                    placement.position,
+                    rotated_footprint(definition.footprint, placement.rotation_quarter_turns),
+                )
+            })
+    });
+    if available {
+        render.placement_valid.clone()
+    } else {
+        render.placement_invalid.clone()
+    }
+}
+
+fn update_placer_ghost_transform(
+    config: &GameConfig,
+    world: &GeneratedWorld,
+    placement: &BuildingPlacement,
+    definition: &BuildingDef,
+    transform: &mut Transform,
+) {
+    let effective = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
+    let centre = GridPos {
+        x: placement.position.x.saturating_add(effective[0] / 2),
+        z: placement.position.z.saturating_add(effective[1] / 2),
+    };
+    transform.translation = grid_to_world_on_surface(centre, config, world);
+    transform.rotation = quarter_turn_rotation(placement.rotation_quarter_turns);
+    transform.scale = Vec3::splat(config.world.cell_size / 2.0);
 }
 
 fn building_placement_overlay_text(
@@ -33970,15 +34263,80 @@ fn twitch_pascal_case(value: &str) -> String {
         .collect()
 }
 
-fn can_afford(simulation: &WorldSimulation, cost: &BTreeMap<StableId, u32>) -> bool {
-    cost.iter().all(|(resource, required)| {
-        simulation
-            .town_resources
-            .get(resource)
-            .copied()
-            .unwrap_or_default()
-            >= *required
+fn resource_cost_display_name(resource: &StableId) -> String {
+    twitch_pascal_case(resource.as_str().trim_start_matches("resource:"))
+}
+
+fn ordered_resource_costs(cost: &BTreeMap<StableId, u32>) -> Vec<(&StableId, u32)> {
+    let order = ["wood", "ore", "food", "gold", "recruit"];
+    let mut resources = cost.iter().collect::<Vec<_>>();
+    resources.sort_by_key(|(resource, _)| {
+        order
+            .iter()
+            .position(|name| resource.as_str().trim_start_matches("resource:") == *name)
+            .unwrap_or(order.len())
+    });
+    resources
+        .into_iter()
+        .map(|(resource, amount)| (resource, *amount))
+        .collect()
+}
+
+fn format_resource_costs(cost: &BTreeMap<StableId, u32>) -> String {
+    if cost.is_empty() {
+        return "free".to_owned();
+    }
+    ordered_resource_costs(cost)
+        .into_iter()
+        .map(|(resource, amount)| format!("{} {amount}", resource_cost_display_name(resource)))
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn building_shortage_message(
+    simulation: &WorldSimulation,
+    display_name: &str,
+    cost: &BTreeMap<StableId, u32>,
+) -> Option<String> {
+    let shortages = ordered_resource_costs(cost)
+        .into_iter()
+        .filter_map(|(resource, required)| {
+            let available = simulation
+                .town_resources
+                .get(resource)
+                .copied()
+                .unwrap_or_default();
+            (available < required).then(|| {
+                format!(
+                    "{} {} more (have {available}/{required})",
+                    resource_cost_display_name(resource),
+                    required - available,
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    (!shortages.is_empty()).then(|| {
+        format!(
+            "cannot afford {display_name}; need {}",
+            shortages.join(", ")
+        )
     })
+}
+
+fn building_cost_summary(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    requested: &StableId,
+) -> Result<String, String> {
+    let building_id = building_definition_id(content, requested)?;
+    let definition = &content.buildings[&building_id];
+    let cost = building_construction_cost(content, simulation, &building_id, definition);
+    Ok(format!(
+        "{} build cost: {} | current maximum level: {}",
+        definition.display_name,
+        format_resource_costs(&cost),
+        maximum_building_level(content, simulation, &building_id),
+    ))
 }
 
 fn shift_grid_position(
@@ -34323,6 +34681,9 @@ fn process_injected_commands(
                         .collect::<Vec<_>>();
                     Ok(format!("unlocked buildings: {}", names.join(", ")))
                 }
+                ChatCommand::BuildingCost(requested) => {
+                    building_cost_summary(&content.0, &simulation.0, requested)
+                }
                 ChatCommand::BuildingIds(requested) => {
                     let building_id = prefixed_id(requested, "building:")
                         .filter(|id| content.0.buildings.contains_key(id))
@@ -34371,9 +34732,14 @@ fn process_injected_commands(
                             &building_id,
                             building,
                         );
-                        if simulation.0.building_costs_enabled && !can_afford(&simulation.0, &cost)
+                        if simulation.0.building_costs_enabled
+                            && let Some(message) = building_shortage_message(
+                                &simulation.0,
+                                &building.display_name,
+                                &cost,
+                            )
                         {
-                            return Err(format!("cannot afford {}", building.display_name));
+                            return Err(message);
                         }
                         let rotation = actor.building_rotation_quarter_turns;
                         let near = actor
@@ -34460,6 +34826,11 @@ fn process_injected_commands(
                     } else {
                         BTreeMap::new()
                     };
+                    if let Some(message) =
+                        building_shortage_message(&simulation.0, &building.display_name, &cost)
+                    {
+                        return Err(message);
+                    }
                     let runtime_id = runtime_building_id(&simulation.0);
                     let region =
                         building_region(placement.position, footprint, &world.generated)
@@ -35658,6 +36029,7 @@ fn update_hud(
     agents: Query<&Agent>,
     mut hud: Single<&mut Text, With<Hud>>,
     mut metrics: HudMetricTextQuery,
+    mut maximums: HudMetricMaximumTextQuery,
     mut technology_texts: HudTechnologyTextQuery,
     mut technology_progress: Single<
         &mut Node,
@@ -35748,6 +36120,48 @@ fn update_hud(
             HudMetric::Buildings => simulation.0.buildings.len().to_string(),
             HudMetric::PlayTime => hud_play_time(stats.elapsed_seconds),
         };
+    }
+    for (maximum, mut text) in &mut maximums {
+        let capacity = match maximum.0 {
+            HudMetric::Food => Some(resource_storage_capacity(
+                &config.0,
+                &content.0,
+                &simulation.0,
+                &StableId::new("resource:food").expect("static stable ID"),
+            )),
+            HudMetric::Gold => Some(resource_storage_capacity(
+                &config.0,
+                &content.0,
+                &simulation.0,
+                &StableId::new("resource:gold").expect("static stable ID"),
+            )),
+            HudMetric::Ore => Some(resource_storage_capacity(
+                &config.0,
+                &content.0,
+                &simulation.0,
+                &StableId::new("resource:ore").expect("static stable ID"),
+            )),
+            HudMetric::Wood => Some(resource_storage_capacity(
+                &config.0,
+                &content.0,
+                &simulation.0,
+                &StableId::new("resource:wood").expect("static stable ID"),
+            )),
+            HudMetric::Npcs => Some(resource_storage_capacity(
+                &config.0,
+                &content.0,
+                &simulation.0,
+                &StableId::new("resource:recruit").expect("static stable ID"),
+            )),
+            HudMetric::Players | HudMetric::Buildings | HudMetric::PlayTime => None,
+        };
+        text.0 = capacity.map_or_else(String::new, |capacity| {
+            if capacity == u32::MAX {
+                "/∞".to_owned()
+            } else {
+                format!("/{capacity}")
+            }
+        });
     }
     let technology_summary = hud_technology_summary(&content.0, &simulation.0);
     for (kind, mut text) in &mut technology_texts {
@@ -36732,6 +37146,7 @@ fn cleanup_world(
     entities: Query<Entity, With<WorldEntity>>,
     mut station_targets: ResMut<StationTargetRuntime>,
     mut ruler_announcements: ResMut<RulerVoteAnnouncementRuntime>,
+    mut night_waves: ResMut<NightEnemyWaveRuntime>,
 ) {
     for entity in &entities {
         commands.entity(entity).try_despawn();
@@ -36744,6 +37159,7 @@ fn cleanup_world(
     commands.insert_resource(BuildingCommandQueue::default());
     *station_targets = StationTargetRuntime::default();
     *ruler_announcements = RulerVoteAnnouncementRuntime::default();
+    *night_waves = NightEnemyWaveRuntime::default();
 }
 
 fn cleanup_menu_overlay(mut commands: Commands, overlays: MenuOverlayEntityQuery) {
@@ -36857,7 +37273,7 @@ fn sync_actor_name_overlays(
             overlay_viewport_position(
                 camera,
                 camera_transform,
-                *position + Vec3::Y * config.0.world.cell_size * 0.9,
+                *position + Vec3::Y * config.0.world.cell_size * ACTOR_OVERLAY_ANCHOR_HEIGHT_CELLS,
             )
         });
         let Some(screen) = screen.flatten() else {
@@ -36872,7 +37288,7 @@ fn sync_actor_name_overlays(
             .clone_into(&mut *text);
         color.0 = actor_name_color(actor);
         node.left = px(screen.x - 80.0);
-        node.top = px(screen.y - 32.0);
+        node.top = px(screen.y + ACTOR_NAME_OVERLAY_TOP_PX);
         *visibility = Visibility::Visible;
     }
     for (actor_id, position) in actor_positions {
@@ -36888,7 +37304,7 @@ fn sync_actor_name_overlays(
         let Some(screen) = overlay_viewport_position(
             camera,
             camera_transform,
-            position + Vec3::Y * config.0.world.cell_size * 0.9,
+            position + Vec3::Y * config.0.world.cell_size * ACTOR_OVERLAY_ANCHOR_HEIGHT_CELLS,
         ) else {
             continue;
         };
@@ -36910,11 +37326,16 @@ fn sync_actor_name_overlays(
             },
             TextLayout::justify(Justify::Center),
             TextColor(actor_name_color(actor)),
+            TextShadow {
+                offset: Vec2::splat(1.5),
+                color: Color::linear_rgba(0.0, 0.0, 0.0, 0.98),
+            },
+            Pickable::IGNORE,
             GlobalZIndex(18),
             Node {
                 position_type: PositionType::Absolute,
                 left: px(screen.x - 80.0),
-                top: px(screen.y - 32.0),
+                top: px(screen.y + ACTOR_NAME_OVERLAY_TOP_PX),
                 width: px(160),
                 ..default()
             },
@@ -37019,7 +37440,7 @@ fn sync_actor_health_overlays(
             overlay_viewport_position(
                 camera,
                 camera_transform,
-                *position + Vec3::Y * config.0.world.cell_size * 1.15,
+                *position + Vec3::Y * config.0.world.cell_size * ACTOR_OVERLAY_ANCHOR_HEIGHT_CELLS,
             )
         });
         let Some(screen) = screen.flatten() else {
@@ -37027,7 +37448,7 @@ fn sync_actor_health_overlays(
             continue;
         };
         node.left = px(screen.x - 45.0);
-        node.top = px(screen.y - 5.0);
+        node.top = px(screen.y + ACTOR_HEALTH_OVERLAY_TOP_PX);
         *visibility = Visibility::Visible;
         let health_fraction = building_health_fraction(actor.health, actor.max_health.max(1));
         for child in children.iter() {
@@ -37049,7 +37470,7 @@ fn sync_actor_health_overlays(
         let Some(screen) = overlay_viewport_position(
             camera,
             camera_transform,
-            position + Vec3::Y * config.0.world.cell_size * 1.15,
+            position + Vec3::Y * config.0.world.cell_size * ACTOR_OVERLAY_ANCHOR_HEIGHT_CELLS,
         ) else {
             continue;
         };
@@ -37066,7 +37487,7 @@ fn sync_actor_health_overlays(
                 Node {
                     position_type: PositionType::Absolute,
                     left: px(screen.x - 45.0),
-                    top: px(screen.y - 5.0),
+                    top: px(screen.y + ACTOR_HEALTH_OVERLAY_TOP_PX),
                     width: px(90),
                     height: px(10),
                     padding: UiRect::all(px(1)),
@@ -39066,11 +39487,15 @@ mod tests {
     }
 
     #[test]
-    fn night_one_enemy_and_raid_caps_scale_from_players_not_camp_count() {
-        assert_eq!(authored_night_enemy_cap(1, 2, 3, 10), 3);
-        assert_eq!(authored_night_enemy_cap(5, 2, 3, 10), 5);
-        assert_eq!(authored_night_enemy_cap(5, 20, 3, 10), 7);
-        assert_eq!(authored_night_enemy_cap(100, 2, 3, 10), 10);
+    fn night_waves_repeat_every_two_minutes_and_scale_with_citizens() {
+        let mut runtime = NightEnemyWaveRuntime::default();
+        assert!(night_enemy_wave_due(&mut runtime, 1, 0.0));
+        assert_eq!(runtime.wave_index, 1);
+        assert!(!night_enemy_wave_due(&mut runtime, 1, 119.0));
+        assert!(night_enemy_wave_due(&mut runtime, 1, 1.0));
+        assert_eq!(runtime.wave_index, 2);
+        assert!(night_enemy_wave_due(&mut runtime, 2, 0.0));
+        assert_eq!(runtime.wave_index, 1);
         assert_eq!(raid_enemies_per_wave(1), 3);
         assert_eq!(raid_enemies_per_wave(2), 4);
         assert_eq!(raid_enemies_per_wave(25), 50);
@@ -39190,6 +39615,43 @@ mod tests {
             .count();
         assert_eq!(slot_count_after_day, slot_count);
         assert_eq!(visible_during_day, 0);
+    }
+
+    #[test]
+    fn player_night_lights_normalize_colour_luminance_then_apply_total_levels() {
+        for color in [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 209, 143]] {
+            let linear = perceptually_normalized_light_color(color)
+                .to_linear()
+                .to_f32_array();
+            let luminance = linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+            assert!((luminance - 1.0).abs() < 0.0001, "{color:?}");
+        }
+
+        let mut simulation = WorldSimulation::new(7);
+        let actor_id = StableId::new("twitch:level_light").unwrap();
+        assert!(simulation.join_player(actor_id.clone(), GridPos { x: 1, z: 1 }));
+        let actor = simulation.actors.get_mut(&actor_id).unwrap();
+        actor.role_progression.clear();
+        assert!((player_night_light_level_multiplier(actor) - 1.0).abs() < f32::EPSILON);
+        actor.role_progression.insert(
+            StableId::new("role:logger").unwrap(),
+            stream_town_domain::RoleProgress {
+                level: 25,
+                experience: 0,
+            },
+        );
+        actor.role_progression.insert(
+            StableId::new("role:miner").unwrap(),
+            stream_town_domain::RoleProgress {
+                level: 25,
+                experience: 0,
+            },
+        );
+        assert!((player_night_light_level_multiplier(actor) - 2.0).abs() < f32::EPSILON);
+        actor.role_progression.values_mut().for_each(|progress| {
+            progress.level = u16::MAX;
+        });
+        assert!(player_night_light_level_multiplier(actor) < 3.0);
     }
 
     #[test]
@@ -46493,6 +46955,25 @@ mod tests {
     }
 
     #[test]
+    fn building_cost_queries_and_rejections_name_every_missing_resource() {
+        let content = embedded_content();
+        let simulation = WorldSimulation::new(11);
+        let requested = StableId::new("orestorage").unwrap();
+        let summary = building_cost_summary(&content, &simulation, &requested).unwrap();
+        assert!(summary.contains("build cost:"));
+        assert!(summary.contains("maximum level:"));
+
+        let costs = BTreeMap::from([
+            (StableId::new("resource:wood").unwrap(), 100),
+            (StableId::new("resource:ore").unwrap(), 80),
+        ]);
+        let message = building_shortage_message(&simulation, "Ore Storage", &costs).unwrap();
+        assert!(message.contains("Wood 100 more (have 0/100)"));
+        assert!(message.contains("Ore 80 more (have 0/80)"));
+        assert!(message.find("Wood 100").unwrap() < message.find("Ore 80").unwrap());
+    }
+
+    #[test]
     fn passive_buildings_use_authoritative_income_rates() {
         let content = embedded_content();
         let marketplace_id = StableId::new("building:marketplace").unwrap();
@@ -46564,6 +47045,57 @@ mod tests {
             &mut material,
         );
         assert_eq!(material.0.id(), invalid_handle.id());
+    }
+
+    #[test]
+    fn placement_ghost_uses_runtime_building_alignment_and_validity_colour() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world_with_content(&config.world, &content);
+        let building_id = StableId::new("building:house").unwrap();
+        let definition = &content.buildings[&building_id];
+        let position = find_building_site(
+            &world,
+            GridPos {
+                x: config.world.width / 2,
+                z: config.world.height / 2,
+            },
+            definition.footprint,
+        )
+        .unwrap();
+        let owner = StableId::new("twitch:ghost").unwrap();
+        let placement = BuildingPlacement {
+            building: building_id,
+            position,
+            rotation_quarter_turns: 1,
+        };
+        let mut transform = Transform::default();
+        update_placer_ghost_transform(&config, &world, &placement, definition, &mut transform);
+        let effective = rotated_footprint(definition.footprint, 1);
+        let centre = GridPos {
+            x: position.x + effective[0] / 2,
+            z: position.z + effective[1] / 2,
+        };
+        assert_eq!(
+            transform.translation,
+            grid_to_world_on_surface(centre, &config, &world)
+        );
+        assert_eq!(transform.scale, Vec3::splat(config.world.cell_size / 2.0));
+        assert_eq!(transform.rotation, quarter_turn_rotation(1));
+
+        let mut bounds_materials = Assets::<BoundsMaterial>::default();
+        let valid = bounds_materials.add(bounds_material(&embedded_presentation(), None));
+        let invalid = bounds_materials.add(bounds_material(&embedded_presentation(), None));
+        let render = RenderAssets {
+            placement_valid: valid.clone(),
+            placement_invalid: invalid,
+            ..default()
+        };
+        let placers = BTreeMap::from([(owner.clone(), placement)]);
+        assert_eq!(
+            placement_ghost_material(&content, &world, &placers, &render, &owner).id(),
+            valid.id()
+        );
     }
 
     #[test]
@@ -47064,6 +47596,17 @@ mod tests {
         let metrics = metrics.iter(app.world()).copied().collect::<Vec<_>>();
         assert!(metrics.contains(&HudMetric::Players));
         assert!(metrics.contains(&HudMetric::Npcs));
+        let mut maximums = app.world_mut().query::<&HudMetricMaximum>();
+        let maximums = maximums
+            .iter(app.world())
+            .map(|maximum| maximum.0)
+            .collect::<Vec<_>>();
+        assert_eq!(maximums.len(), 5);
+        assert!(maximums.contains(&HudMetric::Food));
+        assert!(maximums.contains(&HudMetric::Gold));
+        assert!(maximums.contains(&HudMetric::Ore));
+        assert!(maximums.contains(&HudMetric::Wood));
+        assert!(maximums.contains(&HudMetric::Npcs));
         let resource_strip = app
             .world_mut()
             .query_filtered::<&Node, With<HudResourceStrip>>()
@@ -47398,6 +47941,8 @@ mod tests {
             PlayerSettings::default().interface.display_names,
             NameDisplayMode::AllPlayers
         );
+        let health_bottom = ACTOR_HEALTH_OVERLAY_TOP_PX + 10.0;
+        assert!(health_bottom < ACTOR_NAME_OVERLAY_TOP_PX);
     }
 
     #[test]
