@@ -76,6 +76,7 @@ pub enum RuntimeConsoleAction {
         is_subscriber: bool,
     },
     Save,
+    SaveJumpStart,
     Load,
     CaptureFrame,
     ReturnToMainMenu,

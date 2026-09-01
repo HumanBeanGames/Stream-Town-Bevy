@@ -79,10 +79,11 @@ pub use settings::{
 };
 pub use simulation::{
     ActorCustomization, ActorState, BUILDING_MAX_HEALTH, BuildingState, CURRENT_SIMULATION_SCHEMA,
-    EnemyCampState, FishGodState, MAX_ROLE_LEVEL, ObjectiveEvent, ObjectiveProgress,
-    RULER_VOTE_DURATION_SECONDS, RULER_VOTE_INTERVAL_SECONDS, RaidState, RoleProgress,
-    RulerVoteKind, RulerVoteState, Season, SimulationError, StreamUserType, TechVote, TownEvent,
-    TownGoalState, Weather, WorldSimulation, required_role_experience,
+    DAYS_PER_SEASON, EnemyCampState, FishGodState, MAX_ROLE_LEVEL, ObjectiveEvent,
+    ObjectiveProgress, RULER_VOTE_DURATION_SECONDS, RULER_VOTE_INTERVAL_SECONDS, RaidState,
+    RoleProgress, RulerVoteKind, RulerVoteState, SEASON_TRANSITION_SECONDS, SEASONS_PER_YEAR,
+    Season, SimulationError, StreamUserType, TechVote, TownEvent, TownGoalState, Weather,
+    WorldSimulation, required_role_experience,
 };
 pub use technology_layout::{
     CURRENT_TECHNOLOGY_LAYOUT_SCHEMA, GraphPoint, GraphSize, TechnologyGraphLayout,

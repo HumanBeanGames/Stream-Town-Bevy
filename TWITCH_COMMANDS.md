@@ -26,6 +26,8 @@ masters as appropriate.
 | `!body <index>` | Change body type. |
 | `!haircolor <index>` | Change hair colour. |
 | `!eyecolor <index>` | Change eye colour. |
+| `!namecolor <name\|#RRGGBB>` | Change the colour of your in-world name. Alias: `!namecolour`. |
+| `!light <name\|#RRGGBB>` | Change your personal night-light colour. Aliases: `!lightcolor`, `!lightcolour`. |
 | `!buy <amount> <resource>` | Spend town gold to buy a resource at Unity's authored rate and storage limit. |
 | `!sell <amount> <resource>` | Sell available town stock for gold at Unity's authored rate and tax. |
 | `!revive [player]` | Revive yourself, or another player when your role permits it. |
@@ -59,6 +61,7 @@ masters as appropriate.
 | `!level <building> <id> [amount]` | Level a building instance. |
 | `!levelall <building> <level>` | Level every instance of a building type. |
 | `!remove <building> <id>` | Remove a building instance. |
+| `!buildinglight <BID> <name\|#RRGGBB>` | Change a building's night-light colour. This is restricted to the elected ruler. Use `!bid <building>` to list full BIDs. |
 | `!recruit <role> [amount]` | Recruit town-controlled characters. |
 | `!cam <direction> [amount]` | Smoothly move the broadcast camera using `up`, `down`, `left`, `right`, `in`, or `out`. Several direction/amount pairs may be supplied. |
 | `!cam home` | Smoothly return to the authored home position and base zoom. Any acknowledged command suspends the idle director for another 30 seconds. |
@@ -66,6 +69,10 @@ masters as appropriate.
 | `!rulervote` | Start a ruler vote. |
 | `!resign` | Resign as ruler. |
 | `!save` | Save the town. |
+
+Named colours are `red`, `orange`, `yellow`, `green`, `cyan`, `blue`,
+`purple`, `pink`, `white`, and `warmwhite`. Hex colours use six digits, such
+as `#72C8FF`.
 
 After 30 seconds without any acknowledged command, the broadcast camera returns to the
 base town composition, then automatically alternates between smooth close-up

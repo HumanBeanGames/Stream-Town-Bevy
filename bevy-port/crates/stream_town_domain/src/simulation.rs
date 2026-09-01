@@ -9,7 +9,11 @@ use thiserror::Error;
 use crate::{GridPos, ObjectiveDef, ObjectiveKind, StableId};
 
 pub const BUILDING_MAX_HEALTH: i32 = 500;
-pub const CURRENT_SIMULATION_SCHEMA: u32 = 3;
+pub const CURRENT_SIMULATION_SCHEMA: u32 = 4;
+/// Shipping Unity's `AllSeasonSettings` advances after three in-game days.
+pub const DAYS_PER_SEASON: u32 = 3;
+pub const SEASONS_PER_YEAR: u32 = 4;
+pub const SEASON_TRANSITION_SECONDS: f64 = 10.0;
 pub const INITIAL_TECHNOLOGY_VOTE_DELAY_SECONDS: f32 = 20.0;
 pub const MAX_ROLE_LEVEL: u16 = 99;
 pub const RULER_VOTE_DURATION_SECONDS: f32 = 120.0;
@@ -125,6 +129,11 @@ pub struct ActorCustomization {
     pub hair_color: u8,
     pub eye_color: u8,
     pub body_type: u8,
+    /// Optional RGB overrides authored by the player through Twitch chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_color: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub night_light_color: Option<[u8; 3]>,
 }
 
 impl ActorCustomization {
@@ -243,6 +252,9 @@ pub struct WorldSimulation {
     pub passive_resource_accumulators: BTreeMap<StableId, BTreeMap<StableId, u64>>,
     pub actors: BTreeMap<StableId, ActorState>,
     pub buildings: BTreeMap<StableId, BuildingState>,
+    /// Ruler-authored building light colours, keyed by persistent BID.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub building_night_light_colors: BTreeMap<StableId, [u8; 3]>,
     #[serde(default)]
     pub next_enemy_serial: u64,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -352,6 +364,7 @@ impl WorldSimulation {
             passive_resource_accumulators: BTreeMap::new(),
             actors: BTreeMap::new(),
             buildings: BTreeMap::new(),
+            building_night_light_colors: BTreeMap::new(),
             next_enemy_serial: 0,
             enemy_camps: BTreeMap::new(),
             unlocked_technology: BTreeSet::new(),
@@ -1532,7 +1545,7 @@ impl WorldSimulation {
     }
 
     /// Upgrades persisted simulation state without advancing gameplay clocks.
-    /// Schema-three repairs the technology cycle omitted by earlier Bevy saves.
+    /// Repairs legacy simulation state and recalculates the current calendar rules.
     pub fn upgrade_time_schema(&mut self, seconds_per_day: u32) {
         if self.schema_version < CURRENT_SIMULATION_SCHEMA {
             if self.schema_version < 3
@@ -1555,7 +1568,7 @@ impl WorldSimulation {
                 .saturating_div(seconds_per_day),
         )
         .unwrap_or(u32::MAX);
-        self.season = match (self.day / 7) % 4 {
+        self.season = match (self.day / DAYS_PER_SEASON) % SEASONS_PER_YEAR {
             0 => Season::Spring,
             1 => Season::Summer,
             2 => Season::Autumn,

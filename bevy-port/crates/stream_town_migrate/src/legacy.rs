@@ -1684,6 +1684,7 @@ fn json_customization(value: &Value) -> ActorCustomization {
         hair_color: legacy_customization_index(json_i32_default(value, "ChosenHairColourIndex")),
         eye_color: legacy_customization_index(json_i32_default(value, "ChosenEyeColourIndex")),
         body_type: legacy_customization_index(json_i32_default(value, "ChosenBodyTypeIndex")),
+        ..ActorCustomization::default()
     }
 }
 

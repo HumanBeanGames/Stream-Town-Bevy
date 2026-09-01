@@ -90,7 +90,7 @@ use stream_town_domain::{
     BroadcastEncoderPreference, BroadcastRenderMode, BuildingAction, BuildingDef,
     BuildingDirection, BuildingHealthDisplayMode, BuildingModelDef, BuildingState,
     CURRENT_RUNTIME_CONSOLE_SCHEMA, CURRENT_WORLD_SNAPSHOT_SCHEMA, CameraAction, CameraDirection,
-    ChatCommand, ChimneySmokeDef, ContentCatalog, CustomizationKind, DisplayMode,
+    ChatCommand, ChimneySmokeDef, ContentCatalog, CustomizationKind, DAYS_PER_SEASON, DisplayMode,
     EnemyCampGenerationDef, EnemyCampState, EnemyModelSetDef, EnemyRunAnimation, FireworksVfxDef,
     GameConfig, GeneratedFoliage, GeneratedWorld, GridPos, HealingBurstVfxDef,
     HealingChannelVfxDef, LegacyMigrationMetadata, MainMenuSceneReference,
@@ -98,11 +98,11 @@ use stream_town_domain::{
     ObjectiveEvent, ObjectiveKind, PetDef, PetModelDef, PlayerSettings, PlayerSettingsStore,
     PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping, PresentationCatalog,
     RainingFishVfxDef, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction, RuntimeConsoleStatus,
-    RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId, StationDef,
-    StationUpdateMode, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
-    VfxGradientDef, Weather, WorldGenerationStage, WorldSimulation, WorldSnapshot,
-    foliage_visual_variant, foliage_visual_yaw_milliradians, generate_world_with_content,
-    generate_world_with_content_observed, resource_visual_variant,
+    RuntimeConsoleStore, SEASON_TRANSITION_SECONDS, SEASONS_PER_YEAR, SavedActor, SavedTerrainMesh,
+    Season, StableId, StationDef, StationUpdateMode, StorageModelDef, StreamUserType,
+    TargetingScoreDef, TownEvent, VfxGradientDef, Weather, WorldGenerationStage, WorldSimulation,
+    WorldSnapshot, foliage_visual_variant, foliage_visual_yaw_milliradians,
+    generate_world_with_content, generate_world_with_content_observed, resource_visual_variant,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -458,6 +458,7 @@ struct SaveRuntime {
 struct TownSaveEntry {
     name: String,
     path: PathBuf,
+    protected: bool,
 }
 
 #[derive(Resource)]
@@ -506,6 +507,7 @@ impl TownSaveCatalogRuntime {
             entries.push(TownSaveEntry {
                 name: "Legacy Town".to_owned(),
                 path: self.legacy_path.clone(),
+                protected: false,
             });
         }
         entries.sort_by(|left, right| {
@@ -758,10 +760,10 @@ impl Default for MenuRuntime {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum PendingTownStart {
     NewGame,
-    LoadGame,
+    LoadGame { source: PathBuf },
 }
 
 #[derive(Resource, Default)]
@@ -804,7 +806,9 @@ struct AccessibilityActionDispatch;
 #[derive(Resource, Default)]
 struct MenuIoRequest {
     save: bool,
+    save_jump_start: bool,
     load: bool,
+    load_source: Option<PathBuf>,
 }
 
 #[derive(Resource)]
@@ -1044,6 +1048,7 @@ struct PointerObjectSelectionEnabled;
 struct EnvironmentPresentation {
     applied_environment: Option<(Season, Weather)>,
     applied_daylight_bits: Option<u32>,
+    applied_season_blend_bits: Option<u32>,
 }
 
 #[derive(Resource, Default)]
@@ -1058,6 +1063,7 @@ struct BuildingMaterialInstance {
     handle: Handle<BuildingMaterial>,
     applied_health: i32,
     applied_season: Season,
+    applied_season_blend_bits: u32,
     applied_daylight_bits: u32,
 }
 
@@ -1686,6 +1692,7 @@ enum TownDialogAction {
 struct TownLoadChoice {
     name: String,
     path: PathBuf,
+    protected: bool,
 }
 
 #[derive(Component)]
@@ -1697,6 +1704,7 @@ struct TownLoadList;
 #[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
 enum GameMenuAction {
     SaveGame,
+    SaveJumpStart,
     LoadGame,
     Settings,
     GoLive,
@@ -2603,6 +2611,7 @@ enum HudMetric {
     Ore,
     Wood,
     Players,
+    Npcs,
     Buildings,
     PlayTime,
 }
@@ -10578,6 +10587,18 @@ fn spawn_hud_metric(
     source_path: &str,
     width: Val,
 ) {
+    spawn_hud_metric_sized(parent, render, metric, source_path, width, 36.0, 20.0);
+}
+
+fn spawn_hud_metric_sized(
+    parent: &mut ChildSpawnerCommands,
+    render: &RenderAssets,
+    metric: HudMetric,
+    source_path: &str,
+    width: Val,
+    icon_size: f32,
+    font_size: f32,
+) {
     parent
         .spawn((
             HudMetricRow,
@@ -10596,8 +10617,8 @@ fn spawn_hud_metric(
                 metric_parent.spawn((
                     ImageNode::new(icon),
                     Node {
-                        width: px(36),
-                        height: px(36),
+                        width: px(icon_size),
+                        height: px(icon_size),
                         flex_shrink: 0.0,
                         align_self: AlignSelf::Center,
                         ..default()
@@ -10608,7 +10629,7 @@ fn spawn_hud_metric(
                 metric,
                 Text::new("0"),
                 TextFont {
-                    font_size: FontSize::Px(20.0),
+                    font_size: FontSize::Px(font_size),
                     ..default()
                 },
                 TextColor(Color::srgb(0.91, 0.89, 0.81)),
@@ -10696,27 +10717,36 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
                     render,
                     HudMetric::Players,
                     TOP_BAR_TEXTURE_PATHS[5],
-                    percent(14.5),
+                    percent(10.0),
+                );
+                spawn_hud_metric_sized(
+                    stats,
+                    render,
+                    HudMetric::Npcs,
+                    TOP_BAR_TEXTURE_PATHS[5],
+                    percent(10.0),
+                    27.0,
+                    18.0,
                 );
                 spawn_hud_metric(
                     stats,
                     render,
                     HudMetric::Buildings,
                     TOP_BAR_TEXTURE_PATHS[6],
-                    percent(14.5),
+                    percent(13.0),
                 );
                 spawn_hud_metric(
                     stats,
                     render,
                     HudMetric::PlayTime,
                     TOP_BAR_TEXTURE_PATHS[7],
-                    percent(23.0),
+                    percent(22.0),
                 );
                 stats
                     .spawn((
                         HudTechnologyObjectivePanel,
                         Node {
-                            width: percent(48.0),
+                            width: percent(45.0),
                             height: percent(100.0),
                             align_self: AlignSelf::Center,
                             overflow: Overflow::clip(),
@@ -10958,14 +10988,71 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
 }
 
 fn town_save_entry(path: &Path) -> TownSaveEntry {
+    let protected = is_jump_start_path(path);
+    let stem = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Town");
     TownSaveEntry {
-        name: path
+        name: if protected {
+            format!("{} (Jump-Start)", stem.trim_end_matches(".jumpstart"))
+        } else {
+            stem.to_owned()
+        },
+        path: path.to_path_buf(),
+        protected,
+    }
+}
+
+fn is_jump_start_path(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".jumpstart"))
+}
+
+fn unique_save_path(directory: &Path, preferred_stem: &str) -> PathBuf {
+    let preferred_stem = safe_town_filename(preferred_stem);
+    let direct = directory.join(format!("{preferred_stem}.stbevy"));
+    if !direct.exists() {
+        return direct;
+    }
+    for index in 2_u32.. {
+        let candidate = directory.join(format!("{preferred_stem} {index}.stbevy"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("the jump-start suffix range is unbounded")
+}
+
+fn jump_start_snapshot_path(active: &Path) -> PathBuf {
+    let directory = active.parent().unwrap_or_else(|| Path::new("."));
+    let stem = safe_town_filename(
+        active
             .file_stem()
             .and_then(|name| name.to_str())
-            .unwrap_or("Town")
-            .to_owned(),
-        path: path.to_path_buf(),
+            .unwrap_or("Town"),
+    );
+    let direct = directory.join(format!("{stem}.jumpstart.stbevy"));
+    if !direct.exists() {
+        return direct;
     }
+    for index in 2_u32.. {
+        let candidate = directory.join(format!("{stem} {index}.jumpstart.stbevy"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("the jump-start suffix range is unbounded")
+}
+
+fn jump_start_working_path(catalog: &TownSaveCatalogRuntime, template: &Path) -> PathBuf {
+    let stem = template
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Town")
+        .trim_end_matches(".jumpstart");
+    unique_save_path(&catalog.directory, &format!("{stem} Jump-Start Copy"))
 }
 
 fn safe_town_filename(name: &str) -> String {
@@ -11112,10 +11199,24 @@ fn town_dialog_buttons(
         match store.load() {
             Ok(snapshot) => {
                 config.0.world.seed = snapshot.world_seed;
-                save.store = store;
-                catalog.active_town = Some(choice.name.clone());
+                if choice.protected {
+                    let working_path = jump_start_working_path(&catalog, &choice.path);
+                    save.store = NativeSaveStore::new(working_path);
+                    catalog.active_town = Some(format!(
+                        "{} Copy",
+                        choice.name.trim_end_matches(" (Jump-Start)")
+                    ));
+                } else {
+                    save.store = store;
+                    catalog.active_town = Some(choice.name.clone());
+                }
                 focus.clear();
-                request_go_live_confirmation(&mut menu, PendingTownStart::LoadGame);
+                request_go_live_confirmation(
+                    &mut menu,
+                    PendingTownStart::LoadGame {
+                        source: choice.path.clone(),
+                    },
+                );
             }
             Err(error) => {
                 format!("Could not load '{}': {error}", choice.name).clone_into(&mut menu.feedback);
@@ -11283,7 +11384,16 @@ fn confirm_go_live_and_start_town(
         cancel_go_live_confirmation(menu);
         return;
     };
-    io.load = start == PendingTownStart::LoadGame;
+    match start {
+        PendingTownStart::NewGame => {
+            io.load = false;
+            io.load_source = None;
+        }
+        PendingTownStart::LoadGame { source } => {
+            io.load = true;
+            io.load_source = Some(source);
+        }
+    }
     menu.page = MenuPage::Closed;
     menu.return_page = MenuPage::Closed;
     menu.selected = 0;
@@ -11408,6 +11518,7 @@ fn update_go_live_confirmation_ui(
 const fn game_menu_action_label(action: GameMenuAction, broadcast_active: bool) -> &'static str {
     match action {
         GameMenuAction::SaveGame => "Save Game",
+        GameMenuAction::SaveJumpStart => "Save Jump-Start",
         GameMenuAction::LoadGame => "Load Game",
         GameMenuAction::Settings => "Settings",
         GameMenuAction::GoLive if broadcast_active => "End Stream",
@@ -11445,10 +11556,11 @@ fn game_menu_action_enabled(action: GameMenuAction, has_save: bool) -> bool {
 const fn game_menu_action_index(action: GameMenuAction) -> usize {
     match action {
         GameMenuAction::SaveGame => 0,
-        GameMenuAction::LoadGame => 1,
-        GameMenuAction::Settings => 2,
-        GameMenuAction::GoLive => 3,
-        GameMenuAction::ExitGame => 4,
+        GameMenuAction::SaveJumpStart => 1,
+        GameMenuAction::LoadGame => 2,
+        GameMenuAction::Settings => 3,
+        GameMenuAction::GoLive => 4,
+        GameMenuAction::ExitGame => 5,
         GameMenuAction::Close => 6,
     }
 }
@@ -11481,8 +11593,13 @@ fn game_menu_buttons(
                 io.save = true;
                 menu.page = MenuPage::Closed;
             }
+            GameMenuAction::SaveJumpStart => {
+                io.save_jump_start = true;
+                menu.page = MenuPage::Closed;
+            }
             GameMenuAction::LoadGame => {
                 io.load = true;
+                io.load_source = None;
                 menu.page = MenuPage::Closed;
             }
             GameMenuAction::Settings => {
@@ -12978,6 +13095,7 @@ fn spawn_menu_overlay(
             .with_children(|controls| {
                 for action in [
                     GameMenuAction::SaveGame,
+                    GameMenuAction::SaveJumpStart,
                     GameMenuAction::LoadGame,
                     GameMenuAction::Settings,
                     GameMenuAction::GoLive,
@@ -13502,6 +13620,7 @@ fn spawn_town_dialogs(commands: &mut Commands, render: &RenderAssets, saves: &[T
                                             TownLoadChoice {
                                                 name: save.name.clone(),
                                                 path: save.path.clone(),
+                                                protected: save.protected,
                                             },
                                             Button,
                                             TabIndex(i32::try_from(index).unwrap_or(i32::MAX)),
@@ -15134,6 +15253,7 @@ fn game_menu_text(state: GameState, selected: usize, has_save: bool) -> String {
     let items: &[(&str, bool)] = if state == GameState::InGame {
         &[
             ("Save Game", true),
+            ("Save Jump-Start", true),
             ("Load Game", has_save),
             ("Settings", true),
             ("Go Live", true),
@@ -15350,6 +15470,8 @@ fn menu_input(
     }
     let item_count = if menu.page == MenuPage::Settings {
         SETTINGS_MENU_ITEM_COUNT
+    } else if *state.get() == GameState::InGame {
+        6
     } else {
         5
     };
@@ -15439,17 +15561,23 @@ fn menu_input(
                 "Save requested".clone_into(&mut menu.feedback);
                 menu.page = MenuPage::Closed;
             }
-            1 if save.store.path().is_file() => {
-                io.load = true;
+            1 => {
+                io.save_jump_start = true;
+                "Protected jump-start save requested".clone_into(&mut menu.feedback);
                 menu.page = MenuPage::Closed;
             }
-            2 => open_settings_menu(
+            2 if save.store.path().is_file() => {
+                io.load = true;
+                io.load_source = None;
+                menu.page = MenuPage::Closed;
+            }
+            3 => open_settings_menu(
                 &mut menu,
                 MenuPage::Game,
                 &player_settings.0,
                 &config.0.twitch.broadcast,
             ),
-            3 => {
+            4 => {
                 #[cfg(target_os = "windows")]
                 toggle_direct_broadcast(
                     &config.0,
@@ -15463,7 +15591,7 @@ fn menu_input(
                 "Direct Twitch streaming is available only on Windows."
                     .clone_into(&mut menu.feedback);
             }
-            4 => {
+            5 => {
                 menu.page = MenuPage::Closed;
                 next_state.set(GameState::MainMenu);
             }
@@ -18641,7 +18769,40 @@ fn resource_approach(
                 )
             });
     }
-    nearest_walkable(world, resource.position)
+    let radius = 1_u16;
+    let min_x = resource.position.x.saturating_sub(radius);
+    let max_x = resource
+        .position
+        .x
+        .saturating_add(radius)
+        .min(world.navigation.width() - 1);
+    let min_z = resource.position.z.saturating_sub(radius);
+    let max_z = resource
+        .position
+        .z
+        .saturating_add(radius)
+        .min(world.navigation.height() - 1);
+    let mut approaches = Vec::new();
+    for z in min_z..=max_z {
+        for x in min_x..=max_x {
+            let candidate = GridPos { x, z };
+            if candidate != resource.position && world.navigation.is_walkable(candidate) {
+                approaches.push(candidate);
+            }
+        }
+    }
+    approaches.sort_by_key(|candidate| {
+        (
+            candidate.x.abs_diff(from.x) + candidate.z.abs_diff(from.z),
+            candidate.x.abs_diff(resource.position.x) + candidate.z.abs_diff(resource.position.z),
+            candidate.z,
+            candidate.x,
+        )
+    });
+    approaches
+        .into_iter()
+        .next()
+        .or_else(|| nearest_walkable(world, resource.position))
 }
 
 fn is_current_building_approach(
@@ -19286,7 +19447,9 @@ fn next_agent_goal_with_station_runtime(
         let candidates: Vec<_> = simulation
             .buildings
             .values()
-            .filter(|building| !building.complete)
+            .filter(|building| {
+                !building.complete || building.health < building_max_health(content, building)
+            })
             .filter(|building| {
                 within_player_target_search_region(building_visual_grid(content, building), current)
             })
@@ -19711,6 +19874,7 @@ fn complete_agent_goal(
                             let _ = world.navigation.set_blocked(region, false);
                         }
                         simulation.buildings.remove(building_id);
+                        simulation.building_night_light_colors.remove(building_id);
                         for actor in simulation.actors.values_mut() {
                             if actor.station.as_ref() == Some(building_id)
                                 || actor.preferred_target.as_ref() == Some(building_id)
@@ -19770,15 +19934,23 @@ fn complete_agent_goal(
         }
         AgentGoal::Construct(building_id) => {
             let builder = simulation.actors.get(actor_id)?;
-            if !simulation
-                .buildings
-                .get(building_id)
-                .is_some_and(|building| {
-                    !building.complete
-                        && within_building_work_range(
-                            content, simulation, builder, building, current,
-                        )
-                })
+            let Some(building_before) = simulation.buildings.get(building_id) else {
+                return None;
+            };
+            let was_complete = building_before.complete;
+            let needs_work = if was_complete {
+                building_before.health < building_max_health(content, building_before)
+            } else {
+                true
+            };
+            if !needs_work
+                || !within_building_work_range(
+                    content,
+                    simulation,
+                    builder,
+                    building_before,
+                    current,
+                )
             {
                 return None;
             }
@@ -19797,10 +19969,19 @@ fn complete_agent_goal(
                     building_max_health(content, building)
                 });
             let max_health = u32::try_from(max_health).unwrap_or(u32::MAX);
-            let result = simulation.work_on_building(building_id, action_amount, max_health);
+            let result = if was_complete {
+                simulation
+                    .repair_building(building_id, action_amount, max_health)
+                    .map(|restored| (false, restored > 0))
+            } else {
+                simulation
+                    .work_on_building(building_id, action_amount, max_health)
+                    .map(|complete| (complete, action_amount > 0))
+            };
             match result {
-                Ok(complete) => {
-                    if complete
+                Ok((complete, succeeded)) => {
+                    if !was_complete
+                        && complete
                         && let Some(building) = archetype.as_ref().and_then(|archetype| {
                             content.buildings.iter().find_map(|(id, definition)| {
                                 (definition.archetype == *archetype).then_some(id.clone())
@@ -19812,7 +19993,6 @@ fn complete_agent_goal(
                             &ObjectiveEvent::BuildingBuilt(building),
                         );
                     }
-                    let succeeded = action_amount > 0;
                     if succeeded && let Some(target) = building_position {
                         action_presentation = Some(ActionPresentation::BuildingWork {
                             target,
@@ -21975,7 +22155,21 @@ fn rotate_agent_toward_action(
     else {
         return false;
     };
-    let facing_target = grid_to_world_on_surface(facing_grid, config, world);
+    let facing_target = if let AgentGoal::Gather(resource_id) = &agent.goal {
+        world
+            .resources
+            .iter()
+            .find(|resource| resource.id == *resource_id && resource.amount > 0)
+            .map(|resource| {
+                let position = generated_resource_world_position(resource, config, world);
+                resource_visual_archetype(content, &resource.kind).map_or(position, |archetype| {
+                    centred_resource_visual_position(position, archetype, config.world.cell_size)
+                })
+            })
+            .unwrap_or_else(|| grid_to_world_on_surface(facing_grid, config, world))
+    } else {
+        grid_to_world_on_surface(facing_grid, config, world)
+    };
     rotate_agent_toward(
         transform,
         facing_target,
@@ -21984,6 +22178,39 @@ fn rotate_agent_toward_action(
         correct_player_axis,
     );
     true
+}
+
+fn agent_path_world_target(
+    next: GridPos,
+    agent: &Agent,
+    content: &ContentCatalog,
+    world: &GeneratedWorld,
+    config: &GameConfig,
+) -> Vec3 {
+    let mut target = grid_to_world_on_surface(next, config, world);
+    if next != agent.target {
+        return target;
+    }
+    let AgentGoal::Gather(resource_id) = &agent.goal else {
+        return target;
+    };
+    let Some(resource) = world
+        .resources
+        .iter()
+        .find(|resource| resource.id == *resource_id && resource.amount > 0)
+    else {
+        return target;
+    };
+    let visual = generated_resource_world_position(resource, config, world);
+    let visual = resource_visual_archetype(content, &resource.kind).map_or(visual, |archetype| {
+        centred_resource_visual_position(visual, archetype, config.world.cell_size)
+    });
+    let toward_resource = Vec2::new(visual.x - target.x, visual.z - target.z);
+    let offset = toward_resource.normalize_or_zero()
+        * (config.world.cell_size * 0.42).min(toward_resource.length() * 0.5);
+    target.x += offset.x;
+    target.z += offset.y;
+    target
 }
 
 fn actor_movement_speed(
@@ -22650,7 +22877,8 @@ fn move_agents(
         let Some(next) = agent.path.get(agent.path_index).copied() else {
             continue;
         };
-        let mut target = grid_to_world_on_surface(next, &config.0, &world.generated);
+        let mut target =
+            agent_path_world_target(next, &agent, &content.0, &world.generated, &config.0);
         if !animation.native {
             target.y += animation.base_scale.y * 0.5;
         }
@@ -23712,6 +23940,11 @@ fn update_environment_presentation(
     particles: Query<Entity, With<WeatherParticle>>,
 ) {
     let environment = (simulation.0.season, simulation.0.weather);
+    let (season_from, season_to, season_blend) = season_visual_blend(
+        simulation.0.elapsed_seconds,
+        config.0.time.seconds_per_day,
+        simulation.0.season,
+    );
     let time_cycle = config.0.time.sample(simulation.0.elapsed_seconds);
     let daylight = time_cycle.daylight.clamp(0.0, 1.0);
     let color_filter = authored_rgb_filter(&authored_post_process_stack(
@@ -23720,12 +23953,18 @@ fn update_environment_presentation(
         daylight,
     ));
     let daylight_bits = daylight_signature(daylight);
+    let season_blend_bits = daylight_signature(season_blend);
     let environment_changed = presentation.applied_environment != Some(environment);
     let daylight_changed = presentation.applied_daylight_bits != Some(daylight_bits);
-    if !environment_changed && !daylight_changed {
+    let season_visual_changed = presentation.applied_season_blend_bits != Some(season_blend_bits);
+    if !environment_changed && !daylight_changed && !season_visual_changed {
         return;
     }
-    let palette = environment_palette(environment.0, environment.1);
+    let palette = blend_environment_palette(
+        environment_palette(season_from, environment.1),
+        environment_palette(season_to, environment.1),
+        season_blend,
+    );
     let authored_daylight = f32::from(config.0.time.day_light_intensity_milli) / 1_000.0;
     let authored_nightlight = f32::from(config.0.time.night_light_intensity_milli) / 1_000.0;
     let light_ratio = (authored_nightlight + (authored_daylight - authored_nightlight) * daylight)
@@ -23738,7 +23977,7 @@ fn update_environment_presentation(
             palette.clear_color[2] * sky_ratio * color_filter[2],
         );
     }
-    if environment_changed
+    if (environment_changed || season_visual_changed)
         && let Some(terrain_materials) = terrain_materials.as_deref_mut()
         && let Some(mut ground) = terrain_materials.get_mut(&render.ground)
     {
@@ -23749,36 +23988,46 @@ fn update_environment_presentation(
             ground.extension.parameters.season_tint.w,
         );
     }
-    if environment_changed
+    if (environment_changed || season_visual_changed)
         && let Some(water_materials) = water_materials.as_deref_mut()
         && let Some(mut water) = water_materials.get_mut(&render.water)
     {
         let surface = water.extension.parameters.surface_color;
         water.extension.parameters.season_tint = water_color_tint(surface, palette.water_color);
-        water.extension.parameters.scale_foam_ice.w = water_ice_strength(environment.0);
+        water.extension.parameters.scale_foam_ice.w = water_ice_strength(season_from)
+            + (water_ice_strength(season_to) - water_ice_strength(season_from)) * season_blend;
     }
     if let Some(building_materials) = building_materials.as_deref_mut()
         && let Some(mut building) = building_materials.get_mut(&render.authored_building)
     {
-        if environment_changed {
-            let snow = building_snow_strength(environment.0);
+        if environment_changed || season_visual_changed {
+            let snow = building_snow_strength(season_from)
+                + (building_snow_strength(season_to) - building_snow_strength(season_from))
+                    * season_blend;
             building.extension.parameters.snow_damage.x = snow;
             building.extension.parameters.snow_damage.y = snow;
         }
         building.extension.parameters.surface_controls.z =
             f32::from(config.0.time.max_building_emission_milli) / 1_000.0 * (1.0 - daylight);
     }
-    if environment_changed
+    if (environment_changed || season_visual_changed)
         && let Some(tree_materials) = tree_materials.as_deref_mut()
         && let Some(mut tree) = tree_materials.get_mut(&render.tree)
     {
-        tree.extension.parameters.season_controls = tree_season_controls(environment.0);
+        tree.extension.parameters.season_controls =
+            tree_season_controls(season_from).lerp(tree_season_controls(season_to), season_blend);
     }
-    if environment_changed
+    if (environment_changed || season_visual_changed)
         && let Some(grass_materials) = grass_materials.as_deref_mut()
         && let Some(mut grass) = grass_materials.get_mut(&render.grass)
     {
-        let (grid_1, grid_2, wind, spring, tint) = grass_season_controls(environment.0);
+        let from = grass_season_controls(season_from);
+        let to = grass_season_controls(season_to);
+        let grid_1 = from.0.lerp(to.0, season_blend);
+        let grid_2 = from.1.lerp(to.1, season_blend);
+        let wind = from.2.lerp(to.2, season_blend);
+        let spring = from.3 + (to.3 - from.3) * season_blend;
+        let tint = from.4 + (to.4 - from.4) * season_blend;
         grass.extension.parameters.grid_color_1 = grid_1;
         grass.extension.parameters.grid_color_2 = grid_2;
         grass.extension.parameters.wind_color = wind;
@@ -23792,7 +24041,7 @@ fn update_environment_presentation(
             palette.fog_color[2] * color_filter[2],
             palette.fog_color[3],
         );
-        if environment_changed {
+        if environment_changed || season_visual_changed {
             fog.falloff = FogFalloff::Linear {
                 start: palette.fog_start,
                 end: palette.fog_end,
@@ -23839,6 +24088,71 @@ fn update_environment_presentation(
     }
     presentation.applied_environment = Some(environment);
     presentation.applied_daylight_bits = Some(daylight_bits);
+    presentation.applied_season_blend_bits = Some(season_blend_bits);
+}
+
+fn previous_season(season: Season) -> Season {
+    match season {
+        Season::Spring => Season::Winter,
+        Season::Summer => Season::Spring,
+        Season::Autumn => Season::Summer,
+        Season::Winter => Season::Autumn,
+    }
+}
+
+fn season_visual_blend(
+    elapsed_seconds: f64,
+    seconds_per_day: u32,
+    current: Season,
+) -> (Season, Season, f32) {
+    let season_seconds = f64::from(seconds_per_day.max(1)) * f64::from(DAYS_PER_SEASON);
+    let elapsed = elapsed_seconds.max(0.0);
+    let season_index = Duration::from_secs_f64(elapsed / season_seconds).as_secs();
+    let phase = elapsed.rem_euclid(season_seconds);
+    let transition_seconds = SEASON_TRANSITION_SECONDS.min(season_seconds);
+    if season_index == 0 || phase >= transition_seconds || transition_seconds <= f64::EPSILON {
+        return (current, current, 1.0);
+    }
+    let blend = Duration::from_secs_f64(phase / transition_seconds).as_secs_f32();
+    (previous_season(current), current, blend.clamp(0.0, 1.0))
+}
+
+fn blend_environment_palette(
+    from: EnvironmentPalette,
+    to: EnvironmentPalette,
+    blend: f32,
+) -> EnvironmentPalette {
+    let blend_array = |from: &[f32], to: &[f32]| {
+        from.iter()
+            .zip(to)
+            .map(|(from, to)| from + (to - from) * blend)
+            .collect::<Vec<_>>()
+    };
+    let terrain_tint = blend_array(&from.terrain_tint, &to.terrain_tint);
+    let water_color = blend_array(&from.water_color, &to.water_color);
+    let clear_color = blend_array(&from.clear_color, &to.clear_color);
+    let sun_color = blend_array(&from.sun_color, &to.sun_color);
+    let ambient_color = blend_array(&from.ambient_color, &to.ambient_color);
+    let fog_color = blend_array(&from.fog_color, &to.fog_color);
+    EnvironmentPalette {
+        terrain_tint: [terrain_tint[0], terrain_tint[1], terrain_tint[2]],
+        water_color: [
+            water_color[0],
+            water_color[1],
+            water_color[2],
+            water_color[3],
+        ],
+        clear_color: [clear_color[0], clear_color[1], clear_color[2]],
+        sun_color: [sun_color[0], sun_color[1], sun_color[2]],
+        sun_illuminance: from.sun_illuminance + (to.sun_illuminance - from.sun_illuminance) * blend,
+        ambient_color: [ambient_color[0], ambient_color[1], ambient_color[2]],
+        ambient_brightness: from.ambient_brightness
+            + (to.ambient_brightness - from.ambient_brightness) * blend,
+        fog_color: [fog_color[0], fog_color[1], fog_color[2], fog_color[3]],
+        fog_start: from.fog_start + (to.fog_start - from.fog_start) * blend,
+        fog_end: from.fog_end + (to.fog_end - from.fog_end) * blend,
+        particle_count: to.particle_count,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -23854,7 +24168,7 @@ fn sync_pooled_night_lights(
     config: Res<RuntimeConfig>,
     simulation: Res<SimulationRuntime>,
     agents: Query<(&Agent, &GlobalTransform)>,
-    buildings: Query<&GlobalTransform, With<RuntimeBuilding>>,
+    buildings: Query<(&RuntimeBuilding, &GlobalTransform)>,
     projectiles: Query<(&CombatProjectile, &GlobalTransform)>,
     mut slots: Query<
         (Entity, &mut Transform, &mut PointLight, &mut Visibility),
@@ -23865,20 +24179,32 @@ fn sync_pooled_night_lights(
     let mut sources = Vec::new();
     for (agent, transform) in &agents {
         if agent.kind == ActorKind::Player {
+            let color = simulation
+                .0
+                .actors
+                .get(&agent.id)
+                .and_then(|actor| actor.customization.night_light_color)
+                .map_or(Color::srgb(1.0, 0.82, 0.56), color_from_rgb8);
             sources.push(NightLightSpec {
                 position: transform.translation() + Vec3::Y * cell_size * 0.9,
-                color: Color::srgb(1.0, 0.82, 0.56),
+                color,
                 intensity: 115_000.0,
                 range: cell_size * 5.0,
             });
         }
     }
-    for transform in &buildings {
+    for (building, transform) in &buildings {
+        let color = simulation
+            .0
+            .building_night_light_colors
+            .get(&building.id)
+            .copied()
+            .map_or(Color::srgb(1.0, 0.66, 0.30), color_from_rgb8);
         sources.push(NightLightSpec {
             position: transform.translation() + Vec3::Y * cell_size * 1.5,
-            color: Color::srgb(1.0, 0.66, 0.30),
-            intensity: 165_000.0,
-            range: cell_size * 7.0,
+            color,
+            intensity: 220_000.0,
+            range: cell_size * 8.0,
         });
     }
     let persistent_source_count = sources.len();
@@ -23944,6 +24270,10 @@ fn sync_pooled_night_lights(
         ));
         slot_count += 1;
     }
+}
+
+fn color_from_rgb8(color: [u8; 3]) -> Color {
+    Color::srgb_u8(color[0], color[1], color[2])
 }
 
 fn daylight_signature(value: f32) -> u32 {
@@ -27655,8 +27985,16 @@ fn instantiate_building_materials(
                 .get(&building)
                 .map_or(BUILDING_MAX_HEALTH, |state| state.health);
             let season = simulation.0.season;
-            material.extension.parameters.snow_damage.x = building_snow_strength(season);
-            material.extension.parameters.snow_damage.y = building_snow_strength(season);
+            let (season_from, season_to, season_blend) = season_visual_blend(
+                simulation.0.elapsed_seconds,
+                config.0.time.seconds_per_day,
+                season,
+            );
+            let snow = building_snow_strength(season_from)
+                + (building_snow_strength(season_to) - building_snow_strength(season_from))
+                    * season_blend;
+            material.extension.parameters.snow_damage.x = snow;
+            material.extension.parameters.snow_damage.y = snow;
             let max_health = simulation
                 .0
                 .buildings
@@ -27681,6 +28019,7 @@ fn instantiate_building_materials(
                     handle: handle.clone(),
                     applied_health: health,
                     applied_season: season,
+                    applied_season_blend_bits: daylight_signature(season_blend),
                     applied_daylight_bits: daylight_bits,
                 },
             );
@@ -27723,8 +28062,15 @@ fn sync_building_material_instances(
             .daylight
             .clamp(0.0, 1.0);
         let daylight_bits = daylight_signature(daylight);
+        let (season_from, season_to, season_blend) = season_visual_blend(
+            simulation.0.elapsed_seconds,
+            config.0.time.seconds_per_day,
+            simulation.0.season,
+        );
+        let season_blend_bits = daylight_signature(season_blend);
         if instance.applied_health == building.health
             && instance.applied_season == simulation.0.season
+            && instance.applied_season_blend_bits == season_blend_bits
             && instance.applied_daylight_bits == daylight_bits
         {
             continue;
@@ -27732,7 +28078,9 @@ fn sync_building_material_instances(
         let Some(mut material) = materials.get_mut(&instance.handle) else {
             continue;
         };
-        let snow = building_snow_strength(simulation.0.season);
+        let snow = building_snow_strength(season_from)
+            + (building_snow_strength(season_to) - building_snow_strength(season_from))
+                * season_blend;
         material.extension.parameters.snow_damage.x = snow;
         material.extension.parameters.snow_damage.y = snow;
         material.extension.parameters.surface_controls.z =
@@ -27741,6 +28089,7 @@ fn sync_building_material_instances(
             building_damage_value(building.health, building_max_health(&content.0, building));
         instance.applied_health = building.health;
         instance.applied_season = simulation.0.season;
+        instance.applied_season_blend_bits = season_blend_bits;
         instance.applied_daylight_bits = daylight_bits;
     }
 }
@@ -29082,6 +29431,7 @@ fn remove_selected_building(
         .set_blocked(region, false)
         .map_err(|error| error.to_string())?;
     simulation.buildings.remove(runtime_id);
+    simulation.building_night_light_colors.remove(runtime_id);
     for actor in simulation.actors.values_mut() {
         if actor.station.as_ref() == Some(runtime_id) {
             actor.station = None;
@@ -30339,13 +30689,18 @@ fn process_runtime_console(
             io.save = true;
             "Save requested".to_owned()
         }
+        RuntimeConsoleAction::SaveJumpStart if *state.get() == GameState::InGame => {
+            io.save_jump_start = true;
+            "Protected jump-start save requested".to_owned()
+        }
         RuntimeConsoleAction::Load if *state.get() == GameState::InGame => {
             io.load = true;
+            io.load_source = None;
             "Load requested".to_owned()
         }
-        RuntimeConsoleAction::Save | RuntimeConsoleAction::Load => {
-            "Save/load requires an active town".to_owned()
-        }
+        RuntimeConsoleAction::Save
+        | RuntimeConsoleAction::SaveJumpStart
+        | RuntimeConsoleAction::Load => "Save/load requires an active town".to_owned(),
         RuntimeConsoleAction::CaptureFrame => {
             capture.0 = true;
             "Frame capture requested".to_owned()
@@ -30498,15 +30853,32 @@ fn save_input(
     simulation: Res<SimulationRuntime>,
     mut runtime_console: ResMut<RuntimeConsoleRuntime>,
 ) {
-    let requested = std::mem::take(&mut io.save);
-    if !requested {
+    let save_requested = std::mem::take(&mut io.save);
+    let jump_start_requested = std::mem::take(&mut io.save_jump_start);
+    if !save_requested && !jump_start_requested {
         return;
     }
     let snapshot = snapshot_world(&world, &stats, &simulation);
-    match save.store.write(&snapshot) {
+    let destination = if jump_start_requested {
+        NativeSaveStore::new(jump_start_snapshot_path(save.store.path()))
+    } else {
+        NativeSaveStore::new(save.store.path())
+    };
+    match destination.write(&snapshot) {
         Ok(()) => {
-            runtime_console.last_result = format!("Saved {}", save.store.path().display());
-            info!(path = %save.store.path().display(), "native save written");
+            runtime_console.last_result = if jump_start_requested {
+                format!(
+                    "Protected jump-start saved to {}",
+                    destination.path().display()
+                )
+            } else {
+                format!("Saved {}", destination.path().display())
+            };
+            info!(
+                path = %destination.path().display(),
+                protected = jump_start_requested,
+                "native save written"
+            );
         }
         Err(error) => {
             runtime_console.last_result = format!("Save failed: {error}");
@@ -30579,11 +30951,17 @@ fn load_input(
 ) {
     let automatic = !*automatic_complete && std::env::var_os("STREAM_TOWN_AUTO_LOAD").is_some();
     let requested = std::mem::take(&mut io.load);
+    let requested_source = io.load_source.take();
     if !automatic && !requested {
         return;
     }
     *automatic_complete = true;
-    let mut snapshot = match save.store.load() {
+    let source_store = requested_source.as_ref().map_or_else(
+        || NativeSaveStore::new(save.store.path()),
+        |source| NativeSaveStore::new(source),
+    );
+    let source_path = source_store.path().to_path_buf();
+    let mut snapshot = match source_store.load() {
         Ok(snapshot) => snapshot,
         Err(error) => {
             runtime_console.last_result = format!("Load failed: {error}");
@@ -31035,11 +31413,34 @@ fn load_input(
     }
     stats.elapsed_seconds = Duration::from_secs(snapshot.elapsed_seconds).as_secs_f64();
     stats.paths_completed = 0;
+    let forked_from_template = source_path != save.store.path();
+    if forked_from_template {
+        match save.store.write(&snapshot) {
+            Ok(()) => info!(
+                source = %source_path.display(),
+                destination = %save.store.path().display(),
+                "jump-start template forked to writable town save"
+            ),
+            Err(error) => error!(
+                %error,
+                destination = %save.store.path().display(),
+                "loaded jump-start template but could not write its town copy"
+            ),
+        }
+    }
     simulation.0 = snapshot.simulation;
     config.0.world.seed = snapshot.world_seed;
-    runtime_console.last_result = format!("Loaded {}", save.store.path().display());
+    runtime_console.last_result = if forked_from_template {
+        format!(
+            "Loaded protected {} as {}",
+            source_path.display(),
+            save.store.path().display()
+        )
+    } else {
+        format!("Loaded {}", source_path.display())
+    };
     info!(
-        path = %save.store.path().display(),
+        path = %source_path.display(),
         retained_terrain = snapshot.legacy_terrain_mesh.is_some(),
         terrain_vertices = snapshot
             .legacy_terrain_mesh
@@ -33439,6 +33840,9 @@ fn unity_outbound_reply(
                 CustomizationKind::EyeColor => "Eye Color Changed!",
             }
         )),
+        ChatCommand::SetNightLight(_)
+        | ChatCommand::SetNameColor(_)
+        | ChatCommand::SetBuildingNightLight { .. } => Some(format!("{display_name}: {message}")),
         ChatCommand::Pet(Some(_)) => Some(format!("{display_name} pet switched!")),
         ChatCommand::Buy { .. } | ChatCommand::Sell { .. } => {
             Some(format!("{display_name} : {message}"))
@@ -34527,6 +34931,40 @@ fn process_injected_commands(
                     *field = adjusted;
                     Ok(format!("{name} changed to {index}"))
                 }
+                ChatCommand::SetNightLight(color) => {
+                    let actor = simulation
+                        .0
+                        .actors
+                        .get_mut(&actor_id)
+                        .ok_or_else(|| "join before customizing your night light".to_owned())?;
+                    actor.customization.night_light_color = Some(*color);
+                    Ok(format!("night light changed to {}", format_rgb(*color)))
+                }
+                ChatCommand::SetNameColor(color) => {
+                    let actor = simulation
+                        .0
+                        .actors
+                        .get_mut(&actor_id)
+                        .ok_or_else(|| "join before customizing your name colour".to_owned())?;
+                    actor.customization.name_color = Some(*color);
+                    Ok(format!("name colour changed to {}", format_rgb(*color)))
+                }
+                ChatCommand::SetBuildingNightLight { building, color } => {
+                    if !simulation.0.is_ruler(&actor_id) {
+                        return Err("this command is restricted to the current Ruler".to_owned());
+                    }
+                    if !simulation.0.buildings.contains_key(building) {
+                        return Err(format!("unknown building BID {building}"));
+                    }
+                    simulation
+                        .0
+                        .building_night_light_colors
+                        .insert(building.clone(), *color);
+                    Ok(format!(
+                        "building {building} night light changed to {}",
+                        format_rgb(*color)
+                    ))
+                }
                 ChatCommand::Pets | ChatCommand::Pet(None) => {
                     let actor = simulation
                         .0
@@ -35106,6 +35544,10 @@ fn process_injected_commands(
     }
 }
 
+fn format_rgb(color: [u8; 3]) -> String {
+    format!("#{:02X}{:02X}{:02X}", color[0], color[1], color[2])
+}
+
 fn update_hud(
     stats: Res<SessionStats>,
     twitch: Res<TwitchConnection>,
@@ -35191,7 +35633,16 @@ fn update_hud(
             HudMetric::Wood => town_resource_amount(&simulation.0, "resource:wood").to_string(),
             HudMetric::Players => agents
                 .iter()
-                .filter(|agent| agent.kind == ActorKind::Player)
+                .filter(|agent| {
+                    agent.kind == ActorKind::Player && is_stream_player_actor(&agent.id)
+                })
+                .count()
+                .to_string(),
+            HudMetric::Npcs => agents
+                .iter()
+                .filter(|agent| {
+                    agent.kind == ActorKind::Player && !is_stream_player_actor(&agent.id)
+                })
                 .count()
                 .to_string(),
             HudMetric::Buildings => simulation.0.buildings.len().to_string(),
@@ -35206,7 +35657,8 @@ fn update_hud(
         };
     }
     technology_progress.width = percent(technology_summary.progress * 100.0);
-    let season_progress = hud_season_meter_percent(simulation.0.day);
+    let season_progress =
+        hud_season_meter_percent(simulation.0.elapsed_seconds, config.0.time.seconds_per_day);
     for mut meter in &mut season_meters {
         meter.left = percent(season_progress);
     }
@@ -35231,8 +35683,12 @@ fn hud_play_time(elapsed_seconds: f64) -> String {
     format!("{:02}:{:02}", total / 60, total % 60)
 }
 
-fn hud_season_meter_percent(day: u32) -> f32 {
-    (f32::from((day % 28) as u16) / 28.0 * 96.0).clamp(0.0, 96.0)
+fn hud_season_meter_percent(elapsed_seconds: f64, seconds_per_day: u32) -> f32 {
+    let year_seconds = f64::from(seconds_per_day.max(1))
+        * f64::from(DAYS_PER_SEASON)
+        * f64::from(SEASONS_PER_YEAR);
+    let progress = elapsed_seconds.max(0.0).rem_euclid(year_seconds) / year_seconds;
+    (Duration::from_secs_f64(progress).as_secs_f32() * 96.0).clamp(0.0, 96.0)
 }
 
 fn town_goal_status(content: &ContentCatalog, simulation: &WorldSimulation) -> String {
@@ -36218,6 +36674,13 @@ fn stream_user_color(user_type: StreamUserType) -> Color {
     }
 }
 
+fn actor_name_color(actor: &ActorState) -> Color {
+    actor
+        .customization
+        .name_color
+        .map_or_else(|| stream_user_color(actor.user_type), color_from_rgb8)
+}
+
 fn should_show_building_health(
     mode: BuildingHealthDisplayMode,
     health: i32,
@@ -36307,7 +36770,7 @@ fn sync_actor_name_overlays(
             .or(actor.login_name.as_deref())
             .unwrap_or_else(|| overlay.actor.as_str())
             .clone_into(&mut *text);
-        color.0 = stream_user_color(actor.user_type);
+        color.0 = actor_name_color(actor);
         node.left = px(screen.x - 80.0);
         node.top = px(screen.y - 32.0);
         *visibility = Visibility::Visible;
@@ -36346,7 +36809,7 @@ fn sync_actor_name_overlays(
                 ..default()
             },
             TextLayout::justify(Justify::Center),
-            TextColor(stream_user_color(actor.user_type)),
+            TextColor(actor_name_color(actor)),
             GlobalZIndex(18),
             Node {
                 position_type: PositionType::Absolute,
@@ -38167,7 +38630,7 @@ mod tests {
 
     #[test]
     fn game_menu_exposes_state_appropriate_actions_and_save_availability() {
-        let in_game = game_menu_text(GameState::InGame, 2, false);
+        let in_game = game_menu_text(GameState::InGame, 3, false);
         assert!(in_game.contains("STREAM TOWN MENU"));
         assert!(in_game.contains("Load Game  [No save]"));
         assert!(in_game.contains("> Settings"));
@@ -38195,6 +38658,7 @@ mod tests {
         }
         let actions = [
             GameMenuAction::SaveGame,
+            GameMenuAction::SaveJumpStart,
             GameMenuAction::LoadGame,
             GameMenuAction::Settings,
             GameMenuAction::GoLive,
@@ -38205,6 +38669,7 @@ mod tests {
             actions.map(|action| game_menu_action_label(action, false)),
             [
                 "Save Game",
+                "Save Jump-Start",
                 "Load Game",
                 "Settings",
                 "Go Live",
@@ -38322,6 +38787,19 @@ mod tests {
         assert_eq!(town_name_seed("Bobville"), 14_812_036_045_316_836_008);
         assert_eq!(safe_town_filename("Bean: Bay?"), "Bean_ Bay_");
         assert_eq!(safe_town_filename("CON"), "Town_CON");
+    }
+
+    #[test]
+    fn jump_start_saves_are_identifiable_and_never_reuse_an_existing_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let active = directory.path().join("Bean Bay.stbevy");
+        let first = jump_start_snapshot_path(&active);
+        assert_eq!(first.file_name().unwrap(), "Bean Bay.jumpstart.stbevy");
+        std::fs::write(&first, b"reserved").unwrap();
+        let second = jump_start_snapshot_path(&active);
+        assert_eq!(second.file_name().unwrap(), "Bean Bay 2.jumpstart.stbevy");
+        assert!(is_jump_start_path(&first));
+        assert!(is_jump_start_path(&second));
     }
 
     #[test]
@@ -39117,7 +39595,13 @@ mod tests {
     fn town_start_consent_prepares_stream_and_loading_only_after_yes() {
         let mut app = App::new();
         let mut menu = MenuRuntime::default();
-        request_go_live_confirmation(&mut menu, PendingTownStart::LoadGame);
+        let source = PathBuf::from("protected.jumpstart.stbevy");
+        request_go_live_confirmation(
+            &mut menu,
+            PendingTownStart::LoadGame {
+                source: source.clone(),
+            },
+        );
         app.insert_resource(menu)
             .init_resource::<MenuIoRequest>()
             .init_resource::<ButtonInput<KeyCode>>()
@@ -39132,6 +39616,10 @@ mod tests {
         assert_eq!(menu.page, MenuPage::Closed);
         assert_eq!(menu.pending_town_start, None);
         assert!(app.world().resource::<MenuIoRequest>().load);
+        assert_eq!(
+            app.world().resource::<MenuIoRequest>().load_source,
+            Some(source)
+        );
         assert!(app.world().contains_resource::<WorldLoadingCoverRuntime>());
         assert!(
             app.world()
@@ -41466,6 +41954,7 @@ mod tests {
             hair_color: 4,
             eye_color: 1,
             body_type: 2,
+            ..ActorCustomization::default()
         };
         assert!(cosmetic_node_visible(
             customization,
@@ -43808,6 +44297,45 @@ mod tests {
             ),
             3
         );
+
+        simulation.damage_building(&runtime_id, 25).unwrap();
+        let damaged_health = simulation.buildings[&runtime_id].health;
+        let (repair_goal, repair_target) = next_agent_goal(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &builder,
+            builder_position,
+        );
+        assert_eq!(repair_goal, AgentGoal::Construct(runtime_id.clone()));
+        assert_eq!(repair_target, builder_position);
+        assert!(
+            complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &config,
+                &content,
+                &builder,
+                &repair_goal,
+                builder_position,
+            )
+            .is_some()
+        );
+        assert!(simulation.buildings[&runtime_id].health > damaged_health);
+        while simulation.buildings[&runtime_id].health
+            < building_max_health(&content, &simulation.buildings[&runtime_id])
+        {
+            complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &config,
+                &content,
+                &builder,
+                &repair_goal,
+                builder_position,
+            );
+        }
 
         let (technology, authored_cap) = content
             .technology
@@ -46154,9 +46682,38 @@ mod tests {
         }
         assert_eq!(hud_play_time(0.0), "00:00");
         assert_eq!(hud_play_time(125.9), "02:05");
-        assert!(hud_season_meter_percent(0).abs() <= f32::EPSILON);
-        assert!((hud_season_meter_percent(7) - 24.0).abs() <= f32::EPSILON);
-        assert!(hud_season_meter_percent(28).abs() <= f32::EPSILON);
+        let seconds_per_day = 120;
+        assert!(hud_season_meter_percent(0.0, seconds_per_day).abs() <= f32::EPSILON);
+        assert!(
+            (hud_season_meter_percent(
+                f64::from(seconds_per_day * DAYS_PER_SEASON),
+                seconds_per_day,
+            ) - 24.0)
+                .abs()
+                <= f32::EPSILON
+        );
+        assert!(
+            hud_season_meter_percent(
+                f64::from(seconds_per_day * DAYS_PER_SEASON * SEASONS_PER_YEAR),
+                seconds_per_day,
+            )
+            .abs()
+                <= f32::EPSILON
+        );
+        assert_eq!(
+            season_visual_blend(
+                f64::from(seconds_per_day * DAYS_PER_SEASON),
+                seconds_per_day,
+                Season::Summer,
+            ),
+            (Season::Spring, Season::Summer, 0.0)
+        );
+        let (_, _, halfway) = season_visual_blend(
+            f64::from(seconds_per_day * DAYS_PER_SEASON) + SEASON_TRANSITION_SECONDS * 0.5,
+            seconds_per_day,
+            Season::Summer,
+        );
+        assert!((halfway - 0.5).abs() < 0.001);
 
         let content = embedded_content();
         let mut simulation = WorldSimulation::new(17);

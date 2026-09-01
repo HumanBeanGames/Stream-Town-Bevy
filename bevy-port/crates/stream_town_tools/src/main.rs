@@ -8460,6 +8460,7 @@ fn runtime_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.horizontal_wrapped(|ui| {
         for (label, action) in [
             ("Save", RuntimeConsoleAction::Save),
+            ("Save Jump-Start", RuntimeConsoleAction::SaveJumpStart),
             ("Load", RuntimeConsoleAction::Load),
             ("Capture frame", RuntimeConsoleAction::CaptureFrame),
             ("Main Menu", RuntimeConsoleAction::ReturnToMainMenu),

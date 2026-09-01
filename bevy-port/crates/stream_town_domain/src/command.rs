@@ -44,6 +44,9 @@ pub fn unity_command_usage(input: &str) -> Option<&'static str> {
         "body" => "!body <index>",
         "haircolor" => "!haircolor <index>",
         "eyecolor" => "!eyecolor <index>",
+        "light" | "lightcolor" | "lightcolour" => "!light <name|#RRGGBB>",
+        "namecolor" | "namecolour" => "!namecolor <name|#RRGGBB>",
+        "buildinglight" => "!buildinglight <BID> <name|#RRGGBB> (Ruler only)",
         "addresource" => "!addresource <resource> <amount>",
         "vote" => "!vote <option number>",
         "modrole" => "!modrole <player> <role>",
@@ -157,6 +160,12 @@ pub enum ChatCommand {
     Customize {
         kind: CustomizationKind,
         index: u8,
+    },
+    SetNightLight([u8; 3]),
+    SetNameColor([u8; 3]),
+    SetBuildingNightLight {
+        building: StableId,
+        color: [u8; 3],
     },
     Roles,
     TownStats,
@@ -275,6 +284,8 @@ pub enum CommandParseError {
     InvalidIndex,
     #[error("invalid camera direction {0}")]
     InvalidDirection(String),
+    #[error("invalid colour {0}; use a colour name or #RRGGBB")]
+    InvalidColor(String),
 }
 
 impl FromStr for ChatCommand {
@@ -490,6 +501,36 @@ impl FromStr for ChatCommand {
                 };
                 Ok(Self::Customize { kind, index })
             }
+            "light" | "lightcolor" | "lightcolour" | "namecolor" | "namecolour" => {
+                let value = parts
+                    .next()
+                    .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?;
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                let color = parse_chat_color(value)?;
+                if matches!(command.as_str(), "namecolor" | "namecolour") {
+                    Ok(Self::SetNameColor(color))
+                } else {
+                    Ok(Self::SetNightLight(color))
+                }
+            }
+            "buildinglight" => {
+                let building = content_id(
+                    parts
+                        .next()
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
+                )?;
+                let color = parse_chat_color(
+                    parts
+                        .next()
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
+                )?;
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                Ok(Self::SetBuildingNightLight { building, color })
+            }
             _ => {
                 let argument = parts.next();
                 if parts.next().is_some() {
@@ -585,6 +626,35 @@ fn parse_player_amount<'a>(
 fn content_id(value: &str) -> Result<StableId, CommandParseError> {
     StableId::new(value.to_ascii_lowercase().replace(' ', "_"))
         .map_err(|error| CommandParseError::InvalidId(error.to_string()))
+}
+
+fn parse_chat_color(value: &str) -> Result<[u8; 3], CommandParseError> {
+    let normalized = value.trim().to_ascii_lowercase();
+    let named = match normalized.as_str() {
+        "red" => Some([255, 64, 64]),
+        "orange" => Some([255, 144, 48]),
+        "yellow" => Some([255, 224, 72]),
+        "green" => Some([72, 224, 112]),
+        "cyan" | "aqua" => Some([64, 224, 255]),
+        "blue" => Some([72, 128, 255]),
+        "purple" | "violet" => Some([176, 96, 255]),
+        "pink" => Some([255, 112, 192]),
+        "white" => Some([255, 255, 255]),
+        "warmwhite" | "warm-white" => Some([255, 224, 176]),
+        _ => None,
+    };
+    if let Some(color) = named {
+        return Ok(color);
+    }
+    let hex = normalized.strip_prefix('#').unwrap_or(&normalized);
+    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(CommandParseError::InvalidColor(value.to_owned()));
+    }
+    let channel = |range| {
+        u8::from_str_radix(&hex[range], 16)
+            .map_err(|_| CommandParseError::InvalidColor(value.to_owned()))
+    };
+    Ok([channel(0..2)?, channel(2..4)?, channel(4..6)?])
 }
 
 fn no_argument(
@@ -916,6 +986,21 @@ mod tests {
             Ok(ChatCommand::Customize {
                 kind: CustomizationKind::Body,
                 index: 3,
+            })
+        );
+        assert_eq!(
+            "!light warmwhite".parse(),
+            Ok(ChatCommand::SetNightLight([255, 224, 176]))
+        );
+        assert_eq!(
+            "!namecolour #72C8FF".parse(),
+            Ok(ChatCommand::SetNameColor([0x72, 0xC8, 0xFF]))
+        );
+        assert_eq!(
+            "!buildinglight building:house:2 blue".parse(),
+            Ok(ChatCommand::SetBuildingNightLight {
+                building: StableId::new("building:house:2").unwrap(),
+                color: [72, 128, 255],
             })
         );
         assert_eq!("!rulervote".parse(), Ok(ChatCommand::StartRulerVote));
