@@ -43,6 +43,7 @@ masters as appropriate.
 | `!rdismiss <id>` | Dismiss a recruit. |
 | `!info <id> [building-id]` | Show authored information for content; a building ID selects one constructed instance. |
 | `!ping` | Show your character’s location marker. |
+| `!follow <username>` / `!follow me` | While the automatic camera director is active, follow that living player citizen for the current close-up shot. Anyone may use this without interrupting automatic camera mode. |
 | `!stdiscord` | Show the Stream Town community link. |
 | `!help` | Link to this command reference. |
 

@@ -886,6 +886,7 @@ struct CommandResponseRuntime<'w> {
 struct CameraRequest {
     reset: bool,
     actions: Vec<CameraAction>,
+    follow: Option<StableId>,
 }
 
 #[derive(Clone, Debug)]
@@ -3918,6 +3919,7 @@ impl Plugin for StreamTownGamePlugin {
                         .in_set(GameplaySimulationSet),
                     sync_active_pets.after(move_agents),
                     camera_zoom_and_commands
+                        .after(process_injected_commands)
                         .after(follow_animation_closeup_camera)
                         .after(follow_pet_closeup_camera)
                         .in_set(GameplaySimulationSet),
@@ -28417,45 +28419,74 @@ fn camera_zoom_and_commands(
     }
 
     if let Some(request) = requests.0.pop_front() {
-        controller.seconds_since_acknowledgement = 0.0;
-        controller.cancel_auto_camera();
-        if request.reset {
-            controller.return_home();
+        if let Some(citizen) = request.follow {
+            let valid_target = auto_camera_is_managed(&controller)
+                && is_stream_player_actor(&citizen)
+                && simulation.as_ref().is_some_and(|simulation| {
+                    simulation
+                        .0
+                        .actors
+                        .get(&citizen)
+                        .is_some_and(|actor| actor.alive && actor.kind == ActorKind::Player)
+                });
+            if valid_target
+                && let Some((_, citizen_transform)) =
+                    agents.iter().find(|(agent, _)| agent.id == citizen)
+            {
+                controller.auto_shot = AutoCameraShot::Citizen(citizen);
+                controller.auto_shot_elapsed_seconds = 0.0;
+                controller.move_target = constrain_town_camera_position(
+                    auto_camera_citizen_translation(
+                        &controller.home,
+                        citizen_transform.translation,
+                    ),
+                    &config.0.world,
+                );
+                controller.zoom_target_height = controller.move_target.y;
+            }
         } else {
-            for action in request.actions {
-                let amount = i16::try_from(action.amount.clamp(-100, 100)).map_or(0.0, f32::from);
-                match action.direction {
-                    CameraDirection::Up
-                    | CameraDirection::Down
-                    | CameraDirection::Left
-                    | CameraDirection::Right => {
-                        let screen = match action.direction {
-                            CameraDirection::Up => Vec2::Y,
-                            CameraDirection::Down => Vec2::NEG_Y,
-                            CameraDirection::Left => Vec2::NEG_X,
-                            CameraDirection::Right => Vec2::X,
-                            CameraDirection::In | CameraDirection::Out => unreachable!(),
-                        };
-                        let direction = unity_camera_world_direction(screen);
-                        controller.move_target += Vec3::new(direction.x, 0.0, direction.y)
-                            * amount
-                            * TWITCH_CAMERA_PAN_DISTANCE;
-                    }
-                    CameraDirection::In | CameraDirection::Out => {
-                        let signed = if action.direction == CameraDirection::In {
-                            -amount
-                        } else {
-                            amount
-                        };
-                        controller.zoom_target_height = (controller.zoom_target_height + signed)
-                            .clamp(UNITY_TOWN_CAMERA_MIN_HEIGHT, UNITY_TOWN_CAMERA_MAX_HEIGHT);
+            controller.seconds_since_acknowledgement = 0.0;
+            controller.cancel_auto_camera();
+            if request.reset {
+                controller.return_home();
+            } else {
+                for action in request.actions {
+                    let amount =
+                        i16::try_from(action.amount.clamp(-100, 100)).map_or(0.0, f32::from);
+                    match action.direction {
+                        CameraDirection::Up
+                        | CameraDirection::Down
+                        | CameraDirection::Left
+                        | CameraDirection::Right => {
+                            let screen = match action.direction {
+                                CameraDirection::Up => Vec2::Y,
+                                CameraDirection::Down => Vec2::NEG_Y,
+                                CameraDirection::Left => Vec2::NEG_X,
+                                CameraDirection::Right => Vec2::X,
+                                CameraDirection::In | CameraDirection::Out => unreachable!(),
+                            };
+                            let direction = unity_camera_world_direction(screen);
+                            controller.move_target += Vec3::new(direction.x, 0.0, direction.y)
+                                * amount
+                                * TWITCH_CAMERA_PAN_DISTANCE;
+                        }
+                        CameraDirection::In | CameraDirection::Out => {
+                            let signed = if action.direction == CameraDirection::In {
+                                -amount
+                            } else {
+                                amount
+                            };
+                            controller.zoom_target_height = (controller.zoom_target_height
+                                + signed)
+                                .clamp(UNITY_TOWN_CAMERA_MIN_HEIGHT, UNITY_TOWN_CAMERA_MAX_HEIGHT);
+                        }
                     }
                 }
             }
+            controller.move_target.y = controller.zoom_target_height;
+            controller.move_target =
+                constrain_town_camera_position(controller.move_target, &config.0.world);
         }
-        controller.move_target.y = controller.zoom_target_height;
-        controller.move_target =
-            constrain_town_camera_position(controller.move_target, &config.0.world);
     } else {
         let was_idle = controller.seconds_since_acknowledgement >= AUTO_CAMERA_IDLE_SECONDS;
         if !command_acknowledged {
@@ -28473,7 +28504,9 @@ fn camera_zoom_and_commands(
         if controller.seconds_since_acknowledgement >= AUTO_CAMERA_IDLE_SECONDS {
             let mut citizens = agents
                 .iter()
-                .filter(|(agent, _)| agent.kind == ActorKind::Player)
+                .filter(|(agent, _)| {
+                    agent.kind == ActorKind::Player && is_stream_player_actor(&agent.id)
+                })
                 .filter(|(agent, _)| {
                     simulation.as_ref().is_none_or(|simulation| {
                         simulation
@@ -33350,6 +33383,41 @@ fn resolve_player_id(simulation: &WorldSimulation, requested: &StableId) -> Opti
         .map(|actor| actor.id.clone())
 }
 
+fn resolve_auto_camera_follow_target(
+    simulation: &WorldSimulation,
+    caller: &StableId,
+    requested: Option<&StableId>,
+) -> Result<StableId, String> {
+    let target = requested.map_or_else(
+        || Some(caller.clone()),
+        |requested| resolve_player_id(simulation, requested),
+    );
+    let target = target.ok_or_else(|| {
+        format!(
+            "unknown player {}",
+            requested.map_or("me", StableId::as_str)
+        )
+    })?;
+    let actor = simulation
+        .actors
+        .get(&target)
+        .filter(|actor| actor.kind == ActorKind::Player && is_stream_player_actor(&actor.id))
+        .ok_or_else(|| "the follow camera can target only player citizens".to_owned())?;
+    if !actor.alive {
+        return Err(format!("{} is not currently alive", actor.id));
+    }
+    Ok(target)
+}
+
+fn auto_camera_is_managed(controller: &TownCameraControllerRuntime) -> bool {
+    controller.seconds_since_acknowledgement >= AUTO_CAMERA_IDLE_SECONDS
+        && controller.auto_shot != AutoCameraShot::Inactive
+}
+
+fn command_interrupts_auto_camera(command: &ChatCommand) -> bool {
+    !matches!(command, ChatCommand::Follow(_))
+}
+
 fn item_info(
     content: &ContentCatalog,
     simulation: &WorldSimulation,
@@ -33842,7 +33910,8 @@ fn unity_outbound_reply(
         )),
         ChatCommand::SetNightLight(_)
         | ChatCommand::SetNameColor(_)
-        | ChatCommand::SetBuildingNightLight { .. } => Some(format!("{display_name}: {message}")),
+        | ChatCommand::SetBuildingNightLight { .. }
+        | ChatCommand::Follow(_) => Some(format!("{display_name}: {message}")),
         ChatCommand::Pet(Some(_)) => Some(format!("{display_name} pet switched!")),
         ChatCommand::Buy { .. } | ChatCommand::Sell { .. } => {
             Some(format!("{display_name} : {message}"))
@@ -34085,6 +34154,7 @@ fn process_injected_commands(
     asset_root: Res<RuntimeAssetRoot>,
     save: Res<SaveRuntime>,
     selected: Res<SelectedCell>,
+    cameras: Query<&TownCameraControllerRuntime, With<TownCamera>>,
     mut response: CommandResponseRuntime,
     mut world: ResMut<WorldRuntime>,
     mut stats: ResMut<SessionStats>,
@@ -35010,6 +35080,7 @@ fn process_injected_commands(
                     queues.camera.0.push_back(CameraRequest {
                         reset: false,
                         actions: actions.clone(),
+                        follow: None,
                     });
                     Ok("camera request queued".to_owned())
                 }
@@ -35018,8 +35089,36 @@ fn process_injected_commands(
                     queues.camera.0.push_back(CameraRequest {
                         reset: true,
                         actions: Vec::new(),
+                        follow: None,
                     });
                     Ok("camera reset queued".to_owned())
+                }
+                ChatCommand::Follow(requested) => {
+                    let controller = cameras
+                        .single()
+                        .map_err(|_| "the town camera is unavailable".to_owned())?;
+                    if !auto_camera_is_managed(controller) {
+                        return Err(
+                            "!follow is available only while the automatic camera director is active"
+                                .to_owned(),
+                        );
+                    }
+                    let target = resolve_auto_camera_follow_target(
+                        &simulation.0,
+                        &actor_id,
+                        requested.as_ref(),
+                    )?;
+                    let name = simulation.0.actors[&target]
+                        .display_name
+                        .as_deref()
+                        .unwrap_or(target.as_str())
+                        .to_owned();
+                    queues.camera.0.push_back(CameraRequest {
+                        reset: false,
+                        actions: Vec::new(),
+                        follow: Some(target),
+                    });
+                    Ok(format!("automatic camera is now following {name}"))
                 }
                 ChatCommand::ModRole { player, role } => {
                     require_staff(&pending)?;
@@ -35533,7 +35632,9 @@ fn process_injected_commands(
             Err(error) => format!("command rejected: {error}"),
         };
         response.feedback.0 = format!("{}: {message}", pending.display_name);
-        response.acknowledgements.acknowledge();
+        if command_interrupts_auto_camera(&command) {
+            response.acknowledgements.acknowledge();
+        }
         if let Some(outbound) =
             unity_outbound_reply(&command, succeeded, &message, &pending.display_name)
         {
@@ -38093,6 +38194,7 @@ mod tests {
                     direction: CameraDirection::Up,
                     amount: 2,
                 }],
+                follow: None,
             }])))
             .add_systems(Update, camera_zoom_and_commands);
         let camera = app
@@ -38182,8 +38284,9 @@ mod tests {
             ))
             .id();
         for (id, position) in [
-            ("npc:auto_camera_a", GridPos { x: 30, z: 30 }),
-            ("npc:auto_camera_b", GridPos { x: 40, z: 42 }),
+            ("twitch:auto_camera_a", GridPos { x: 30, z: 30 }),
+            ("twitch:auto_camera_b", GridPos { x: 40, z: 42 }),
+            ("npc:auto_camera_recruit", GridPos { x: 35, z: 36 }),
         ] {
             app.world_mut().spawn((
                 Agent {
@@ -38229,6 +38332,11 @@ mod tests {
             .auto_shot
             .clone();
         assert!(matches!(first_citizen, AutoCameraShot::Citizen(_)));
+        assert!(!matches!(
+            first_citizen,
+            AutoCameraShot::Citizen(ref citizen)
+                if citizen.as_str() == "npc:auto_camera_recruit"
+        ));
 
         app.world_mut()
             .resource_mut::<Time>()
@@ -38242,6 +38350,11 @@ mod tests {
             .auto_shot
             .clone();
         assert!(matches!(second_citizen, AutoCameraShot::Citizen(_)));
+        assert!(!matches!(
+            second_citizen,
+            AutoCameraShot::Citizen(ref citizen)
+                if citizen.as_str() == "npc:auto_camera_recruit"
+        ));
         assert_ne!(second_citizen, first_citizen);
 
         for _ in 0..2 {
@@ -38290,6 +38403,110 @@ mod tests {
         assert!((translation + forward * distance).distance(focus) < 0.000_1);
         assert!((translation.y - 17.0).abs() < 0.000_1);
         assert!(translation.y < home.translation.y);
+    }
+
+    #[test]
+    fn follow_request_retargets_without_leaving_the_automatic_camera_director() {
+        let home = Transform::from_xyz(-33.5, 33.240_562, 0.0)
+            .looking_to(Vec3::new(1.0, -1.0, 0.0), Vec3::Y);
+        let target = StableId::new("twitch:camera_guest").unwrap();
+        let position = GridPos { x: 44, z: 38 };
+        let mut simulation = WorldSimulation::new(17);
+        assert!(simulation.join_player(target.clone(), position));
+        let mut controller = TownCameraControllerRuntime::new(home);
+        controller.seconds_since_acknowledgement = AUTO_CAMERA_IDLE_SECONDS;
+        controller.auto_shot = AutoCameraShot::Town;
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_millis(100));
+        let mut app = App::new();
+        app.insert_resource(time)
+            .insert_resource(RuntimeConfig(GameConfig::default()))
+            .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
+            .insert_resource(MenuRuntime::default())
+            .insert_resource(SimulationRuntime(simulation))
+            .init_resource::<CommandAcknowledgementRuntime>()
+            .insert_resource(CameraCommandQueue(VecDeque::from([CameraRequest {
+                reset: false,
+                actions: Vec::new(),
+                follow: Some(target.clone()),
+            }])))
+            .add_systems(Update, camera_zoom_and_commands);
+        let camera = app
+            .world_mut()
+            .spawn((
+                TownCamera,
+                home,
+                Projection::Perspective(PerspectiveProjection::default()),
+                controller,
+            ))
+            .id();
+        app.world_mut().spawn((
+            Agent {
+                id: target.clone(),
+                kind: ActorKind::Player,
+                archetype: StableId::new("archetype:player").unwrap(),
+                goal: AgentGoal::Wander,
+                spawn: position,
+                origin: position,
+                path: Vec::new(),
+                path_index: 0,
+                target: position,
+                action_cooldown_seconds: 0.0,
+                action_started: false,
+                repath_remaining_seconds: 0.0,
+                health_regen_accumulator: 0.0,
+                wander_sequence: 0,
+                previous_wander_origin: None,
+            },
+            Transform::from_xyz(12.0, 1.0, -8.0),
+        ));
+
+        app.update();
+
+        let controller = app
+            .world()
+            .entity(camera)
+            .get::<TownCameraControllerRuntime>()
+            .unwrap();
+        assert_eq!(
+            controller.auto_shot,
+            AutoCameraShot::Citizen(target.clone())
+        );
+        assert_eq!(
+            controller.seconds_since_acknowledgement,
+            AUTO_CAMERA_IDLE_SECONDS
+        );
+        assert!(!command_interrupts_auto_camera(&ChatCommand::Follow(Some(
+            target
+        ))));
+    }
+
+    #[test]
+    fn follow_target_resolution_accepts_twitch_names_and_rejects_npcs() {
+        let caller = StableId::new("twitch:caller").unwrap();
+        let viewer = StableId::new("twitch:some_viewer").unwrap();
+        let recruit = StableId::new("npc:recruit").unwrap();
+        let mut simulation = WorldSimulation::new(9);
+        for actor in [&caller, &viewer, &recruit] {
+            assert!(simulation.join_player(actor.clone(), GridPos { x: 1, z: 1 }));
+        }
+        simulation.actors.get_mut(&viewer).unwrap().display_name = Some("Some Viewer".to_owned());
+        simulation.actors.get_mut(&viewer).unwrap().login_name = Some("some_viewer".to_owned());
+
+        assert_eq!(
+            resolve_auto_camera_follow_target(&simulation, &caller, None).unwrap(),
+            caller
+        );
+        assert_eq!(
+            resolve_auto_camera_follow_target(
+                &simulation,
+                &caller,
+                Some(&StableId::new("some_viewer").unwrap()),
+            )
+            .unwrap(),
+            viewer
+        );
+        assert!(resolve_auto_camera_follow_target(&simulation, &caller, Some(&recruit)).is_err());
     }
 
     #[test]

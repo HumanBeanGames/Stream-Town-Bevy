@@ -64,6 +64,7 @@ pub fn unity_command_usage(input: &str) -> Option<&'static str> {
         "givepet" => "!givepet <player> <pet>",
         "pet" => "!pet <pet> (or !pet to list pets)",
         "cam" => "!cam <up|down|left|right|in|out> [amount] OR !cam home",
+        "follow" => "!follow <username|me>",
         "info" => "!info <resource|role|building|enemy> [id]",
         "rrole" => "!rrole <id> <role>",
         "rinfo" => "!rinfo <id>",
@@ -175,6 +176,7 @@ pub enum ChatCommand {
     },
     Camera(Vec<CameraAction>),
     ResetCamera,
+    Follow(Option<StableId>),
     ModRole {
         player: StableId,
         role: StableId,
@@ -427,6 +429,20 @@ impl FromStr for ChatCommand {
                     Ok(Self::ResetCamera)
                 } else {
                     parse_camera_actions(arguments.into_iter()).map(Self::Camera)
+                }
+            }
+            "follow" => {
+                let requested = parts
+                    .next()
+                    .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?;
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                if requested.eq_ignore_ascii_case("me") {
+                    Ok(Self::Follow(None))
+                } else {
+                    content_id(requested.trim_start_matches('@'))
+                        .map(|requested| Self::Follow(Some(requested)))
                 }
             }
             "info" => {
@@ -974,6 +990,13 @@ mod tests {
             ]))
         );
         assert_eq!("!cam home".parse(), Ok(ChatCommand::ResetCamera));
+        assert_eq!("!follow me".parse(), Ok(ChatCommand::Follow(None)));
+        assert_eq!(
+            "!follow @Some_Viewer".parse(),
+            Ok(ChatCommand::Follow(Some(
+                StableId::new("some_viewer").unwrap()
+            )))
+        );
         assert_eq!(
             "!info house 2".parse(),
             Ok(ChatCommand::Info {
