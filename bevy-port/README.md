@@ -431,7 +431,7 @@ the nearest matching generated node and exact target mask: trees, ore, bushes,
 and reachable shoreline fish no longer collapse into interchangeable resource
 targets. Farmers harvest the completed Farm's authored unlimited food holder,
 while Fishers approach invisible water targets from a walkable shore cell.
-World-generator schema 6 fingerprints these target identities, exact Unity
+World-generator schema 7 fingerprints these target identities, exact Unity
 source-space offsets, fish nodes, and generated-resource navigation occupancy.
 Every seed, including the shipping seed, is generated independently by the Bevy
 domain code. Its Unity-compatible path reproduces the seeded .NET random stream,
@@ -442,10 +442,13 @@ coordinates, and save placements are never generator inputs; output-only hashes
 can fail parity tests but cannot supply world data. Land nodes block their cell,
 workers act from the nearest walkable edge, and depletion clears the cell through
 a dirty-region update only after the last overlapping node is depleted.
-Every shipping generated resource starts at Unity's
-hard-coded 100 units (`SetByDistance` is false). Schema-1 through schema-3 native
-saves are hash-verified during load, preserve their existing depletion, and add
-newer world features without discarding saves.
+Generated trees now carry 500 units, while ore deposits and berry bushes carry
+10,000 units; shoreline fish retain the Unity-authored 100 units. When a native
+save from generator versions 1–6 is loaded, its remaining tree, ore, and bush
+stock is scaled once by the same 5x/100x multiplier. This preserves each node's
+depletion percentage, leaves depleted nodes depleted, and cannot compound after
+the upgraded save records generator version 7. Prior native saves remain
+hash-verified and gain newer world features without being discarded.
 Generated nodes also reproduce Unity's zero-assignment claim rule: deterministic
 stable-ID ordering gives each active node one worker, other workers fail over to
 the next compatible target, and claims release on depletion, death, role change,
@@ -470,7 +473,8 @@ add the authored level-scaled capacity; Houses add recruit slots. A capped
 deposit leaves overflow on the actor until spending or new construction creates
 space.
 Node depletion and carried inventories are part of native save/load state.
-Combat roles acquire a living target and path into authored range. Melee roles
+All seven combat roles—Defender, Necromancer, Paladin, Ranger, Ruler, Soldier,
+and Wizard—acquire a living enemy and path into authored range. Melee roles
 apply deterministic damage directly; Necromancer, Ranger, and Wizard attacks
 spawn visible homing ECS projectiles with distinct violet, converted-arrow, and
 orange fireball presentation. Towers share the converted Arrow GLB and Unity's
@@ -517,7 +521,11 @@ roles intercept enemies within Unity's 100-world-unit sensor region; attacks,
 projectiles, health, death, 60-second player revival, player-attributed kill
 objectives, and exact enemy gold rewards share the normal authoritative save
 state. Tower/environment kills intentionally do not grant player rewards or
-provoke retaliation, matching Unity's null attacker argument.
+provoke retaliation, matching Unity's null attacker argument. Regression
+coverage drives every combat role through production targeting, navigation,
+strike or projectile impact, and a lethal result; the reverse enemy-to-citizen
+lethal path and the Tower's authored target/projectile/impact path are covered
+independently.
 
 `!event raid` disables normal camp spawning and starts the Unity-authored
 five-wave Minotaur raid: each of the first four waves distributes 50 tracked

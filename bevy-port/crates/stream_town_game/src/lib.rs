@@ -2833,7 +2833,6 @@ struct FishSchoolParticle {
 
 #[derive(Component)]
 struct TowerShooter {
-    building: StableId,
     cooldown_seconds: f32,
 }
 
@@ -19176,6 +19175,22 @@ fn resource_cell_has_active_generation_occupant(
     })
 }
 
+fn upgraded_resource_remaining(
+    saved_generator_version: u32,
+    resource: &stream_town_domain::GeneratedResource,
+    remaining: u32,
+) -> u32 {
+    if saved_generator_version >= 7 {
+        return remaining;
+    }
+    let multiplier = match resource.target_kind.as_str() {
+        "target:tree" => 5,
+        "target:ore" | "target:bush" => 100,
+        _ => 1,
+    };
+    remaining.saturating_mul(multiplier)
+}
+
 fn apply_combat_damage(
     config: &GameConfig,
     simulation: &mut WorldSimulation,
@@ -19240,6 +19255,27 @@ fn apply_combat_damage(
         );
     }
     Ok(killed)
+}
+
+fn resolve_combat_projectile_impact(
+    config: &GameConfig,
+    simulation: &mut WorldSimulation,
+    content: &ContentCatalog,
+    projectile: &CombatProjectile,
+) -> Result<bool, stream_town_domain::SimulationError> {
+    apply_combat_damage(
+        config,
+        simulation,
+        content,
+        match &projectile.source {
+            ProjectileSource::Actor(actor) => Some(actor),
+            // Unity tower projectiles call TakeDamage with a null Targetable,
+            // so they neither provoke retaliation nor count as player kills.
+            ProjectileSource::Building(_) => None,
+        },
+        &projectile.target,
+        projectile.damage,
+    )
 }
 
 fn enemy_retaliation_target_is_valid(
@@ -20187,19 +20223,11 @@ fn move_combat_projectiles(
         let delta = target_position - transform.translation;
         let step = projectile.speed_cells_per_second * config.0.world.cell_size * time.delta_secs();
         if delta.length_squared() <= step.max(0.1).powi(2) {
-            if let Err(error) = apply_combat_damage(
+            if let Err(error) = resolve_combat_projectile_impact(
                 &config.0,
                 &mut simulation.0,
                 &content.0,
-                match &projectile.source {
-                    ProjectileSource::Actor(actor) => Some(actor),
-                    // Unity tower projectiles call TakeDamage with a null
-                    // Targetable, so they neither provoke retaliation nor
-                    // count as player kills for rewards/objectives.
-                    ProjectileSource::Building(_) => None,
-                },
-                &projectile.target,
-                projectile.damage,
+                &projectile,
             ) {
                 warn!(target = %projectile.target, %error, "projectile impact failed");
             }
@@ -20888,6 +20916,35 @@ fn best_tower_target(
         })
 }
 
+fn tower_projectile_for_building(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    building_id: &StableId,
+) -> Option<(ProjectileSpawn, f32)> {
+    let state = simulation
+        .buildings
+        .get(building_id)
+        .filter(|building| building.complete && building.health > 0)?;
+    let definition = building_def_for_archetype(content, &state.archetype)?;
+    let shooter = definition.projectile_shooter.as_ref()?;
+    let footprint = rotated_footprint(definition.footprint, state.rotation_quarter_turns);
+    let centre = GridPos {
+        x: state.position.x.saturating_add(footprint[0] / 2),
+        z: state.position.z.saturating_add(footprint[1] / 2),
+    };
+    let target = best_tower_target(simulation, centre, shooter.range_milli_cells)?;
+    Some((
+        ProjectileSpawn {
+            source: ProjectileSource::Building(building_id.clone()),
+            target: target.id.clone(),
+            damage: shooter.damage,
+            speed_cells_per_second: milli_units_as_f32(shooter.movement_milli_cells_per_second),
+            visual: CombatVisualKind::Arrow,
+        },
+        milli_units_as_f32(shooter.fire_milliseconds),
+    ))
+}
+
 fn update_tower_shooters(
     mut commands: Commands,
     time: Res<Time>,
@@ -20899,28 +20956,11 @@ fn update_tower_shooters(
 ) {
     for (runtime, transform, mut tower) in &mut towers {
         tower.cooldown_seconds = (tower.cooldown_seconds - time.delta_secs()).max(0.0);
-        let Some(state) = simulation.0.buildings.get(&runtime.id) else {
-            continue;
-        };
-        if !state.complete || tower.cooldown_seconds > f32::EPSILON {
+        if tower.cooldown_seconds > f32::EPSILON {
             continue;
         }
-        let Some((definition, shooter)) = building_def_for_archetype(&content.0, &state.archetype)
-            .and_then(|definition| {
-                definition
-                    .projectile_shooter
-                    .as_ref()
-                    .map(|shooter| (definition, shooter))
-            })
-        else {
-            continue;
-        };
-        let footprint = rotated_footprint(definition.footprint, state.rotation_quarter_turns);
-        let centre = GridPos {
-            x: state.position.x.saturating_add(footprint[0] / 2),
-            z: state.position.z.saturating_add(footprint[1] / 2),
-        };
-        let Some(target) = best_tower_target(&simulation.0, centre, shooter.range_milli_cells)
+        let Some((projectile, cooldown_seconds)) =
+            tower_projectile_for_building(&content.0, &simulation.0, &runtime.id)
         else {
             continue;
         };
@@ -20929,15 +20969,9 @@ fn update_tower_shooters(
             &render,
             &config.0,
             transform.translation + Vec3::Y * config.0.world.cell_size * 0.5,
-            ProjectileSpawn {
-                source: ProjectileSource::Building(tower.building.clone()),
-                target: target.id.clone(),
-                damage: shooter.damage,
-                speed_cells_per_second: milli_units_as_f32(shooter.movement_milli_cells_per_second),
-                visual: CombatVisualKind::Arrow,
-            },
+            projectile,
         );
-        tower.cooldown_seconds = milli_units_as_f32(shooter.fire_milliseconds);
+        tower.cooldown_seconds = cooldown_seconds;
     }
 }
 
@@ -29526,6 +29560,7 @@ fn load_input(
     let mut restored_config = config.0.clone();
     restored_config.world.seed = snapshot.world_seed;
     let mut restored_world = generate_world_with_content(&restored_config.world, &content.0);
+    let saved_generator_version = snapshot.generator_version;
     let compatibility = native_world_compatibility(
         snapshot.world_seed,
         snapshot.generator_version,
@@ -29556,7 +29591,7 @@ fn load_input(
         info!(
             saved_generator_version = snapshot.generator_version,
             runtime_generator_version = restored_world.generator_version,
-            "upgrading native save world fingerprint; new typed resources start at full stock"
+            "upgrading native save world fingerprint and proportionally migrating resource stock"
         );
         snapshot.generator_version = restored_world.generator_version;
         snapshot
@@ -29568,8 +29603,9 @@ fn load_input(
         let mut depleted_land = Vec::new();
         for resource in &mut restored_world.resources {
             if let Some(remaining) = snapshot.resource_nodes.get(&resource.id) {
-                resource.amount = *remaining;
-                if *remaining == 0 && resource.target_kind.as_str() != "target:fish" {
+                resource.amount =
+                    upgraded_resource_remaining(saved_generator_version, resource, *remaining);
+                if resource.amount == 0 && resource.target_kind.as_str() != "target:fish" {
                     depleted_land.push(resource.position);
                 }
             }
@@ -31603,7 +31639,6 @@ fn spawn_runtime_building(
     ));
     if definition.projectile_shooter.is_some() {
         entity.insert(TowerShooter {
-            building: building.id.clone(),
             cooldown_seconds: definition
                 .projectile_shooter
                 .as_ref()
@@ -40261,6 +40296,10 @@ mod tests {
             Some(NativeWorldCompatibility::RegeneratePrior)
         );
         assert_eq!(
+            native_world_compatibility(world.seed, 6, "validated-v6-fingerprint", &world),
+            Some(NativeWorldCompatibility::RegeneratePrior)
+        );
+        assert_eq!(
             native_world_compatibility(
                 world.seed.wrapping_add(1),
                 world.generator_version,
@@ -40269,6 +40308,34 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn prior_native_resource_stock_scales_once_for_long_lived_land_nodes() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world_with_content(&config.world, &content);
+        for resource in &world.resources {
+            let expected = match resource.target_kind.as_str() {
+                "target:tree" => 500,
+                "target:ore" | "target:bush" => 10_000,
+                "target:fish" => 100,
+                kind => panic!("unexpected resource target {kind}"),
+            };
+            assert_eq!(
+                upgraded_resource_remaining(6, resource, 100),
+                expected,
+                "{} should be upgraded from a version-6 save",
+                resource.target_kind
+            );
+            assert_eq!(
+                upgraded_resource_remaining(7, resource, expected),
+                expected,
+                "{} must not be upgraded twice",
+                resource.target_kind
+            );
+            assert_eq!(upgraded_resource_remaining(6, resource, 0), 0);
+        }
     }
 
     #[test]
@@ -41117,6 +41184,219 @@ mod tests {
             (action_cooldown(&content, &simulation, &defender, &goal) - expected_cooldown).abs()
                 <= f32::EPSILON
         );
+    }
+
+    #[test]
+    fn every_combat_role_paths_to_strikes_and_kills_an_enemy() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world_with_content(&config.world, &content);
+        let (start, target) = (0..world.navigation.height())
+            .find_map(|z| {
+                (0..world.navigation.width()).find_map(|x| {
+                    let start = GridPos { x, z };
+                    if !world.navigation.is_walkable(start) {
+                        return None;
+                    }
+                    (7..=12).find_map(|offset| {
+                        let target = GridPos {
+                            x: x.checked_add(offset)?,
+                            z,
+                        };
+                        (target.x < world.navigation.width()
+                            && world.navigation.is_walkable(target))
+                        .then(|| world.navigation.find_path(start, target).ok())
+                        .flatten()
+                        .filter(|path| path.len() > 2)
+                        .map(|_| (start, target))
+                    })
+                })
+            })
+            .expect("generated world has a combat route");
+        let goblin =
+            archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_Goblin.prefab").unwrap();
+
+        for role_name in [
+            "role:defender",
+            "role:necromancer",
+            "role:paladin",
+            "role:ranger",
+            "role:ruler",
+            "role:soldier",
+            "role:wizard",
+        ] {
+            let role = StableId::new(role_name).unwrap();
+            let attacker =
+                StableId::new(format!("npc:pathing_{}", role_name.replace(':', "_"))).unwrap();
+            let enemy =
+                StableId::new(format!("actor:target_{}", role_name.replace(':', "_"))).unwrap();
+            let mut simulation = WorldSimulation::new(world.seed);
+            assert!(simulation.join_player(attacker.clone(), start));
+            simulation.assign_role(&attacker, role).unwrap();
+            let damage = effective_role_stats(&content, &simulation, &simulation.actors[&attacker])
+                .unwrap()
+                .action_amount;
+            assert!(damage > 0, "{role_name} has no attack damage");
+            assert!(simulation.spawn_enemy(
+                enemy.clone(),
+                goblin.clone(),
+                target,
+                i32::try_from(damage).unwrap(),
+            ));
+
+            let (goal, destination) =
+                next_agent_goal(&simulation, &world, &config, &content, &attacker, start);
+            assert_eq!(goal, AgentGoal::Attack(enemy.clone()), "{role_name}");
+            assert_ne!(destination, start, "{role_name} never requested a path");
+            let routed = try_agent_path(
+                &world.navigation,
+                &content,
+                &simulation,
+                &ActorKind::Player,
+                start,
+                destination,
+            )
+            .unwrap_or_else(|| panic!("{role_name} could not route to its enemy"));
+            assert!(routed.len() > 1, "{role_name} produced an empty route");
+            assert_eq!(routed.last(), Some(&destination), "{role_name}");
+            simulation.actors.get_mut(&attacker).unwrap().position = destination;
+
+            let presentation = complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &config,
+                &content,
+                &attacker,
+                &goal,
+                destination,
+            )
+            .unwrap_or_else(|| panic!("{role_name} did not execute its attack"));
+            if let ActionPresentation::Projectile(spawn) = presentation {
+                let projectile = CombatProjectile {
+                    source: spawn.source,
+                    target: spawn.target,
+                    damage: spawn.damage,
+                    speed_cells_per_second: spawn.speed_cells_per_second,
+                    visual: spawn.visual,
+                    trail_cooldown_seconds: 0.0,
+                };
+                resolve_combat_projectile_impact(&config, &mut simulation, &content, &projectile)
+                    .unwrap();
+            }
+            assert!(!simulation.actors[&enemy].alive, "{role_name} did not kill");
+            assert_eq!(simulation.actors[&enemy].health, 0, "{role_name}");
+        }
+    }
+
+    #[test]
+    fn enemy_attacks_can_kill_citizens() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world_with_content(&config.world, &content);
+        let (enemy_position, citizen_position) = (0..world.navigation.height())
+            .find_map(|z| {
+                (0..world.navigation.width().saturating_sub(1)).find_map(|x| {
+                    let enemy = GridPos { x, z };
+                    let citizen = GridPos { x: x + 1, z };
+                    (world.navigation.is_walkable(enemy) && world.navigation.is_walkable(citizen))
+                        .then_some((enemy, citizen))
+                })
+            })
+            .unwrap();
+        let blargul =
+            archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_Blargul.prefab").unwrap();
+        let damage = content.archetypes[&blargul]
+            .enemy
+            .as_ref()
+            .unwrap()
+            .action_amount;
+        let enemy = StableId::new("actor:citizen_killer").unwrap();
+        let citizen = StableId::new("npc:citizen_victim").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        assert!(simulation.spawn_enemy(enemy.clone(), blargul, enemy_position, 100));
+        assert!(simulation.join_player(citizen.clone(), citizen_position));
+        simulation.actors.get_mut(&citizen).unwrap().health = i32::try_from(damage).unwrap();
+        simulation.actors.get_mut(&citizen).unwrap().max_health = i32::try_from(damage).unwrap();
+
+        let (goal, destination) = next_agent_goal(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &enemy,
+            enemy_position,
+        );
+        assert_eq!(goal, AgentGoal::Attack(citizen.clone()));
+        assert_eq!(destination, enemy_position);
+        assert!(
+            complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &config,
+                &content,
+                &enemy,
+                &goal,
+                enemy_position,
+            )
+            .is_some()
+        );
+        assert!(!simulation.actors[&citizen].alive);
+        assert_eq!(simulation.actors[&citizen].health, 0);
+    }
+
+    #[test]
+    fn tower_projectile_selects_hits_and_kills_an_enemy() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let tower_definition_id = StableId::new("building:tower").unwrap();
+        let tower_definition = &content.buildings[&tower_definition_id];
+        let shooter = tower_definition.projectile_shooter.as_ref().unwrap();
+        let tower = StableId::new("building:tower_projectile_test").unwrap();
+        let enemy = StableId::new("actor:tower_target").unwrap();
+        let goblin =
+            archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_Goblin.prefab").unwrap();
+        let mut simulation = WorldSimulation::new(42);
+        simulation.buildings.insert(
+            tower.clone(),
+            BuildingState {
+                id: tower.clone(),
+                archetype: tower_definition.archetype.clone(),
+                position: GridPos { x: 20, z: 20 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: i32::try_from(building_base_max_health(&content, tower_definition))
+                    .unwrap(),
+                complete: true,
+            },
+        );
+        assert!(simulation.spawn_enemy(
+            enemy.clone(),
+            goblin,
+            GridPos { x: 23, z: 20 },
+            i32::try_from(shooter.damage).unwrap(),
+        ));
+
+        let (spawn, cooldown) =
+            tower_projectile_for_building(&content, &simulation, &tower).unwrap();
+        assert!(matches!(spawn.source, ProjectileSource::Building(ref id) if id == &tower));
+        assert_eq!(spawn.target, enemy);
+        assert_eq!(spawn.damage, shooter.damage);
+        assert!((spawn.speed_cells_per_second - 15.0).abs() <= f32::EPSILON);
+        assert!((cooldown - 3.0).abs() <= f32::EPSILON);
+        let projectile = CombatProjectile {
+            source: spawn.source,
+            target: spawn.target,
+            damage: spawn.damage,
+            speed_cells_per_second: spawn.speed_cells_per_second,
+            visual: spawn.visual,
+            trail_cooldown_seconds: 0.0,
+        };
+        assert!(
+            resolve_combat_projectile_impact(&config, &mut simulation, &content, &projectile,)
+                .unwrap()
+        );
+        assert!(!simulation.actors[&enemy].alive);
+        assert_eq!(simulation.actors[&enemy].health, 0);
     }
 
     #[test]
@@ -42108,6 +42388,138 @@ mod tests {
             simulation.buildings[&runtime_id].health,
             building_max_health(&content, &simulation.buildings[&runtime_id]) - 7
         );
+    }
+
+    #[test]
+    fn completed_technology_goal_unlocks_and_pays_for_a_building_upgrade() {
+        let content = embedded_content();
+        let mut simulation = WorldSimulation::new(42);
+        simulation.unlocked_technology.extend(
+            content
+                .technology
+                .nodes
+                .iter()
+                .filter(|(_, node)| node.initially_unlocked)
+                .map(|(id, _)| id.clone()),
+        );
+        let (technology, node, building_id) = content
+            .technology
+            .nodes
+            .iter()
+            .find_map(|(technology, node)| {
+                if node.initially_unlocked {
+                    return None;
+                }
+                node.building_level_caps
+                    .iter()
+                    .find(|(building, cap)| {
+                        **cap >= 2
+                            && content.buildings[*building].can_level
+                            && !node.objectives.is_empty()
+                    })
+                    .map(|(building, _)| (technology.clone(), node.clone(), building.clone()))
+            })
+            .expect("converted technology contains an objective-backed building level unlock");
+        simulation
+            .unlocked_technology
+            .extend(node.prerequisites.iter().cloned());
+        assert!(simulation.start_technology_goal(
+            technology.clone(),
+            &node.objectives,
+            &content.objectives,
+            MAX_TOWN_GOALS,
+        ));
+        assert!(!simulation.unlocked_technology.contains(&technology));
+
+        for objective_id in &node.objectives {
+            let objective = &content.objectives[objective_id];
+            let event = match objective.kind {
+                ObjectiveKind::Build => {
+                    ObjectiveEvent::BuildingBuilt(objective.building.clone().unwrap())
+                }
+                ObjectiveKind::BuildAny => ObjectiveEvent::BuildingBuilt(building_id.clone()),
+                ObjectiveKind::Collect | ObjectiveKind::EarnPerHour => {
+                    ObjectiveEvent::ResourceGained {
+                        resource: objective.resource.clone().unwrap(),
+                        amount: objective.required_amount,
+                    }
+                }
+                ObjectiveKind::Kill => {
+                    ObjectiveEvent::EnemyKilled(objective.enemy.clone().unwrap())
+                }
+                ObjectiveKind::KillAny => {
+                    ObjectiveEvent::EnemyKilled(StableId::new("enemy:technology_test").unwrap())
+                }
+                ObjectiveKind::Sell => ObjectiveEvent::ResourceSold {
+                    resource: objective.resource.clone().unwrap(),
+                    amount: objective.required_amount,
+                },
+                ObjectiveKind::SellAny => ObjectiveEvent::ResourceSold {
+                    resource: StableId::new("resource:technology_test").unwrap(),
+                    amount: objective.required_amount,
+                },
+                ObjectiveKind::Buy => ObjectiveEvent::ResourceBought {
+                    resource: objective.resource.clone().unwrap(),
+                    amount: objective.required_amount,
+                },
+                ObjectiveKind::BuyAny => ObjectiveEvent::ResourceBought {
+                    resource: StableId::new("resource:technology_test").unwrap(),
+                    amount: objective.required_amount,
+                },
+            };
+            let repetitions = match objective.kind {
+                ObjectiveKind::Build
+                | ObjectiveKind::BuildAny
+                | ObjectiveKind::Kill
+                | ObjectiveKind::KillAny => objective.required_amount,
+                ObjectiveKind::Collect
+                | ObjectiveKind::EarnPerHour
+                | ObjectiveKind::Sell
+                | ObjectiveKind::SellAny
+                | ObjectiveKind::Buy
+                | ObjectiveKind::BuyAny => 1,
+            };
+            for _ in 0..repetitions {
+                let _ = simulation.record_objective_event(&content.objectives, &event);
+            }
+        }
+        assert!(simulation.unlocked_technology.contains(&technology));
+        assert!(simulation.active_goals.is_empty());
+        assert!(maximum_building_level(&content, &simulation, &building_id) >= 2);
+
+        let definition = &content.buildings[&building_id];
+        let runtime_id = StableId::new("building:technology_upgrade_test").unwrap();
+        for resource in definition.level_cost.keys() {
+            simulation
+                .town_resources
+                .insert(resource.clone(), 1_000_000);
+        }
+        simulation.buildings.insert(
+            runtime_id.clone(),
+            BuildingState {
+                id: runtime_id.clone(),
+                archetype: definition.archetype.clone(),
+                position: GridPos { x: 10, z: 10 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: i32::try_from(building_base_max_health(&content, definition)).unwrap(),
+                complete: true,
+            },
+        );
+        let expected_cost =
+            building_upgrade_cost(&content, &simulation, &building_id, definition, 1);
+        let before = simulation.town_resources.clone();
+        assert_eq!(
+            upgrade_building_instance(&content, &mut simulation, &building_id, &runtime_id)
+                .unwrap(),
+            2
+        );
+        for (resource, amount) in expected_cost {
+            assert_eq!(
+                simulation.town_resources[&resource],
+                before[&resource] - amount
+            );
+        }
     }
 
     #[test]

@@ -111,7 +111,10 @@ fn generate_world_from_layers(
     foliage_layers: &[FoliageLayerDef],
     completed: &mut impl FnMut(WorldGenerationStage),
 ) -> GeneratedWorld {
-    const GENERATOR_VERSION: u32 = 6;
+    // Version 7 increases authored land-resource stock without changing
+    // terrain, placement, or stable IDs. Native version-6 saves are upgraded
+    // proportionally by the game runtime.
+    const GENERATOR_VERSION: u32 = 7;
     let cell_count = usize::from(config.width) * usize::from(config.height);
     let terrain_seed = u32::try_from(config.seed & u64::from(u32::MAX))
         .expect("masked terrain seed fits u32")
@@ -1298,25 +1301,29 @@ mod tests {
     fn generated_resources_preserve_unity_target_types_and_reachable_fish() {
         let config = GameConfig::default().world;
         let world = generate_world(&config);
-        assert_eq!(world.generator_version, 6);
+        assert_eq!(world.generator_version, 7);
         assert_ne!(legacy_v1_world_hash(&world), world.deterministic_hash);
         assert_ne!(legacy_v2_world_hash(&world), world.deterministic_hash);
         assert_ne!(legacy_v3_world_hash(&world), world.deterministic_hash);
-        assert!(
-            world
-                .resources
-                .iter()
-                .all(|resource| resource.amount == 100)
-        );
         for resource in &world.resources {
-            match resource.kind.as_str() {
-                "resource:wood" => assert_eq!(resource.target_kind.as_str(), "target:tree"),
-                "resource:ore" => assert_eq!(resource.target_kind.as_str(), "target:ore"),
-                "resource:food" => assert!(matches!(
-                    resource.target_kind.as_str(),
-                    "target:bush" | "target:fish"
-                )),
-                kind => panic!("unexpected generated resource kind {kind}"),
+            match resource.target_kind.as_str() {
+                "target:tree" => {
+                    assert_eq!(resource.kind.as_str(), "resource:wood");
+                    assert_eq!(resource.amount, 500);
+                }
+                "target:ore" => {
+                    assert_eq!(resource.kind.as_str(), "resource:ore");
+                    assert_eq!(resource.amount, 10_000);
+                }
+                "target:bush" => {
+                    assert_eq!(resource.kind.as_str(), "resource:food");
+                    assert_eq!(resource.amount, 10_000);
+                }
+                "target:fish" => {
+                    assert_eq!(resource.kind.as_str(), "resource:food");
+                    assert_eq!(resource.amount, 100);
+                }
+                kind => panic!("unexpected generated resource target {kind}"),
             }
         }
         let fish: Vec<_> = world
