@@ -1047,9 +1047,9 @@ struct PointerObjectSelectionEnabled;
 
 #[derive(Resource, Default)]
 struct EnvironmentPresentation {
-    applied_environment: Option<(Season, Weather)>,
-    applied_daylight_bits: Option<u32>,
-    applied_season_blend_bits: Option<u32>,
+    environment: Option<(Season, Weather)>,
+    daylight_bits: Option<u32>,
+    season_blend_bits: Option<u32>,
 }
 
 #[derive(Resource, Default)]
@@ -5161,11 +5161,7 @@ fn sync_authored_post_processing(
     };
     let daylight = if *state.get() == GameState::InGame {
         simulation.as_deref().map_or_else(
-            || {
-                environment
-                    .applied_daylight_bits
-                    .map_or(1.0, f32::from_bits)
-            },
+            || environment.daylight_bits.map_or(1.0, f32::from_bits),
             |simulation| {
                 config
                     .0
@@ -19936,9 +19932,7 @@ fn complete_agent_goal(
         }
         AgentGoal::Construct(building_id) => {
             let builder = simulation.actors.get(actor_id)?;
-            let Some(building_before) = simulation.buildings.get(building_id) else {
-                return None;
-            };
+            let building_before = simulation.buildings.get(building_id)?;
             let was_complete = building_before.complete;
             let needs_work = if was_complete {
                 building_before.health < building_max_health(content, building_before)
@@ -22162,13 +22156,22 @@ fn rotate_agent_toward_action(
             .resources
             .iter()
             .find(|resource| resource.id == *resource_id && resource.amount > 0)
-            .map(|resource| {
-                let position = generated_resource_world_position(resource, config, world);
-                resource_visual_archetype(content, &resource.kind).map_or(position, |archetype| {
-                    centred_resource_visual_position(position, archetype, config.world.cell_size)
-                })
-            })
-            .unwrap_or_else(|| grid_to_world_on_surface(facing_grid, config, world))
+            .map_or_else(
+                || grid_to_world_on_surface(facing_grid, config, world),
+                |resource| {
+                    let position = generated_resource_world_position(resource, config, world);
+                    resource_visual_archetype(content, &resource.kind).map_or(
+                        position,
+                        |archetype| {
+                            centred_resource_visual_position(
+                                position,
+                                archetype,
+                                config.world.cell_size,
+                            )
+                        },
+                    )
+                },
+            )
     } else {
         grid_to_world_on_surface(facing_grid, config, world)
     };
@@ -23956,9 +23959,9 @@ fn update_environment_presentation(
     ));
     let daylight_bits = daylight_signature(daylight);
     let season_blend_bits = daylight_signature(season_blend);
-    let environment_changed = presentation.applied_environment != Some(environment);
-    let daylight_changed = presentation.applied_daylight_bits != Some(daylight_bits);
-    let season_visual_changed = presentation.applied_season_blend_bits != Some(season_blend_bits);
+    let environment_changed = presentation.environment != Some(environment);
+    let daylight_changed = presentation.daylight_bits != Some(daylight_bits);
+    let season_visual_changed = presentation.season_blend_bits != Some(season_blend_bits);
     if !environment_changed && !daylight_changed && !season_visual_changed {
         return;
     }
@@ -24088,9 +24091,9 @@ fn update_environment_presentation(
             "environment presentation updated"
         );
     }
-    presentation.applied_environment = Some(environment);
-    presentation.applied_daylight_bits = Some(daylight_bits);
-    presentation.applied_season_blend_bits = Some(season_blend_bits);
+    presentation.environment = Some(environment);
+    presentation.daylight_bits = Some(daylight_bits);
+    presentation.season_blend_bits = Some(season_blend_bits);
 }
 
 fn previous_season(season: Season) -> Season {
@@ -28427,7 +28430,7 @@ fn camera_zoom_and_commands(
                         .0
                         .actors
                         .get(&citizen)
-                        .is_some_and(|actor| actor.alive && actor.kind == ActorKind::Player)
+                        .is_some_and(|actor| actor.alive && is_stream_player_actor(&actor.id))
                 });
             if valid_target
                 && let Some((_, citizen_transform)) =
@@ -30991,7 +30994,7 @@ fn load_input(
     *automatic_complete = true;
     let source_store = requested_source.as_ref().map_or_else(
         || NativeSaveStore::new(save.store.path()),
-        |source| NativeSaveStore::new(source),
+        NativeSaveStore::new,
     );
     let source_path = source_store.path().to_path_buf();
     let mut snapshot = match source_store.load() {
@@ -33401,7 +33404,7 @@ fn resolve_auto_camera_follow_target(
     let actor = simulation
         .actors
         .get(&target)
-        .filter(|actor| actor.kind == ActorKind::Player && is_stream_player_actor(&actor.id))
+        .filter(|actor| is_stream_player_actor(&actor.id))
         .ok_or_else(|| "the follow camera can target only player citizens".to_owned())?;
     if !actor.alive {
         return Err(format!("{} is not currently alive", actor.id));
@@ -33908,10 +33911,6 @@ fn unity_outbound_reply(
                 CustomizationKind::EyeColor => "Eye Color Changed!",
             }
         )),
-        ChatCommand::SetNightLight(_)
-        | ChatCommand::SetNameColor(_)
-        | ChatCommand::SetBuildingNightLight { .. }
-        | ChatCommand::Follow(_) => Some(format!("{display_name}: {message}")),
         ChatCommand::Pet(Some(_)) => Some(format!("{display_name} pet switched!")),
         ChatCommand::Buy { .. } | ChatCommand::Sell { .. } => {
             Some(format!("{display_name} : {message}"))
@@ -38472,9 +38471,9 @@ mod tests {
             controller.auto_shot,
             AutoCameraShot::Citizen(target.clone())
         );
-        assert_eq!(
-            controller.seconds_since_acknowledgement,
-            AUTO_CAMERA_IDLE_SECONDS
+        assert!(
+            (controller.seconds_since_acknowledgement - AUTO_CAMERA_IDLE_SECONDS).abs()
+                <= f32::EPSILON
         );
         assert!(!command_interrupts_auto_camera(&ChatCommand::Follow(Some(
             target
@@ -44766,7 +44765,7 @@ mod tests {
     }
 
     #[test]
-    fn final_construction_tick_matches_unitys_non_successful_state_exit() {
+    fn final_construction_tick_and_builder_repair_preserve_experience_contract() {
         let config = GameConfig::default();
         let content = embedded_content();
         let mut world = generate_world(&config.world);
@@ -44816,18 +44815,27 @@ mod tests {
 
         simulation.damage_building(&runtime_id, 1).unwrap();
         let damaged_health = simulation.buildings[&runtime_id].health;
+        let experience_before_repair = role_progress(&simulation.actors[&builder]).experience;
         let (goal, _) = next_agent_goal(&simulation, &world, &config, &content, &builder, position);
-        assert_ne!(goal, AgentGoal::Construct(runtime_id.clone()));
-        complete_agent_goal(
-            &mut simulation,
-            &mut world,
-            &config,
-            &content,
-            &builder,
-            &AgentGoal::Construct(runtime_id.clone()),
-            position,
+        assert_eq!(goal, AgentGoal::Construct(runtime_id.clone()));
+        assert!(
+            complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &config,
+                &content,
+                &builder,
+                &AgentGoal::Construct(runtime_id.clone()),
+                position,
+            )
+            .is_some()
         );
-        assert_eq!(simulation.buildings[&runtime_id].health, damaged_health);
+        assert!(simulation.buildings[&runtime_id].health > damaged_health);
+        assert_eq!(
+            role_progress(&simulation.actors[&builder]).experience,
+            experience_before_repair,
+            "repairs do not award construction experience"
+        );
     }
 
     #[test]
@@ -47049,9 +47057,13 @@ mod tests {
             .world_mut()
             .query_filtered::<&Node, With<HudMetricRow>>();
         let rows = rows.iter(app.world()).collect::<Vec<_>>();
-        assert_eq!(rows.len(), 7);
+        assert_eq!(rows.len(), 8);
         assert!(rows.iter().all(|row| row.align_items == AlignItems::Center));
         assert!(rows.iter().all(|row| row.height == px(44)));
+        let mut metrics = app.world_mut().query::<&HudMetric>();
+        let metrics = metrics.iter(app.world()).copied().collect::<Vec<_>>();
+        assert!(metrics.contains(&HudMetric::Players));
+        assert!(metrics.contains(&HudMetric::Npcs));
         let resource_strip = app
             .world_mut()
             .query_filtered::<&Node, With<HudResourceStrip>>()
@@ -47063,7 +47075,7 @@ mod tests {
             .query_filtered::<(&Node, Option<&ImageNode>), With<HudTechnologyObjectivePanel>>()
             .single(app.world())
             .unwrap();
-        assert_eq!(objective_panel.width, percent(48.0));
+        assert_eq!(objective_panel.width, percent(45.0));
         assert_eq!(objective_panel.overflow, Overflow::clip());
         assert!(objective_panel_image.is_none());
         let top_bar_image = app
