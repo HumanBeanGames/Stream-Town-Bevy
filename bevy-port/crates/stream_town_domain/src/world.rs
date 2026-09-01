@@ -6,6 +6,13 @@ use crate::{
     ResourceGenerationLayerDef, StableId, WorldGenConfig, default_resource_generation_layers,
 };
 
+/// Seed of the recorded Unity town used to validate the migration algorithm.
+///
+/// Authored resource/foliage offsets describe this reference town. New towns
+/// retain those authored Perlin parameters but deterministically translate each
+/// layer's noise domain from their own seed.
+const UNITY_REFERENCE_WORLD_SEED: u64 = 1_580_290_387;
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct GeneratedResource {
     pub id: StableId,
@@ -111,10 +118,10 @@ fn generate_world_from_layers(
     foliage_layers: &[FoliageLayerDef],
     completed: &mut impl FnMut(WorldGenerationStage),
 ) -> GeneratedWorld {
-    // Version 7 increases authored land-resource stock without changing
-    // terrain, placement, or stable IDs. Native version-6 saves are upgraded
-    // proportionally by the game runtime.
-    const GENERATOR_VERSION: u32 = 7;
+    // Version 8 gives every named town deterministic per-layer noise offsets.
+    // The recorded Unity reference seed remains byte-for-byte compatible while
+    // other seeds no longer reuse its resource and foliage masks.
+    const GENERATOR_VERSION: u32 = 8;
     let cell_count = usize::from(config.width) * usize::from(config.height);
     let terrain_seed = u32::try_from(config.seed & u64::from(u32::MAX))
         .expect("masked terrain seed fits u32")
@@ -220,7 +227,7 @@ fn generate_authored_resources(
         .enumerate()
     {
         let candidates = generate_candidate_mask(
-            300,
+            layer.source_size,
             layer.seed,
             layer.noise_scale,
             layer.octaves,
@@ -229,6 +236,7 @@ fn generate_authored_resources(
             layer.spawn_threshold,
             layer.spacing,
             layer.half_cell_terrain_offset,
+            town_layer_noise_offset(config.seed, &layer.id, layer.seed, layer.source_size),
         );
         for candidate in candidates {
             let resource_world_x = f32::from(candidate[0]) * 0.5;
@@ -496,6 +504,7 @@ fn generate_foliage(
             layer.spawn_threshold,
             layer.spacing,
             false,
+            town_layer_noise_offset(config.seed, &layer.id, layer.seed, layer.source_size),
         );
         for candidate in candidates {
             let world_x = f32::from(candidate[0]) * 0.5;
@@ -564,8 +573,8 @@ fn generate_candidate_mask(
     threshold: f32,
     spacing: u16,
     wood_visual_offset: bool,
+    noise_offset: [f32; 2],
 ) -> Vec<[i16; 2]> {
-    let offset = positive_noise_offset(seed, source_size);
     let noise = unity_noise_map(
         source_size,
         source_size,
@@ -574,7 +583,7 @@ fn generate_candidate_mask(
         octaves,
         persistence,
         lacunarity,
-        offset,
+        noise_offset,
     );
     let mut candidates = Vec::new();
     let half = i32::from(source_size / 2);
@@ -646,6 +655,29 @@ fn positive_noise_offset(seed: i32, size: u16) -> [f32; 2] {
         minimum + random.next_double() as f32 * additional,
         minimum + random.next_double() as f32 * additional,
     ]
+}
+
+fn town_layer_noise_offset(
+    world_seed: u64,
+    layer_id: &StableId,
+    authored_seed: i32,
+    size: u16,
+) -> [f32; 2] {
+    let runtime_hash = town_layer_seed_hash(world_seed, layer_id);
+    let reference_hash = town_layer_seed_hash(UNITY_REFERENCE_WORLD_SEED, layer_id);
+    let authored_bits = u32::from_ne_bytes(authored_seed.to_ne_bytes());
+    let offset_seed =
+        i32::from_ne_bytes((authored_bits ^ runtime_hash ^ reference_hash).to_ne_bytes());
+    positive_noise_offset(offset_seed, size)
+}
+
+fn town_layer_seed_hash(world_seed: u64, layer_id: &StableId) -> u32 {
+    let mut hasher = Sha256::new();
+    hasher.update(b"stream-town-authored-layer-offset-v1");
+    hasher.update(world_seed.to_le_bytes());
+    hasher.update(layer_id.as_str().as_bytes());
+    let digest = hasher.finalize();
+    u32::from_le_bytes([digest[0], digest[1], digest[2], digest[3]])
 }
 
 // Rust has no checked float-to-integer conversion. Every call mirrors Unity's
@@ -1181,6 +1213,7 @@ mod tests {
                 threshold,
                 spacing,
                 wood_offset,
+                positive_noise_offset(seed, size),
             );
             assert_eq!(candidates.len(), expected_count, "seed {seed}");
             let mut hasher = Sha256::new();
@@ -1298,10 +1331,103 @@ mod tests {
     }
 
     #[test]
+    fn town_seed_randomizes_every_authored_perlin_layer_offset() {
+        let content: ContentCatalog =
+            ron::from_str(include_str!("../../../assets/content/catalog.ron")).unwrap();
+        // Stable FNV-1a value produced by the game menu for "Bobville".
+        let alternate_seed = 14_812_036_045_316_836_008;
+
+        for layer in &content.resource_generation {
+            if layer.habitat != ResourceGenerationHabitat::Land {
+                continue;
+            }
+            let reference = town_layer_noise_offset(
+                UNITY_REFERENCE_WORLD_SEED,
+                &layer.id,
+                layer.seed,
+                layer.source_size,
+            );
+            let alternate =
+                town_layer_noise_offset(alternate_seed, &layer.id, layer.seed, layer.source_size);
+            assert_eq!(
+                reference.map(f32::to_bits),
+                positive_noise_offset(layer.seed, layer.source_size).map(f32::to_bits)
+            );
+            assert_ne!(
+                alternate.map(f32::to_bits),
+                reference.map(f32::to_bits),
+                "layer {} reused its offset",
+                layer.id
+            );
+            assert_eq!(
+                alternate.map(f32::to_bits),
+                town_layer_noise_offset(alternate_seed, &layer.id, layer.seed, layer.source_size,)
+                    .map(f32::to_bits)
+            );
+        }
+
+        for layer in &content.foliage {
+            let reference = town_layer_noise_offset(
+                UNITY_REFERENCE_WORLD_SEED,
+                &layer.id,
+                layer.seed,
+                layer.source_size,
+            );
+            let alternate =
+                town_layer_noise_offset(alternate_seed, &layer.id, layer.seed, layer.source_size);
+            assert_eq!(
+                reference.map(f32::to_bits),
+                positive_noise_offset(layer.seed, layer.source_size).map(f32::to_bits)
+            );
+            assert_ne!(
+                alternate.map(f32::to_bits),
+                reference.map(f32::to_bits),
+                "layer {} reused its offset",
+                layer.id
+            );
+            assert_eq!(
+                alternate.map(f32::to_bits),
+                town_layer_noise_offset(alternate_seed, &layer.id, layer.seed, layer.source_size,)
+                    .map(f32::to_bits)
+            );
+        }
+    }
+
+    #[test]
+    fn different_town_seeds_produce_different_resource_and_foliage_layouts() {
+        let mut config = GameConfig::default().world;
+        let content: ContentCatalog =
+            ron::from_str(include_str!("../../../assets/content/catalog.ron")).unwrap();
+        let reference = generate_world_with_content(&config, &content);
+        // Stable FNV-1a value produced by the game menu for "Bobville".
+        config.seed = 14_812_036_045_316_836_008;
+        let alternate = generate_world_with_content(&config, &content);
+        let repeated = generate_world_with_content(&config, &content);
+
+        assert_eq!(alternate, repeated);
+        for target in ["target:tree", "target:ore", "target:bush"] {
+            let positions = |world: &GeneratedWorld| {
+                world
+                    .resources
+                    .iter()
+                    .filter(|resource| resource.target_kind.as_str() == target)
+                    .map(|resource| (resource.position, resource.offset_milli_cells))
+                    .collect::<Vec<_>>()
+            };
+            assert_ne!(
+                positions(&reference),
+                positions(&alternate),
+                "{target} layout did not respond to the town seed"
+            );
+        }
+        assert_ne!(reference.foliage, alternate.foliage);
+    }
+
+    #[test]
     fn generated_resources_preserve_unity_target_types_and_reachable_fish() {
         let config = GameConfig::default().world;
         let world = generate_world(&config);
-        assert_eq!(world.generator_version, 7);
+        assert_eq!(world.generator_version, 8);
         assert_ne!(legacy_v1_world_hash(&world), world.deterministic_hash);
         assert_ne!(legacy_v2_world_hash(&world), world.deterministic_hash);
         assert_ne!(legacy_v3_world_hash(&world), world.deterministic_hash);

@@ -38319,6 +38319,7 @@ mod tests {
     fn town_names_have_stable_seeds_and_windows_safe_independent_save_names() {
         assert_eq!(town_name_seed(" Bean Bay "), town_name_seed("bean bay"));
         assert_ne!(town_name_seed("Bean Bay"), town_name_seed("Bean Vale"));
+        assert_eq!(town_name_seed("Bobville"), 14_812_036_045_316_836_008);
         assert_eq!(safe_town_filename("Bean: Bay?"), "Bean_ Bay_");
         assert_eq!(safe_town_filename("CON"), "Town_CON");
     }
