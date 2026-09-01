@@ -149,7 +149,7 @@ const UNITY_TOWN_CAMERA_MIN_HEIGHT: f32 = 11.0;
 const UNITY_TOWN_CAMERA_MAX_HEIGHT: f32 = 60.0;
 const UNITY_TOWN_CAMERA_MOVE_SMOOTHNESS: f32 = 5.0;
 const TWITCH_CAMERA_PAN_DISTANCE: f32 = 12.0;
-const TWITCH_CAMERA_HOME_TIMEOUT_SECONDS: f32 = 60.0;
+const AUTO_CAMERA_IDLE_SECONDS: f32 = 30.0;
 const AUTO_CAMERA_TOWN_SHOT_SECONDS: f32 = 12.0;
 const AUTO_CAMERA_CITIZEN_SHOT_SECONDS: f32 = 24.0;
 const AUTO_CAMERA_CITIZEN_HEIGHT: f32 = 15.0;
@@ -555,6 +555,17 @@ struct InjectedCommands(VecDeque<PendingChatCommand>);
 #[derive(Resource, Default)]
 struct CommandFeedback(String);
 
+#[derive(Resource, Default)]
+struct CommandAcknowledgementRuntime {
+    sequence: u64,
+}
+
+impl CommandAcknowledgementRuntime {
+    fn acknowledge(&mut self) {
+        self.sequence = self.sequence.saturating_add(1);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum MenuPage {
     #[default]
@@ -774,6 +785,13 @@ struct RuntimeCommandQueues<'w> {
     agent: ResMut<'w, AgentCommandQueue>,
     building: ResMut<'w, BuildingCommandQueue>,
     placers: ResMut<'w, BuildingPlacers>,
+}
+
+#[derive(SystemParam)]
+struct CommandResponseRuntime<'w> {
+    connection: Res<'w, TwitchConnection>,
+    feedback: ResMut<'w, CommandFeedback>,
+    acknowledgements: ResMut<'w, CommandAcknowledgementRuntime>,
 }
 
 #[derive(Clone, Debug)]
@@ -2996,7 +3014,8 @@ struct TownCameraControllerRuntime {
     home: Transform,
     move_target: Vec3,
     zoom_target_height: f32,
-    seconds_since_input: f32,
+    seconds_since_acknowledgement: f32,
+    observed_command_acknowledgements: u64,
     auto_shot: AutoCameraShot,
     auto_shot_elapsed_seconds: f32,
     auto_sequence: u64,
@@ -3036,7 +3055,8 @@ impl TownCameraControllerRuntime {
         Self {
             move_target: home.translation,
             zoom_target_height: home.translation.y,
-            seconds_since_input: 0.0,
+            seconds_since_acknowledgement: 0.0,
+            observed_command_acknowledgements: 0,
             auto_shot: AutoCameraShot::Inactive,
             auto_shot_elapsed_seconds: 0.0,
             auto_sequence: 0,
@@ -3047,7 +3067,7 @@ impl TownCameraControllerRuntime {
     fn set_home(&mut self, home: Transform) {
         self.move_target = home.translation;
         self.zoom_target_height = home.translation.y;
-        self.seconds_since_input = 0.0;
+        self.seconds_since_acknowledgement = 0.0;
         self.auto_shot = AutoCameraShot::Inactive;
         self.auto_shot_elapsed_seconds = 0.0;
         self.auto_sequence = 0;
@@ -3446,6 +3466,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<RulerVoteAnnouncementRuntime>()
             .init_resource::<InjectedCommands>()
             .init_resource::<CommandFeedback>()
+            .init_resource::<CommandAcknowledgementRuntime>()
             .init_resource::<MenuRuntime>()
             .init_resource::<SettingsUiCache>()
             .init_resource::<SecretsRuntime>()
@@ -27148,6 +27169,7 @@ fn camera_zoom_and_commands(
     menu: Res<MenuRuntime>,
     settings: Res<RuntimePlayerSettings>,
     simulation: Option<Res<SimulationRuntime>>,
+    acknowledgements: Res<CommandAcknowledgementRuntime>,
     mut requests: ResMut<CameraCommandQueue>,
     agents: Query<(&Agent, &Transform), Without<TownCamera>>,
     mut cameras: Query<
@@ -27178,8 +27200,19 @@ fn camera_zoom_and_commands(
         perspective.fov = f32::from(settings.0.camera.field_of_view_degrees).to_radians();
     }
 
+    let command_acknowledged =
+        controller.observed_command_acknowledgements != acknowledgements.sequence;
+    if command_acknowledged {
+        controller.observed_command_acknowledgements = acknowledgements.sequence;
+        controller.seconds_since_acknowledgement = 0.0;
+        if controller.auto_shot != AutoCameraShot::Inactive {
+            controller.return_home();
+        }
+        controller.cancel_auto_camera();
+    }
+
     if let Some(request) = requests.0.pop_front() {
-        controller.seconds_since_input = 0.0;
+        controller.seconds_since_acknowledgement = 0.0;
         controller.cancel_auto_camera();
         if request.reset {
             controller.return_home();
@@ -27219,17 +27252,20 @@ fn camera_zoom_and_commands(
         controller.move_target =
             constrain_town_camera_position(controller.move_target, &config.0.world);
     } else {
-        let was_idle = controller.seconds_since_input >= TWITCH_CAMERA_HOME_TIMEOUT_SECONDS;
-        controller.seconds_since_input = (controller.seconds_since_input + delta_seconds)
-            .min(TWITCH_CAMERA_HOME_TIMEOUT_SECONDS);
+        let was_idle = controller.seconds_since_acknowledgement >= AUTO_CAMERA_IDLE_SECONDS;
+        if !command_acknowledged {
+            controller.seconds_since_acknowledgement = (controller.seconds_since_acknowledgement
+                + delta_seconds)
+                .min(AUTO_CAMERA_IDLE_SECONDS);
+        }
         let entered_auto_camera =
-            !was_idle && controller.seconds_since_input >= TWITCH_CAMERA_HOME_TIMEOUT_SECONDS;
+            !was_idle && controller.seconds_since_acknowledgement >= AUTO_CAMERA_IDLE_SECONDS;
         if entered_auto_camera {
             controller.auto_shot = AutoCameraShot::Town;
             controller.auto_shot_elapsed_seconds = 0.0;
             controller.return_home();
         }
-        if controller.seconds_since_input >= TWITCH_CAMERA_HOME_TIMEOUT_SECONDS {
+        if controller.seconds_since_acknowledgement >= AUTO_CAMERA_IDLE_SECONDS {
             let mut citizens = agents
                 .iter()
                 .filter(|(agent, _)| agent.kind == ActorKind::Player)
@@ -29271,6 +29307,7 @@ fn poll_twitch_transport(
     mut connection: ResMut<TwitchConnection>,
     mut injected: ResMut<InjectedCommands>,
     mut operator_chat: ResMut<OperatorChatRuntime>,
+    mut acknowledgements: ResMut<CommandAcknowledgementRuntime>,
 ) {
     let events: Vec<_> = connection
         .transport
@@ -29296,8 +29333,8 @@ fn poll_twitch_transport(
             }
             TwitchEvent::Status(_) | TwitchEvent::ModerationStatus(_) => true,
         };
-        if dispatch {
-            handle_twitch_event(event, &mut connection, &mut injected);
+        if dispatch && handle_twitch_event(event, &mut connection, &mut injected) {
+            acknowledgements.acknowledge();
         }
     }
 }
@@ -29306,7 +29343,7 @@ fn handle_twitch_event(
     event: TwitchEvent,
     connection: &mut TwitchConnection,
     injected: &mut InjectedCommands,
-) {
+) -> bool {
     match event {
         TwitchEvent::Status(status) => {
             match &status {
@@ -29324,6 +29361,7 @@ fn handle_twitch_event(
                 connection.moderation_status = TwitchModerationStatus::Disabled;
             }
             connection.status = status;
+            false
         }
         TwitchEvent::ModerationStatus(status) => {
             match &status {
@@ -29336,6 +29374,7 @@ fn handle_twitch_event(
                 _ => info!(?status, "Twitch broadcaster moderation state changed"),
             }
             connection.moderation_status = status;
+            false
         }
         TwitchEvent::Chat(message) => {
             if connection
@@ -29353,32 +29392,37 @@ fn handle_twitch_event(
                     is_subscriber: message.is_subscriber,
                     origin: CommandOrigin::Twitch,
                 });
-                return;
+                return false;
             }
             match message.message.parse::<ChatCommand>() {
-                Ok(command) => injected.0.push_back(PendingChatCommand {
-                    actor_id: message.actor_id,
-                    login_name: message.login,
-                    display_name: message.display_name,
-                    command,
-                    is_broadcaster: message.is_broadcaster,
-                    is_moderator: message.is_moderator,
-                    is_subscriber: message.is_subscriber,
-                    origin: CommandOrigin::Twitch,
-                }),
+                Ok(command) => {
+                    injected.0.push_back(PendingChatCommand {
+                        actor_id: message.actor_id,
+                        login_name: message.login,
+                        display_name: message.display_name,
+                        command,
+                        is_broadcaster: message.is_broadcaster,
+                        is_moderator: message.is_moderator,
+                        is_subscriber: message.is_subscriber,
+                        origin: CommandOrigin::Twitch,
+                    });
+                    false
+                }
                 Err(parse_error) => {
                     debug!(user = %message.login, %parse_error, "ignored invalid Twitch command");
-                    if let Some(reply) = invalid_twitch_command_reply(&message.message)
+                    let acknowledged = invalid_twitch_command_reply(&message.message);
+                    if let Some(reply) = acknowledged
                         && let Some(transport) = &connection.transport
                     {
                         let _ = transport.send(TwitchControl::SendBotMessage(reply.to_owned()));
                     }
+                    acknowledged.is_some()
                 }
             }
         }
         TwitchEvent::Notice(_)
         | TwitchEvent::BroadcasterChatSent(_)
-        | TwitchEvent::BroadcasterChatSendFailed(_) => {}
+        | TwitchEvent::BroadcasterChatSendFailed(_) => false,
     }
 }
 
@@ -32777,8 +32821,7 @@ fn process_injected_commands(
     asset_root: Res<RuntimeAssetRoot>,
     save: Res<SaveRuntime>,
     selected: Res<SelectedCell>,
-    connection: Res<TwitchConnection>,
-    mut feedback: ResMut<CommandFeedback>,
+    mut response: CommandResponseRuntime,
     mut world: ResMut<WorldRuntime>,
     mut stats: ResMut<SessionStats>,
     mut simulation: ResMut<SimulationRuntime>,
@@ -34189,11 +34232,12 @@ fn process_injected_commands(
             Ok(message) => message,
             Err(error) => format!("command rejected: {error}"),
         };
-        feedback.0 = format!("{}: {message}", pending.display_name);
+        response.feedback.0 = format!("{}: {message}", pending.display_name);
+        response.acknowledgements.acknowledge();
         if let Some(outbound) =
             unity_outbound_reply(&command, succeeded, &message, &pending.display_name)
         {
-            send_command_feedback(&connection, outbound);
+            send_command_feedback(&response.connection, outbound);
         }
         info!(user = %pending.display_name, ?command, result = %message, "processed Twitch command");
         stats.commands_processed += 1;
@@ -36713,6 +36757,7 @@ mod tests {
             .insert_resource(RuntimeConfig(GameConfig::default()))
             .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
             .insert_resource(MenuRuntime::default())
+            .init_resource::<CommandAcknowledgementRuntime>()
             .insert_resource(CameraCommandQueue(VecDeque::from([CameraRequest {
                 reset: false,
                 actions: vec![CameraAction {
@@ -36750,7 +36795,7 @@ mod tests {
         let mut controller = TownCameraControllerRuntime::new(home);
         controller.move_target = current.translation;
         controller.zoom_target_height = current.translation.y;
-        controller.seconds_since_input = TWITCH_CAMERA_HOME_TIMEOUT_SECONDS - 0.05;
+        controller.seconds_since_acknowledgement = AUTO_CAMERA_IDLE_SECONDS - 0.05;
         let mut time = Time::<()>::default();
         time.advance_by(Duration::from_millis(100));
         let mut app = App::new();
@@ -36758,6 +36803,7 @@ mod tests {
             .insert_resource(RuntimeConfig(GameConfig::default()))
             .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
             .insert_resource(MenuRuntime::default())
+            .init_resource::<CommandAcknowledgementRuntime>()
             .init_resource::<CameraCommandQueue>()
             .add_systems(Update, camera_zoom_and_commands);
         let camera = app
@@ -36784,16 +36830,17 @@ mod tests {
     }
 
     #[test]
-    fn idle_camera_director_cycles_citizens_and_town_then_yields_to_chat_input() {
+    fn idle_camera_director_cycles_citizens_and_town_then_yields_to_any_acknowledged_command() {
         let home = Transform::from_xyz(-33.5, 33.240_562, 0.0)
             .looking_to(Vec3::new(1.0, -1.0, 0.0), Vec3::Y);
         let mut time = Time::<()>::default();
-        time.advance_by(Duration::from_secs_f32(TWITCH_CAMERA_HOME_TIMEOUT_SECONDS));
+        time.advance_by(Duration::from_secs_f32(AUTO_CAMERA_IDLE_SECONDS));
         let mut app = App::new();
         app.insert_resource(time)
             .insert_resource(RuntimeConfig(GameConfig::default()))
             .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
             .insert_resource(MenuRuntime::default())
+            .init_resource::<CommandAcknowledgementRuntime>()
             .init_resource::<CameraCommandQueue>()
             .add_systems(Update, camera_zoom_and_commands);
         let camera = app
@@ -36884,15 +36931,8 @@ mod tests {
         );
 
         app.world_mut()
-            .resource_mut::<CameraCommandQueue>()
-            .0
-            .push_back(CameraRequest {
-                reset: false,
-                actions: vec![CameraAction {
-                    direction: CameraDirection::Right,
-                    amount: 1,
-                }],
-            });
+            .resource_mut::<CommandAcknowledgementRuntime>()
+            .acknowledge();
         app.world_mut()
             .resource_mut::<Time>()
             .advance_by(Duration::from_millis(16));
@@ -36903,7 +36943,9 @@ mod tests {
             .get::<TownCameraControllerRuntime>()
             .unwrap();
         assert_eq!(controller.auto_shot, AutoCameraShot::Inactive);
-        assert!(controller.seconds_since_input <= f32::EPSILON);
+        assert!(controller.seconds_since_acknowledgement <= f32::EPSILON);
+        assert_eq!(controller.move_target, home.translation);
+        assert!((controller.zoom_target_height - home.translation.y).abs() < f32::EPSILON);
     }
 
     #[test]

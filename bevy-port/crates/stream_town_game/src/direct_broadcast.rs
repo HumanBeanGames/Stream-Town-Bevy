@@ -83,6 +83,8 @@ const NATIVE_GAME_AUDIO_QUEUE_CAPACITY: usize = 64;
 const OFFLINE_FRAME_HOLD: Duration = Duration::from_secs(1);
 const BROADCAST_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_STREAM_READBACKS_IN_FLIGHT: usize = 4;
+const MAX_STREAM_COMPLETED_READBACKS: usize = MAX_STREAM_READBACKS_IN_FLIGHT;
+const STREAM_READBACK_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 struct NativeGameAudioClip {
@@ -1099,6 +1101,7 @@ const fn prepared_broadcast_can_start(phase: &DirectBroadcastPhase, gameplay_rea
 
 fn poll_direct_broadcast_worker(
     config: Res<RuntimeConfig>,
+    capture: Res<StreamOnlyCaptureState>,
     mut runtime: ResMut<DirectBroadcastRuntime>,
 ) {
     let events = runtime
@@ -1177,7 +1180,12 @@ fn poll_direct_broadcast_worker(
             }
         }
     }
-    report_stream_health(&mut runtime, config.0.twitch.broadcast.frames_per_second);
+    report_stream_health(
+        &mut runtime,
+        config.0.twitch.broadcast.frames_per_second,
+        capture.readback_requests.len(),
+        capture.completed_readbacks.len(),
+    );
 }
 
 fn reset_stream_health_window(runtime: &mut DirectBroadcastRuntime, now: Instant) {
@@ -1281,7 +1289,12 @@ fn return_to_main_menu_after_broadcast_stops(
     }
 }
 
-fn report_stream_health(runtime: &mut DirectBroadcastRuntime, target_fps: u8) {
+fn report_stream_health(
+    runtime: &mut DirectBroadcastRuntime,
+    target_fps: u8,
+    readbacks_in_flight: usize,
+    readbacks_completed: usize,
+) {
     if !matches!(
         runtime.phase,
         DirectBroadcastPhase::VerifyingTwitch
@@ -1354,7 +1367,7 @@ fn report_stream_health(runtime: &mut DirectBroadcastRuntime, target_fps: u8) {
     append_direct_broadcast_diagnostic(
         if unhealthy { "WARN" } else { "INFO" },
         &format!(
-            "event=health target_fps={target_fps} captured_fps={captured_fps:.2} encoded_fps={encoded_fps:.2} audio_fps={audio_fps:.2} video_drops={new_video_drops} capture_replacements={new_video_replacements} cadence_skips={new_video_skips} audio_drops={new_audio_drops} audio_queue={} average_encode_ms={average_encode_ms:.2} maximum_encode_ms={:.2}",
+            "event=health target_fps={target_fps} captured_fps={captured_fps:.2} encoded_fps={encoded_fps:.2} audio_fps={audio_fps:.2} video_drops={new_video_drops} capture_replacements={new_video_replacements} cadence_skips={new_video_skips} audio_drops={new_audio_drops} audio_queue={} readbacks_in_flight={readbacks_in_flight} readbacks_completed={readbacks_completed} average_encode_ms={average_encode_ms:.2} maximum_encode_ms={:.2}",
             metrics.queued_audio,
             micros_to_milliseconds(metrics.maximum_video_encode_micros),
         ),
@@ -1370,6 +1383,8 @@ fn report_stream_health(runtime: &mut DirectBroadcastRuntime, target_fps: u8) {
             new_video_skips,
             new_audio_drops,
             audio_queue_depth = metrics.queued_audio,
+            readbacks_in_flight,
+            readbacks_completed,
             average_encode_ms,
             maximum_encode_ms = micros_to_milliseconds(metrics.maximum_video_encode_micros),
             "direct Twitch broadcast health is below target"
@@ -1385,6 +1400,8 @@ fn report_stream_health(runtime: &mut DirectBroadcastRuntime, target_fps: u8) {
             new_video_skips,
             new_audio_drops,
             audio_queue_depth = metrics.queued_audio,
+            readbacks_in_flight,
+            readbacks_completed,
             average_encode_ms,
             "direct Twitch broadcast health"
         );
@@ -1581,8 +1598,58 @@ fn disarm_stream_only_readbacks(
 fn cleanup_completed_stream_only_readbacks(
     mut commands: Commands,
     armed: Query<Entity, With<StreamOnlyReadbackArmed>>,
-    state: Res<StreamOnlyCaptureState>,
+    runtime: Res<DirectBroadcastRuntime>,
+    mut state: ResMut<StreamOnlyCaptureState>,
 ) {
+    let now = Instant::now();
+    let stalled = state
+        .readback_requests
+        .iter()
+        .filter_map(|(entity, (sequence, started))| {
+            (now.saturating_duration_since(*started) >= STREAM_READBACK_TIMEOUT)
+                .then_some((*entity, *sequence))
+        })
+        .collect::<Vec<_>>();
+    let mut retired = u64::try_from(stalled.len()).unwrap_or(u64::MAX);
+    for (entity, sequence) in stalled {
+        state.readback_requests.remove(&entity);
+        state.completed_readbacks.entry(sequence).or_insert(None);
+    }
+
+    // An abandoned early GPU copy used to block ordered publication forever
+    // while every later 1080p frame accumulated behind it. Bound the reorder
+    // window and retire the missing prefix as soon as that window fills.
+    if state.completed_readbacks.len() >= MAX_STREAM_COMPLETED_READBACKS
+        && let Some(first_completed) = state
+            .completed_readbacks
+            .first_key_value()
+            .map(|(key, _)| *key)
+        && first_completed > state.next_publish_sequence
+    {
+        let missing = first_completed.saturating_sub(state.next_publish_sequence);
+        retired = retired.saturating_add(missing);
+        state.next_publish_sequence = first_completed;
+        let obsolete = state
+            .readback_requests
+            .iter()
+            .filter_map(|(entity, (sequence, _))| (*sequence < first_completed).then_some(*entity))
+            .collect::<Vec<_>>();
+        for entity in obsolete {
+            state.readback_requests.remove(&entity);
+        }
+    }
+
+    let (next_sequence, frames) =
+        take_ordered_readback_frames(state.next_publish_sequence, &mut state.completed_readbacks);
+    state.next_publish_sequence = next_sequence;
+    if let Some(controller) = runtime.controller.as_ref() {
+        if retired > 0 {
+            controller.drop_video_frames(retired);
+        }
+        for frame in frames {
+            let _ = controller.send_video(frame);
+        }
+    }
     for entity in &armed {
         if !state.readback_requests.contains_key(&entity) {
             commands.entity(entity).try_despawn();
@@ -4880,6 +4947,44 @@ mod tests {
             [0, 2]
         );
         assert!(completed.is_empty());
+    }
+
+    #[test]
+    fn stalled_gpu_readback_cannot_accumulate_full_resolution_frames() {
+        let mut app = App::new();
+        let stalled = app.world_mut().spawn(StreamOnlyReadbackArmed).id();
+        let frame = |value| VideoFrame {
+            width: 1,
+            height: 1,
+            pixel_format: VideoPixelFormat::Bgra,
+            pixels: vec![value; 4],
+        };
+        let mut capture = StreamOnlyCaptureState::default();
+        capture
+            .readback_requests
+            .insert(stalled, (0, Instant::now()));
+        capture.completed_readbacks = (1..=MAX_STREAM_COMPLETED_READBACKS)
+            .map(|sequence| {
+                (
+                    u64::try_from(sequence).unwrap(),
+                    Some(frame(u8::try_from(sequence).unwrap())),
+                )
+            })
+            .collect();
+        app.insert_resource(DirectBroadcastRuntime::default())
+            .insert_resource(capture)
+            .add_systems(Update, cleanup_completed_stream_only_readbacks);
+
+        app.update();
+
+        let capture = app.world().resource::<StreamOnlyCaptureState>();
+        assert!(capture.readback_requests.is_empty());
+        assert!(capture.completed_readbacks.is_empty());
+        assert_eq!(
+            capture.next_publish_sequence,
+            u64::try_from(MAX_STREAM_COMPLETED_READBACKS).unwrap() + 1
+        );
+        assert!(app.world().get_entity(stalled).is_err());
     }
 
     #[test]

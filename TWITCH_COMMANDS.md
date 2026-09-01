@@ -61,17 +61,19 @@ masters as appropriate.
 | `!remove <building> <id>` | Remove a building instance. |
 | `!recruit <role> [amount]` | Recruit town-controlled characters. |
 | `!cam <direction> [amount]` | Smoothly move the broadcast camera using `up`, `down`, `left`, `right`, `in`, or `out`. Several direction/amount pairs may be supplied. |
-| `!cam home` | Smoothly return to the authored home position and base zoom. Any camera command suspends the idle director for another minute. |
+| `!cam home` | Smoothly return to the authored home position and base zoom. Any acknowledged command suspends the idle director for another 30 seconds. |
 | `!resetcam` | Restore the authored town camera. |
 | `!rulervote` | Start a ruler vote. |
 | `!resign` | Resign as ruler. |
 | `!save` | Save the town. |
 
-After one minute without camera commands, the broadcast camera returns to the
+After 30 seconds without any acknowledged command, the broadcast camera returns to the
 base town composition, then automatically alternates between smooth close-up
 shots that follow living citizens. Every fourth automatic shot returns to the
 town view. Citizen choices are deterministic for the save and do not repeat
-immediately when multiple citizens are available.
+immediately when multiple citizens are available. Any command acknowledged
+during an automatic shot cancels it, returns the camera home, and restarts the
+30-second idle timer.
 
 ## Moderator and game-master commands
 

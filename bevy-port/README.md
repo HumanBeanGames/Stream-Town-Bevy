@@ -350,12 +350,12 @@ the shipping `MainCamera.prefab` contract directly: a 60-degree perspective
 lens with 0.3/1000 clipping planes, the authored 45-degree downward view from
 the town's negative-X side and physical 11-60 height zoom. The pose is translated to the generated
 Town Hall so different deterministic terrain seeds retain Unity's opening
-composition. After 60 seconds without a `!cam` request, the idle director first
+composition. After 30 seconds without any acknowledged command, the idle director first
 restores that town composition, then uses deterministic 24-second close-ups that
 track living citizens with smooth movement and zoom. Every fourth automatic shot
 holds the base town view for 12 seconds, and multiple citizens never repeat on
-adjacent shots. Any new camera command immediately cancels the director and
-restarts its idle timer. There is no in-game Escape menu; local stream control lives in the
+adjacent shots. Any acknowledged command immediately cancels an active automatic
+shot, returns the camera home, and restarts its idle timer. There is no in-game Escape menu; local stream control lives in the
 operator panel. On the Main Menu and Credits, Tab/Shift+Tab moves
 focus, arrow keys continue from visible keyboard focus, and Enter or Space
 activates the focused control. Settings retain keyboard control: Tab/Shift+Tab changes category,
