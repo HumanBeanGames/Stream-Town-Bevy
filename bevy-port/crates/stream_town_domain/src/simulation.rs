@@ -1102,6 +1102,27 @@ impl WorldSimulation {
         Ok(())
     }
 
+    /// Performs the unattended death respawn used by shipping gameplay.
+    ///
+    /// Role-driven revives intentionally continue to call [`Self::respawn_actor`]
+    /// directly and therefore preserve every role level and experience point.
+    pub fn respawn_actor_with_level_penalty(
+        &mut self,
+        actor: &StableId,
+        position: GridPos,
+    ) -> Result<(), SimulationError> {
+        let actor_state = self.actor_mut(actor)?;
+        for progress in actor_state.role_progression.values_mut() {
+            progress.level = (progress.level / 2).max(1);
+            progress.experience = 0;
+        }
+        actor_state.position = position;
+        actor_state.health = actor_state.max_health;
+        actor_state.alive = true;
+        actor_state.respawn_remaining_seconds = None;
+        Ok(())
+    }
+
     pub fn start_technology_vote(
         &mut self,
         technology: StableId,
@@ -2197,6 +2218,73 @@ mod tests {
             simulation.revive_actor_with_food_cost(&actor, spawn, 400),
             Err(SimulationError::ActorAlive(_))
         ));
+    }
+
+    #[test]
+    fn unattended_respawn_halves_every_role_level_but_role_revive_does_not() {
+        let mut simulation = WorldSimulation::new(42);
+        let actor = id("twitch:leveled");
+        let builder = id("role:builder");
+        let defender = id("role:defender");
+        let spawn = GridPos { x: 8, z: 9 };
+        assert!(simulation.join_player(actor.clone(), GridPos { x: 1, z: 2 }));
+        let state = simulation.actors.get_mut(&actor).unwrap();
+        state.role_progression = BTreeMap::from([
+            (
+                builder.clone(),
+                RoleProgress {
+                    level: 9,
+                    experience: 123,
+                },
+            ),
+            (
+                defender.clone(),
+                RoleProgress {
+                    level: 2,
+                    experience: 456,
+                },
+            ),
+        ]);
+        assert!(simulation.damage_actor(&actor, 1_000).unwrap());
+        simulation
+            .respawn_actor_with_level_penalty(&actor, spawn)
+            .unwrap();
+        assert_eq!(
+            simulation.actors[&actor].role_progression[&builder].level,
+            4
+        );
+        assert_eq!(
+            simulation.actors[&actor].role_progression[&defender].level,
+            1
+        );
+        assert!(
+            simulation.actors[&actor]
+                .role_progression
+                .values()
+                .all(|progress| progress.experience == 0)
+        );
+
+        simulation
+            .actors
+            .get_mut(&actor)
+            .unwrap()
+            .role_progression
+            .insert(
+                builder.clone(),
+                RoleProgress {
+                    level: 7,
+                    experience: 77,
+                },
+            );
+        assert!(simulation.damage_actor(&actor, 1_000).unwrap());
+        simulation.respawn_actor(&actor, spawn).unwrap();
+        assert_eq!(
+            simulation.actors[&actor].role_progression[&builder],
+            RoleProgress {
+                level: 7,
+                experience: 77
+            }
+        );
     }
 
     #[test]

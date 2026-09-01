@@ -5,7 +5,7 @@ pub mod twitch;
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
-    fs::OpenOptions,
+    fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
     sync::{
@@ -41,6 +41,7 @@ use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     ecs::{query::QueryData, system::SystemParam},
     gltf::{GltfMaterialName, GltfMeshName},
+    input::mouse::{MouseScrollUnit, MouseWheel},
     input_focus::{
         FocusCause, InputFocus, InputFocusVisible,
         tab_navigation::{TabGroup, TabIndex, TabNavigationPlugin},
@@ -105,6 +106,10 @@ use stream_town_domain::{
 };
 
 const MAX_TOWN_GOALS: usize = 2;
+const AUTOMATIC_PLAYER_RESPAWN_SECONDS: f64 = 10.0 * 60.0;
+const PREWARMED_PROJECTILE_NIGHT_LIGHTS: usize = 32;
+const PROJECTILE_MAX_LIFETIME_SECONDS: f32 = 12.0;
+const UNITY_AUTHORED_GRID_CELL_SIZE: f32 = 2.0;
 const TWITCH_COMMAND_HELP_URL: &str = "https://github.com/HumanBeanGames/Stream-Town-Bevy/blob/codex/bevy-migration/TWITCH_COMMANDS.md";
 const INVALID_TWITCH_COMMAND_REPLY: &str = "Invalid Command! Type !help for the list of commands!";
 const TECHNOLOGY_VOTE_DURATION_SECONDS: f32 = 60.0;
@@ -449,6 +454,83 @@ struct SaveRuntime {
     store: NativeSaveStore,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TownSaveEntry {
+    name: String,
+    path: PathBuf,
+}
+
+#[derive(Resource)]
+struct TownSaveCatalogRuntime {
+    directory: PathBuf,
+    legacy_path: PathBuf,
+    fixed_path: Option<PathBuf>,
+    active_town: Option<String>,
+}
+
+impl TownSaveCatalogRuntime {
+    fn from_environment() -> Self {
+        let fixed_path = std::env::var_os("STREAM_TOWN_SAVE_PATH").map(PathBuf::from);
+        Self {
+            directory: PathBuf::from(".stream-town").join("saves"),
+            legacy_path: PathBuf::from(".stream-town").join("StreamTownSave.stbevy"),
+            fixed_path,
+            active_town: None,
+        }
+    }
+
+    fn entries(&self) -> Vec<TownSaveEntry> {
+        if let Some(path) = &self.fixed_path {
+            return path
+                .is_file()
+                .then(|| town_save_entry(path))
+                .into_iter()
+                .collect();
+        }
+        let mut entries = fs::read_dir(&self.directory)
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_file()
+                    && path
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("stbevy"))
+            })
+            .map(|path| town_save_entry(&path))
+            .collect::<Vec<_>>();
+        if self.legacy_path.is_file() && !entries.iter().any(|entry| entry.path == self.legacy_path)
+        {
+            entries.push(TownSaveEntry {
+                name: "Legacy Town".to_owned(),
+                path: self.legacy_path.clone(),
+            });
+        }
+        entries.sort_by(|left, right| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        entries
+    }
+
+    fn new_town_path(&self, name: &str) -> PathBuf {
+        self.fixed_path.clone().unwrap_or_else(|| {
+            self.directory
+                .join(format!("{}.stbevy", safe_town_filename(name)))
+        })
+    }
+}
+
+#[derive(Resource, Default)]
+struct TownRestartRuntime {
+    retained_players: Option<Vec<ActorState>>,
+    suppress_exit_save: bool,
+}
+
 #[derive(SystemParam)]
 struct LoadRenderParams<'w, 's> {
     presentation: Res<'w, RuntimePresentation>,
@@ -572,6 +654,8 @@ enum MenuPage {
     Closed,
     Game,
     GoLiveConfirmation,
+    NewTown,
+    LoadTown,
     Settings,
     SecretsDisclaimer,
     Secrets,
@@ -1585,6 +1669,30 @@ struct GoLiveConfirmationRoot;
 
 #[derive(Component)]
 struct GoLiveConfirmationBody;
+
+#[derive(Component)]
+struct TownDialogRoot(MenuPage);
+
+#[derive(Component)]
+struct TownNameField;
+
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+enum TownDialogAction {
+    Create,
+    Back,
+}
+
+#[derive(Component)]
+struct TownLoadChoice {
+    name: String,
+    path: PathBuf,
+}
+
+#[derive(Component)]
+struct TownDialogFeedback;
+
+#[derive(Component)]
+struct TownLoadList;
 
 #[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
 enum GameMenuAction {
@@ -2726,6 +2834,7 @@ type MenuOverlayEntityQuery<'w, 's> = Query<
         With<SecretsDisclaimerRoot>,
         With<SecretsRoot>,
         With<GoLiveConfirmationRoot>,
+        With<TownDialogRoot>,
     )>,
 >;
 
@@ -2736,6 +2845,9 @@ struct TownHall;
 struct RuntimeBuilding {
     id: StableId,
 }
+
+#[derive(Component)]
+struct NightPointLightPoolSlot;
 
 #[derive(Component)]
 struct ChimneySmokeEmitters {
@@ -2867,6 +2979,7 @@ struct CombatProjectile {
     speed_cells_per_second: f32,
     visual: CombatVisualKind,
     trail_cooldown_seconds: f32,
+    remaining_seconds: f32,
 }
 
 #[derive(Clone)]
@@ -3468,6 +3581,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<CommandFeedback>()
             .init_resource::<CommandAcknowledgementRuntime>()
             .init_resource::<MenuRuntime>()
+            .init_resource::<TownRestartRuntime>()
             .init_resource::<SettingsUiCache>()
             .init_resource::<SecretsRuntime>()
             .init_resource::<SensitiveScreenActive>()
@@ -3501,6 +3615,7 @@ impl Plugin for StreamTownGamePlugin {
             .insert_resource(PlayerSettingsRuntime {
                 autosave_elapsed_seconds: 0.0,
             })
+            .insert_resource(TownSaveCatalogRuntime::from_environment())
             .insert_resource(SaveRuntime {
                 store: NativeSaveStore::new(std::env::var_os("STREAM_TOWN_SAVE_PATH").map_or_else(
                     || PathBuf::from(".stream-town").join("StreamTownSave.stbevy"),
@@ -3581,9 +3696,15 @@ impl Plugin for StreamTownGamePlugin {
             .add_systems(
                 Update,
                 (
-                    main_menu_input.in_set(AccessibilityActionDispatch),
-                    main_menu_buttons.in_set(AccessibilityActionDispatch),
-                    update_main_menu_buttons,
+                    (
+                        main_menu_input.in_set(AccessibilityActionDispatch),
+                        main_menu_buttons.in_set(AccessibilityActionDispatch),
+                        update_main_menu_buttons,
+                        town_dialog_buttons.in_set(AccessibilityActionDispatch),
+                        update_town_dialog_ui,
+                        scroll_town_load_list,
+                    )
+                        .chain(),
                     menu_input,
                     (
                         secrets_buttons.in_set(AccessibilityActionDispatch),
@@ -3734,6 +3855,10 @@ impl Plugin for StreamTownGamePlugin {
                     emit_chimney_smoke.after(sync_chimney_smoke_emitters),
                     animate_chimney_smoke_particles.after(emit_chimney_smoke),
                     update_enemy_encounters.after(move_combat_projectiles),
+                    restart_world_after_town_hall_falls.after(move_agents),
+                    sync_pooled_night_lights
+                        .after(move_combat_projectiles)
+                        .after(sync_building_presentation),
                     sync_fish_god_presentation
                         .after(update_enemy_encounters)
                         .after(process_injected_commands),
@@ -10832,6 +10957,217 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
     spawn_current_event_panel(commands, render);
 }
 
+fn town_save_entry(path: &Path) -> TownSaveEntry {
+    TownSaveEntry {
+        name: path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Town")
+            .to_owned(),
+        path: path.to_path_buf(),
+    }
+}
+
+fn safe_town_filename(name: &str) -> String {
+    let mut safe = name
+        .trim()
+        .chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(
+                    character,
+                    '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+                )
+            {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    while safe.ends_with(' ') || safe.ends_with('.') {
+        safe.pop();
+    }
+    if safe.is_empty()
+        || matches!(
+            safe.to_ascii_uppercase().as_str(),
+            "CON"
+                | "PRN"
+                | "AUX"
+                | "NUL"
+                | "COM1"
+                | "COM2"
+                | "COM3"
+                | "COM4"
+                | "COM5"
+                | "COM6"
+                | "COM7"
+                | "COM8"
+                | "COM9"
+                | "LPT1"
+                | "LPT2"
+                | "LPT3"
+                | "LPT4"
+                | "LPT5"
+                | "LPT6"
+                | "LPT7"
+                | "LPT8"
+                | "LPT9"
+        )
+    {
+        safe.insert_str(0, "Town_");
+    }
+    safe
+}
+
+fn town_name_seed(name: &str) -> u64 {
+    // Stable FNV-1a: unlike DefaultHasher this is identical across processes,
+    // platforms, save/load cycles, and future Rust standard-library releases.
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in name.trim().to_lowercase().bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash.max(1)
+}
+
+fn open_new_town_dialog(menu: &mut MenuRuntime) {
+    menu.page = MenuPage::NewTown;
+    menu.return_page = MenuPage::Closed;
+    menu.selected = 0;
+    menu.feedback.clear();
+}
+
+fn open_load_town_dialog(menu: &mut MenuRuntime) {
+    menu.page = MenuPage::LoadTown;
+    menu.return_page = MenuPage::Closed;
+    menu.selected = 0;
+    menu.feedback.clear();
+}
+
+#[allow(clippy::too_many_arguments)]
+fn town_dialog_buttons(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    actions: Query<(&Interaction, &TownDialogAction), Changed<Interaction>>,
+    choices: Query<(&Interaction, &TownLoadChoice), Changed<Interaction>>,
+    fields: Query<&EditableText, With<TownNameField>>,
+    mut menu: ResMut<MenuRuntime>,
+    mut catalog: ResMut<TownSaveCatalogRuntime>,
+    mut save: ResMut<SaveRuntime>,
+    mut config: ResMut<RuntimeConfig>,
+    mut focus: ResMut<InputFocus>,
+) {
+    if !matches!(menu.page, MenuPage::NewTown | MenuPage::LoadTown) {
+        return;
+    }
+    if keyboard.just_pressed(KeyCode::Escape) {
+        menu.page = MenuPage::Closed;
+        menu.feedback.clear();
+        focus.clear();
+        return;
+    }
+    for (interaction, action) in &actions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        match action {
+            TownDialogAction::Back => {
+                menu.page = MenuPage::Closed;
+                menu.feedback.clear();
+                focus.clear();
+            }
+            TownDialogAction::Create if menu.page == MenuPage::NewTown => {
+                let name = fields
+                    .single()
+                    .ok()
+                    .map(|field| field.value().to_string().trim().to_owned())
+                    .unwrap_or_default();
+                if name.is_empty() {
+                    "Enter a town name first.".clone_into(&mut menu.feedback);
+                    continue;
+                }
+                let path = catalog.new_town_path(&name);
+                if path.is_file() {
+                    format!("A town named '{name}' already exists. Choose Load Game instead.")
+                        .clone_into(&mut menu.feedback);
+                    continue;
+                }
+                save.store = NativeSaveStore::new(path);
+                catalog.active_town = Some(name.clone());
+                config.0.world.seed = town_name_seed(&name);
+                focus.clear();
+                request_go_live_confirmation(&mut menu, PendingTownStart::NewGame);
+            }
+            TownDialogAction::Create => {}
+        }
+    }
+    if menu.page != MenuPage::LoadTown {
+        return;
+    }
+    for (interaction, choice) in &choices {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let store = NativeSaveStore::new(&choice.path);
+        match store.load() {
+            Ok(snapshot) => {
+                config.0.world.seed = snapshot.world_seed;
+                save.store = store;
+                catalog.active_town = Some(choice.name.clone());
+                focus.clear();
+                request_go_live_confirmation(&mut menu, PendingTownStart::LoadGame);
+            }
+            Err(error) => {
+                format!("Could not load '{}': {error}", choice.name).clone_into(&mut menu.feedback);
+            }
+        }
+    }
+}
+
+fn update_town_dialog_ui(
+    menu: Res<MenuRuntime>,
+    mut roots: Query<(&TownDialogRoot, &mut Visibility)>,
+    mut feedback: Query<&mut Text, With<TownDialogFeedback>>,
+) {
+    for (root, mut visibility) in &mut roots {
+        *visibility = if menu.page == root.0 {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    for mut text in &mut feedback {
+        (**text).clone_from(&menu.feedback);
+    }
+}
+
+fn scroll_town_load_list(
+    menu: Res<MenuRuntime>,
+    mut wheel: MessageReader<MouseWheel>,
+    mut lists: Query<(&mut ScrollPosition, &ComputedNode), With<TownLoadList>>,
+) {
+    if menu.page != MenuPage::LoadTown {
+        return;
+    }
+    let delta = wheel.read().fold(0.0, |total, event| {
+        total
+            + event.y
+                * if event.unit == MouseScrollUnit::Line {
+                    32.0
+                } else {
+                    1.0
+                }
+    });
+    if delta.abs() <= f32::EPSILON {
+        return;
+    }
+    for (mut position, computed) in &mut lists {
+        let maximum = (computed.content_size().y - computed.size().y).max(0.0)
+            * computed.inverse_scale_factor();
+        position.y = (position.y - delta).clamp(0.0, maximum);
+    }
+}
+
 fn main_menu_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     config: Res<RuntimeConfig>,
@@ -10847,7 +11183,7 @@ fn main_menu_input(
     }
     if keyboard.just_pressed(KeyCode::Enter) && focus.get().is_none() {
         if twitch_accounts_connected(&config.0, &secrets, &connection) {
-            request_go_live_confirmation(&mut menu, PendingTownStart::NewGame);
+            open_new_town_dialog(&mut menu);
         } else {
             open_twitch_setup_required(&mut menu);
         }
@@ -10866,7 +11202,7 @@ fn main_menu_action_enabled(action: MainMenuAction, has_save: bool) -> bool {
 }
 
 fn main_menu_buttons(
-    save: Res<SaveRuntime>,
+    town_catalog: Res<TownSaveCatalogRuntime>,
     settings: Res<RuntimePlayerSettings>,
     config: Res<RuntimeConfig>,
     secrets: Res<SecretsRuntime>,
@@ -10879,7 +11215,7 @@ fn main_menu_buttons(
     if menu.page != MenuPage::Closed {
         return;
     }
-    let has_save = save.store.path().is_file();
+    let has_save = !town_catalog.entries().is_empty();
     for (interaction, action) in &buttons {
         if *interaction != Interaction::Pressed || !main_menu_action_enabled(*action, has_save) {
             continue;
@@ -10887,14 +11223,14 @@ fn main_menu_buttons(
         match action {
             MainMenuAction::NewGame => {
                 if twitch_accounts_connected(&config.0, &secrets, &connection) {
-                    request_go_live_confirmation(&mut menu, PendingTownStart::NewGame);
+                    open_new_town_dialog(&mut menu);
                 } else {
                     open_twitch_setup_required(&mut menu);
                 }
             }
             MainMenuAction::LoadGame => {
                 if twitch_accounts_connected(&config.0, &secrets, &connection) {
-                    request_go_live_confirmation(&mut menu, PendingTownStart::LoadGame);
+                    open_load_town_dialog(&mut menu);
                 } else {
                     open_twitch_setup_required(&mut menu);
                 }
@@ -11004,12 +11340,12 @@ fn go_live_confirmation_buttons(
 }
 
 fn update_main_menu_buttons(
-    save: Res<SaveRuntime>,
+    town_catalog: Res<TownSaveCatalogRuntime>,
     menu: Res<MenuRuntime>,
     render: Res<RenderAssets>,
     mut buttons: Query<(&Interaction, &MainMenuAction, &mut ImageNode)>,
 ) {
-    let has_save = save.store.path().is_file();
+    let has_save = !town_catalog.entries().is_empty();
     for (interaction, action, mut image) in &mut buttons {
         let enabled = menu.page == MenuPage::Closed && main_menu_action_enabled(*action, has_save);
         let source_path = if !enabled {
@@ -11738,6 +12074,12 @@ fn announce_accessibility_state(
         }
         GameState::MainMenu if menu.page == MenuPage::Secrets => {
             "Twitch secrets setup. Internal Twitch video is blacked out. Bot and broadcaster accounts are authorized separately.".to_owned()
+        }
+        GameState::MainMenu if menu.page == MenuPage::NewTown => {
+            "Name your town. The name determines its world seed and save file.".to_owned()
+        }
+        GameState::MainMenu if menu.page == MenuPage::LoadTown => {
+            "Choose a saved town to load.".to_owned()
         }
         GameState::MainMenu => "Main menu. Press Tab to move between actions.".to_owned(),
         GameState::WorldLoading => loading.as_ref().map_or_else(
@@ -12532,6 +12874,7 @@ fn spawn_menu_overlay(
     config: Res<RuntimeConfig>,
     settings: Res<RuntimePlayerSettings>,
     render: Res<RenderAssets>,
+    town_catalog: Res<TownSaveCatalogRuntime>,
     mut settings_ui: ResMut<SettingsUiCache>,
 ) {
     settings_ui.signature.clear();
@@ -12948,6 +13291,282 @@ fn spawn_menu_overlay(
         });
     spawn_secrets_overlays(&mut commands, &render, &config.0);
     spawn_go_live_confirmation(&mut commands, &render);
+    spawn_town_dialogs(&mut commands, &render, &town_catalog.entries());
+}
+
+fn spawn_town_dialog_button(
+    parent: &mut ChildSpawnerCommands,
+    action: TownDialogAction,
+    label: &str,
+    render: &RenderAssets,
+    tab_index: i32,
+) {
+    parent
+        .spawn((
+            action,
+            Button,
+            TabIndex(tab_index),
+            authored_ui_image(
+                render,
+                MAIN_MENU_TEXTURE_PATHS[0],
+                main_menu_texture(render, MAIN_MENU_TEXTURE_PATHS[0]),
+            ),
+            Node {
+                width: percent(48.0),
+                height: px(52),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+        ))
+        .with_children(|button| {
+            button.spawn((
+                Text::new(label),
+                TextFont {
+                    font_size: FontSize::Px(20.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.827, 0.745, 0.498)),
+                Pickable::IGNORE,
+            ));
+        });
+}
+
+fn spawn_town_dialogs(commands: &mut Commands, render: &RenderAssets, saves: &[TownSaveEntry]) {
+    for page in [MenuPage::NewTown, MenuPage::LoadTown] {
+        commands
+            .spawn((
+                StateEntity,
+                TownDialogRoot(page),
+                Visibility::Hidden,
+                GlobalZIndex(185),
+                BackgroundColor(Color::srgba(0.004, 0.006, 0.012, 0.88)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(0),
+                    top: px(0),
+                    width: percent(100.0),
+                    height: percent(100.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+            ))
+            .with_children(|overlay| {
+                overlay
+                    .spawn((
+                        TabGroup::default(),
+                        BackgroundColor(Color::srgb(0.035, 0.046, 0.09)),
+                        BorderColor::all(Color::srgb(0.827, 0.745, 0.498)),
+                        Node {
+                            width: percent(52.0),
+                            max_width: px(840),
+                            min_height: px(390),
+                            max_height: percent(82.0),
+                            border: UiRect::all(px(3)),
+                            border_radius: BorderRadius::all(px(34)),
+                            padding: UiRect::all(px(42)),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: px(20),
+                            overflow: Overflow::clip(),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|panel| {
+                        panel.spawn((
+                            settings_panel_ui_image(
+                                render,
+                                SETTINGS_BACKGROUND_TEXTURE_PATH,
+                                main_menu_texture(render, SETTINGS_BACKGROUND_TEXTURE_PATH),
+                            ),
+                            Pickable::IGNORE,
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: px(3),
+                                top: px(3),
+                                right: px(3),
+                                bottom: px(3),
+                                ..default()
+                            },
+                        ));
+                        panel.spawn((
+                            UiDisplayFont,
+                            Text::new(if page == MenuPage::NewTown {
+                                "NAME YOUR TOWN"
+                            } else {
+                                "LOAD A TOWN"
+                            }),
+                            TextFont {
+                                font_size: FontSize::Px(32.0),
+                                ..default()
+                            },
+                            TextLayout::justify(Justify::Center),
+                            TextColor(Color::WHITE),
+                            Pickable::IGNORE,
+                            Node {
+                                width: percent(100.0),
+                                ..default()
+                            },
+                        ));
+                        if page == MenuPage::NewTown {
+                            panel.spawn((
+                                Text::new("The name determines the deterministic world seed and its independent save file."),
+                                TextFont {
+                                    font_size: FontSize::Px(17.0),
+                                    ..default()
+                                },
+                                TextLayout::justify(Justify::Center),
+                                TextColor(Color::srgb(0.84, 0.88, 0.94)),
+                                Pickable::IGNORE,
+                            ));
+                            panel.spawn((
+                                TownNameField,
+                                EditableText {
+                                    max_characters: Some(80),
+                                    ..EditableText::new("")
+                                },
+                                SelectAllOnFocus,
+                                TabIndex(0),
+                                TextCursorStyle {
+                                    color: Color::WHITE,
+                                    selected_text_color: Some(Color::BLACK),
+                                    ..default()
+                                },
+                                TextFont {
+                                    font_size: FontSize::Px(24.0),
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                                BackgroundColor(Color::srgb(0.018, 0.026, 0.055)),
+                                BorderColor::all(Color::srgb(0.40, 0.49, 0.67)),
+                                Node {
+                                    width: percent(100.0),
+                                    height: px(56),
+                                    border: UiRect::all(px(2)),
+                                    border_radius: BorderRadius::all(px(8)),
+                                    padding: UiRect::axes(px(14), px(10)),
+                                    overflow: Overflow::clip_x(),
+                                    ..default()
+                                },
+                            ));
+                            panel
+                                .spawn(Node {
+                                    width: percent(100.0),
+                                    height: px(52),
+                                    justify_content: JustifyContent::SpaceBetween,
+                                    ..default()
+                                })
+                                .with_children(|buttons| {
+                                    spawn_town_dialog_button(
+                                        buttons,
+                                        TownDialogAction::Back,
+                                        "Back",
+                                        render,
+                                        1,
+                                    );
+                                    spawn_town_dialog_button(
+                                        buttons,
+                                        TownDialogAction::Create,
+                                        "Create Town",
+                                        render,
+                                        2,
+                                    );
+                                });
+                        } else {
+                            panel
+                                .spawn((
+                                    TownLoadList,
+                                    ScrollPosition::default(),
+                                    Node {
+                                        width: percent(100.0),
+                                        flex_grow: 1.0,
+                                        flex_direction: FlexDirection::Column,
+                                        row_gap: px(8),
+                                        overflow: Overflow::scroll_y(),
+                                        ..default()
+                                    },
+                                ))
+                                .with_children(|list| {
+                                    if saves.is_empty() {
+                                        list.spawn((
+                                            Text::new("No saved towns were found."),
+                                            TextFont {
+                                                font_size: FontSize::Px(19.0),
+                                                ..default()
+                                            },
+                                            TextColor(Color::WHITE),
+                                        ));
+                                    }
+                                    for (index, save) in saves.iter().enumerate() {
+                                        list.spawn((
+                                            TownLoadChoice {
+                                                name: save.name.clone(),
+                                                path: save.path.clone(),
+                                            },
+                                            Button,
+                                            TabIndex(i32::try_from(index).unwrap_or(i32::MAX)),
+                                            authored_ui_image(
+                                                render,
+                                                MAIN_MENU_TEXTURE_PATHS[0],
+                                                main_menu_texture(render, MAIN_MENU_TEXTURE_PATHS[0]),
+                                            ),
+                                            Node {
+                                                width: percent(100.0),
+                                                height: px(45),
+                                                flex_shrink: 0.0,
+                                                justify_content: JustifyContent::Center,
+                                                align_items: AlignItems::Center,
+                                                ..default()
+                                            },
+                                        ))
+                                        .with_children(|button| {
+                                            button.spawn((
+                                                Text::new(save.name.clone()),
+                                                TextFont {
+                                                    font_size: FontSize::Px(18.0),
+                                                    ..default()
+                                                },
+                                                TextColor(Color::srgb(0.827, 0.745, 0.498)),
+                                                Pickable::IGNORE,
+                                            ));
+                                        });
+                                    }
+                                });
+                            panel
+                                .spawn(Node {
+                                    width: percent(100.0),
+                                    justify_content: JustifyContent::Center,
+                                    ..default()
+                                })
+                                .with_children(|buttons| {
+                                    spawn_town_dialog_button(
+                                        buttons,
+                                        TownDialogAction::Back,
+                                        "Back",
+                                        render,
+                                        i32::try_from(saves.len()).unwrap_or(i32::MAX),
+                                    );
+                                });
+                        }
+                        panel.spawn((
+                            TownDialogFeedback,
+                            Text::new(""),
+                            TextFont {
+                                font_size: FontSize::Px(15.0),
+                                ..default()
+                            },
+                            TextLayout::justify(Justify::Center),
+                            TextColor(Color::srgb(1.0, 0.70, 0.38)),
+                            Pickable::IGNORE,
+                            Node {
+                                width: percent(100.0),
+                                min_height: px(20),
+                                ..default()
+                            },
+                        ));
+                    });
+            });
+    }
 }
 
 fn spawn_go_live_confirmation(commands: &mut Commands, render: &RenderAssets) {
@@ -14462,6 +15081,8 @@ fn update_menu_overlay(
         menu.page,
         MenuPage::Closed
             | MenuPage::GoLiveConfirmation
+            | MenuPage::NewTown
+            | MenuPage::LoadTown
             | MenuPage::Settings
             | MenuPage::SecretsDisclaimer
             | MenuPage::Secrets
@@ -14480,6 +15101,8 @@ fn update_menu_overlay(
         ),
         MenuPage::Closed
         | MenuPage::GoLiveConfirmation
+        | MenuPage::NewTown
+        | MenuPage::LoadTown
         | MenuPage::SecretsDisclaimer
         | MenuPage::Secrets => String::new(),
     };
@@ -14633,6 +15256,7 @@ fn menu_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     state: Res<State<GameState>>,
     save: Res<SaveRuntime>,
+    town_catalog: Res<TownSaveCatalogRuntime>,
     mut config: ResMut<RuntimeConfig>,
     secrets: Res<SecretsRuntime>,
     connection: Res<TwitchConnection>,
@@ -14668,7 +15292,11 @@ fn menu_input(
     }
     if matches!(
         menu.page,
-        MenuPage::GoLiveConfirmation | MenuPage::SecretsDisclaimer | MenuPage::Secrets
+        MenuPage::GoLiveConfirmation
+            | MenuPage::NewTown
+            | MenuPage::LoadTown
+            | MenuPage::SecretsDisclaimer
+            | MenuPage::Secrets
     ) {
         return;
     }
@@ -14845,14 +15473,14 @@ fn menu_input(
         match menu.selected {
             0 => {
                 if twitch_accounts_connected(&config.0, &secrets, &connection) {
-                    request_go_live_confirmation(&mut menu, PendingTownStart::NewGame);
+                    open_new_town_dialog(&mut menu);
                 } else {
                     open_twitch_setup_required(&mut menu);
                 }
             }
-            1 if save.store.path().is_file() => {
+            1 if !town_catalog.entries().is_empty() => {
                 if twitch_accounts_connected(&config.0, &secrets, &connection) {
-                    request_go_live_confirmation(&mut menu, PendingTownStart::LoadGame);
+                    open_load_town_dialog(&mut menu);
                 } else {
                     open_twitch_setup_required(&mut menu);
                 }
@@ -15164,6 +15792,8 @@ fn initial_actor_identity(index: u16) -> (String, Option<&'static str>) {
 fn generate_and_spawn_world(
     mut commands: Commands,
     mut loading: ResMut<WorldLoadingRuntime>,
+    mut restart: ResMut<TownRestartRuntime>,
+    mut io: ResMut<MenuIoRequest>,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
     presentation: Res<RuntimePresentation>,
@@ -15827,7 +16457,11 @@ fn generate_and_spawn_world(
             }
         }
     }
-    let initial_agents = runtime_initial_agents(config.0.gameplay.initial_agents);
+    let retained_players = restart.retained_players.clone();
+    let initial_agents = retained_players.as_ref().map_or_else(
+        || runtime_initial_agents(config.0.gameplay.initial_agents),
+        |players| u16::try_from(players.len()).unwrap_or(u16::MAX),
+    );
     let smoke_pet = debug_smoke_pet();
     let spawn_positions =
         connected_actor_positions(&generated, centre, town_hall_position, initial_agents);
@@ -15850,21 +16484,45 @@ fn generate_and_spawn_world(
             *camera = transform;
             controller.set_home(transform);
         }
-        let (actor_id, initial_role) = initial_actor_identity(spawned);
-        let actor_id = StableId::new(actor_id).expect("generated ID");
+        let retained = retained_players
+            .as_ref()
+            .and_then(|players| players.get(usize::from(spawned)));
+        let (actor_id, initial_role) = retained.map_or_else(
+            || {
+                let (actor_id, role) = initial_actor_identity(spawned);
+                (
+                    StableId::new(actor_id).expect("generated ID"),
+                    role.map(|role| StableId::new(role).expect("starting role IDs are valid")),
+                )
+            },
+            |actor| (actor.id.clone(), Some(actor.role.clone())),
+        );
         let target = deterministic_wander_target(&generated, &actor_id, position);
         let kind = ActorKind::Player;
         simulation.join_player(actor_id.clone(), position);
         if let Some(role) = initial_role {
-            let _ = simulation.assign_role(
-                &actor_id,
-                StableId::new(role).expect("starting role IDs are valid"),
-            );
+            let _ = simulation.assign_role(&actor_id, role);
         }
-        let authored_archetype =
-            archetype_id_by_source(&content.0, ArchetypeKind::Player, "Player_Character.prefab");
+        let authored_archetype = retained
+            .and_then(|actor| actor.archetype.clone())
+            .or_else(|| {
+                archetype_id_by_source(&content.0, ArchetypeKind::Player, "Player_Character.prefab")
+            });
         if let Some(actor) = simulation.actors.get_mut(&actor_id) {
             actor.archetype.clone_from(&authored_archetype);
+            if let Some(retained) = retained {
+                actor.display_name.clone_from(&retained.display_name);
+                actor.login_name.clone_from(&retained.login_name);
+                actor.user_type = retained.user_type;
+                actor.customization = retained.customization;
+                actor.unlocked_pets.clone_from(&retained.unlocked_pets);
+                actor.active_pet.clone_from(&retained.active_pet);
+                actor.role_progression.clear();
+                actor.role_progression.insert(
+                    actor.role.clone(),
+                    stream_town_domain::RoleProgress::default(),
+                );
+            }
             if spawned == 0
                 && let Some(pet) = &smoke_pet
             {
@@ -16203,6 +16861,11 @@ fn generate_and_spawn_world(
         legacy_migration: None,
     });
     commands.insert_resource(SimulationRuntime(simulation));
+    if retained_players.is_some() {
+        restart.retained_players = None;
+        restart.suppress_exit_save = false;
+        io.save = true;
+    }
     commands.insert_resource(EnvironmentPresentation::default());
     loading.phase = WorldLoadingPhase::Complete;
     loading.work.terrain_entities = LoadingWork::count(2, 2);
@@ -17379,12 +18042,6 @@ fn actor_archetype<'a>(
         (ArchetypeKind::Player, "Player_Character.prefab")
     };
     archetype_by_source(content, kind, source)
-}
-
-fn authored_respawn_milliseconds(content: &ContentCatalog, actor: &ActorState) -> Option<u32> {
-    actor_archetype(content, actor)
-        .and_then(|archetype| archetype.health.as_ref())
-        .and_then(|health| health.revive_milliseconds)
 }
 
 fn town_hall_grid_position(config: &GameConfig) -> GridPos {
@@ -19373,6 +20030,7 @@ fn spawn_combat_projectile(
             speed_cells_per_second: projectile.speed_cells_per_second,
             visual: projectile.visual,
             trail_cooldown_seconds: 0.0,
+            remaining_seconds: PROJECTILE_MAX_LIFETIME_SECONDS,
         },
         Transform::from_translation(origin + Vec3::Y * config.world.cell_size * 0.35)
             .with_scale(Vec3::splat(scale)),
@@ -19445,6 +20103,7 @@ fn spawn_combat_smoke_arrow(
             speed_cells_per_second: 0.0,
             visual: CombatVisualKind::Arrow,
             trail_cooldown_seconds: f32::MAX,
+            remaining_seconds: f32::MAX,
         },
         transform,
     ));
@@ -20036,6 +20695,10 @@ fn spawn_healing_effect(
     kind: HealingEffectKind,
     cell_size: f32,
 ) {
+    // Unity-authored VFX sizes are already world-space values. The initial
+    // port multiplied them by Bevy's two-metre grid cell a second time, which
+    // made the green heal/revive burst look like a monster-sized screen flash.
+    let world_scale = (cell_size / UNITY_AUTHORED_GRID_CELL_SIZE).clamp(0.25, 4.0);
     let duration_seconds = healing_effect_duration(presentation, kind);
     let (effect, material, base_scale) = match kind {
         HealingEffectKind::Channel => {
@@ -20047,7 +20710,7 @@ fn spawn_healing_effect(
                     .get(effect)
                     .cloned()
                     .unwrap_or_else(|| render.healing_green.clone()),
-                cell_size * definition.exposed_size * 0.085,
+                world_scale * definition.exposed_size * 0.085,
             )
         }
         HealingEffectKind::Burst | HealingEffectKind::Revive => {
@@ -20060,7 +20723,7 @@ fn spawn_healing_effect(
                     .and_then(|materials| materials.first())
                     .cloned()
                     .unwrap_or_else(|| render.healing_green.clone()),
-                cell_size * 0.55,
+                world_scale * 0.55,
             )
         }
     };
@@ -20132,8 +20795,8 @@ fn spawn_healing_effect(
                 duration_seconds,
                 angle_radians,
                 phase,
-                base_scale: Vec3::splat(cell_size * 0.08),
-                distance_scale: cell_size,
+                base_scale: Vec3::splat(world_scale * 0.08),
+                distance_scale: world_scale,
                 size_multiplier: mote_size_multiplier,
             },
             Mesh3d(mesh),
@@ -20244,6 +20907,11 @@ fn move_combat_projectiles(
         .map(|(agent, transform)| (agent.id.clone(), transform.translation))
         .collect();
     for (entity, mut projectile, mut transform) in &mut projectiles {
+        projectile.remaining_seconds -= time.delta_secs();
+        if projectile.remaining_seconds <= 0.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
         let source_valid = match &projectile.source {
             ProjectileSource::Actor(actor) => simulation
                 .0
@@ -20355,7 +21023,10 @@ fn update_enemy_encounters(
             ),
         )
     {
-        let _ = simulation.0.start_raid(5, 50, enemy, boss);
+        let player_count = simulation_player_count(&simulation.0);
+        let _ = simulation
+            .0
+            .start_raid(5, raid_enemies_per_wave(player_count), enemy, boss);
     }
 
     let next_wave = simulation.0.active_raid.as_ref().and_then(|raid| {
@@ -20423,12 +21094,7 @@ fn update_enemy_encounters(
                     position,
                 ) {
                     if final_wave {
-                        let player_count = simulation
-                            .0
-                            .actors
-                            .values()
-                            .filter(|actor| actor.role.as_str() != "role:enemy")
-                            .count();
+                        let player_count = simulation_player_count(&simulation.0);
                         let boss_health =
                             i32::try_from(50_usize.saturating_mul(player_count).max(1_000))
                                 .unwrap_or(i32::MAX);
@@ -20457,13 +21123,48 @@ fn update_enemy_encounters(
     {
         return;
     }
-    let player_count = simulation
-        .0
-        .actors
-        .values()
-        .filter(|actor| actor.role.as_str() != "role:enemy")
-        .count();
+    let player_count = simulation_player_count(&simulation.0);
     let camp_ids: Vec<_> = simulation.0.enemy_camps.keys().cloned().collect();
+    let (minimum_enemies, maximum_enemies) = camp_ids
+        .iter()
+        .filter_map(|camp_id| {
+            let camp = simulation.0.enemy_camps.get(camp_id)?;
+            content
+                .0
+                .archetypes
+                .get(&camp.archetype)?
+                .enemy_spawner
+                .as_ref()
+        })
+        .fold((usize::MAX, 0_usize), |(minimum, maximum), spawner| {
+            (
+                minimum.min(usize::from(spawner.min_total_enemies)),
+                maximum.max(usize::from(spawner.max_total_enemies)),
+            )
+        });
+    let global_cap = authored_night_enemy_cap(
+        simulation.0.day,
+        player_count,
+        if minimum_enemies == usize::MAX {
+            0
+        } else {
+            minimum_enemies
+        },
+        maximum_enemies,
+    );
+    let mut live_camp_enemies = simulation
+        .0
+        .enemy_camps
+        .values()
+        .flat_map(|camp| camp.spawned_enemies.iter())
+        .filter(|enemy| {
+            simulation
+                .0
+                .actors
+                .get(*enemy)
+                .is_some_and(|actor| actor.alive)
+        })
+        .count();
     for camp_id in camp_ids {
         let Some(mut camp) = simulation.0.enemy_camps.get(&camp_id).cloned() else {
             continue;
@@ -20476,15 +21177,8 @@ fn update_enemy_encounters(
         else {
             continue;
         };
-        let day_cap = usize::try_from(simulation.0.day)
-            .unwrap_or(usize::MAX)
-            .saturating_add(player_count / 10)
-            .clamp(
-                usize::from(spawner.min_total_enemies),
-                usize::from(spawner.max_total_enemies),
-            );
         let spawn_interval_seconds = f64::from(spawner.spawn_milliseconds) / 1_000.0;
-        if camp.spawned_enemies.len() >= day_cap {
+        if live_camp_enemies >= global_cap {
             // EnemySpawner resets its elapsed timer while the cap is full, so
             // a later vacancy waits one complete authored interval.
             camp.spawn_remaining_seconds = spawn_interval_seconds;
@@ -20517,11 +21211,68 @@ fn update_enemy_encounters(
                 position,
             ) {
                 camp.spawned_enemies.insert(enemy);
+                live_camp_enemies = live_camp_enemies.saturating_add(1);
             }
             camp.spawn_remaining_seconds = spawn_interval_seconds;
         }
         simulation.0.enemy_camps.insert(camp_id, camp);
     }
+}
+
+fn simulation_player_count(simulation: &WorldSimulation) -> usize {
+    simulation
+        .actors
+        .values()
+        .filter(|actor| actor.role.as_str() != "role:enemy")
+        .count()
+}
+
+fn authored_night_enemy_cap(
+    day: u32,
+    player_count: usize,
+    minimum: usize,
+    maximum: usize,
+) -> usize {
+    if maximum == 0 {
+        return 0;
+    }
+    usize::try_from(day)
+        .unwrap_or(usize::MAX)
+        .saturating_add(player_count / 10)
+        .clamp(minimum.min(maximum), maximum)
+}
+
+fn raid_enemies_per_wave(player_count: usize) -> u16 {
+    u16::try_from(player_count.saturating_mul(2).clamp(3, 50)).unwrap_or(50)
+}
+
+fn restart_world_after_town_hall_falls(
+    mut commands: Commands,
+    simulation: Res<SimulationRuntime>,
+    mut restart: ResMut<TownRestartRuntime>,
+) {
+    let town_hall = StableId::new("building:townhall").expect("static stable ID");
+    if simulation.0.buildings.contains_key(&town_hall) || restart.retained_players.is_some() {
+        return;
+    }
+    let mut retained_players = simulation
+        .0
+        .actors
+        .values()
+        .filter(|actor| actor.role.as_str() != "role:enemy")
+        .cloned()
+        .collect::<Vec<_>>();
+    if let (Some(ruler), Some(previous_role)) = (
+        simulation.0.current_ruler.as_ref(),
+        simulation.0.ruler_previous_role.as_ref(),
+    ) && let Some(actor) = retained_players.iter_mut().find(|actor| &actor.id == ruler)
+    {
+        actor.role.clone_from(previous_role);
+    }
+    restart.retained_players = Some(retained_players);
+    restart.suppress_exit_save = true;
+    warn!("Town Hall fell; rebuilding the town while retaining player identities and roles");
+    queue_world_loading(&mut commands);
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -21573,30 +22324,30 @@ fn move_agents(
             agent.action_cooldown_seconds = 0.0;
             agent.repath_remaining_seconds = 0.0;
             agent.health_regen_accumulator = 0.0;
+            if agent.kind == ActorKind::Enemy {
+                continue;
+            }
             let remaining = simulation
                 .0
                 .actors
                 .get(&agent.id)
                 .and_then(|actor| actor.respawn_remaining_seconds);
             if remaining.is_none() {
-                let Some(duration) = simulation
-                    .0
-                    .actors
-                    .get(&agent.id)
-                    .and_then(|actor| authored_respawn_milliseconds(&content.0, actor))
-                else {
-                    continue;
-                };
                 let _ = simulation
                     .0
-                    .schedule_respawn(&agent.id, f64::from(duration) / 1_000.0);
+                    .schedule_respawn(&agent.id, AUTOMATIC_PLAYER_RESPAWN_SECONDS);
                 continue;
             }
             if remaining.is_some_and(|remaining| remaining > f64::EPSILON) {
                 continue;
             }
-            let spawn = nearest_walkable(&world.generated, agent.spawn).unwrap_or(agent.spawn);
-            if simulation.0.respawn_actor(&agent.id, spawn).is_err() {
+            let town_hall = restored_town_hall_position(&content.0, &simulation.0, &config.0);
+            let spawn = nearest_walkable(&world.generated, town_hall).unwrap_or(town_hall);
+            if simulation
+                .0
+                .respawn_actor_with_level_penalty(&agent.id, spawn)
+                .is_err()
+            {
                 continue;
             }
             let mut world_position = grid_to_world_on_surface(spawn, &config.0, &world.generated);
@@ -23088,6 +23839,111 @@ fn update_environment_presentation(
     }
     presentation.applied_environment = Some(environment);
     presentation.applied_daylight_bits = Some(daylight_bits);
+}
+
+#[derive(Clone, Copy)]
+struct NightLightSpec {
+    position: Vec3,
+    color: Color,
+    intensity: f32,
+    range: f32,
+}
+
+fn sync_pooled_night_lights(
+    mut commands: Commands,
+    config: Res<RuntimeConfig>,
+    simulation: Res<SimulationRuntime>,
+    agents: Query<(&Agent, &GlobalTransform)>,
+    buildings: Query<&GlobalTransform, With<RuntimeBuilding>>,
+    projectiles: Query<(&CombatProjectile, &GlobalTransform)>,
+    mut slots: Query<
+        (Entity, &mut Transform, &mut PointLight, &mut Visibility),
+        With<NightPointLightPoolSlot>,
+    >,
+) {
+    let cell_size = config.0.world.cell_size;
+    let mut sources = Vec::new();
+    for (agent, transform) in &agents {
+        if agent.kind == ActorKind::Player {
+            sources.push(NightLightSpec {
+                position: transform.translation() + Vec3::Y * cell_size * 0.9,
+                color: Color::srgb(1.0, 0.82, 0.56),
+                intensity: 115_000.0,
+                range: cell_size * 5.0,
+            });
+        }
+    }
+    for transform in &buildings {
+        sources.push(NightLightSpec {
+            position: transform.translation() + Vec3::Y * cell_size * 1.5,
+            color: Color::srgb(1.0, 0.66, 0.30),
+            intensity: 165_000.0,
+            range: cell_size * 7.0,
+        });
+    }
+    let persistent_source_count = sources.len();
+    for (projectile, transform) in &projectiles {
+        let color = match projectile.visual {
+            CombatVisualKind::Fireball => Color::srgb(1.0, 0.24, 0.04),
+            CombatVisualKind::Necrotic => Color::srgb(0.48, 0.16, 0.92),
+            CombatVisualKind::Arrow | CombatVisualKind::Physical => Color::srgb(1.0, 0.78, 0.38),
+        };
+        sources.push(NightLightSpec {
+            position: transform.translation(),
+            color,
+            intensity: 90_000.0,
+            range: cell_size * 3.0,
+        });
+    }
+    let night = !config
+        .0
+        .time
+        .sample(simulation.0.elapsed_seconds)
+        .is_daytime;
+    let mut slot_count = 0_usize;
+    for (_, mut transform, mut light, mut visibility) in &mut slots {
+        if night && let Some(spec) = sources.get(slot_count).copied() {
+            transform.translation = spec.position;
+            light.color = spec.color;
+            light.intensity = spec.intensity;
+            light.range = spec.range;
+            *visibility = Visibility::Visible;
+        } else {
+            light.intensity = 0.0;
+            *visibility = Visibility::Hidden;
+        }
+        slot_count += 1;
+    }
+    let desired_capacity = persistent_source_count
+        .saturating_add(PREWARMED_PROJECTILE_NIGHT_LIGHTS.max(projectiles.iter().count()));
+    while slot_count < desired_capacity {
+        let active = night.then(|| sources.get(slot_count)).flatten().copied();
+        let spec = active.unwrap_or(NightLightSpec {
+            position: Vec3::ZERO,
+            color: Color::WHITE,
+            intensity: 0.0,
+            range: cell_size * 3.0,
+        });
+        commands.spawn((
+            WorldEntity,
+            NightPointLightPoolSlot,
+            PointLight {
+                color: spec.color,
+                intensity: spec.intensity,
+                range: spec.range,
+                radius: cell_size * 0.08,
+                shadow_maps_enabled: false,
+                ..default()
+            },
+            Transform::from_translation(spec.position),
+            if active.is_some() {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            },
+        ));
+        slot_count += 1;
+    }
 }
 
 fn daylight_signature(value: f32) -> u32 {
@@ -29687,10 +30543,14 @@ fn autosave_game(
 
 fn save_on_gameplay_exit(
     save: Res<SaveRuntime>,
+    restart: Res<TownRestartRuntime>,
     world: Option<Res<WorldRuntime>>,
     stats: Option<Res<SessionStats>>,
     simulation: Option<Res<SimulationRuntime>>,
 ) {
+    if restart.suppress_exit_save {
+        return;
+    }
     let (Some(world), Some(stats), Some(simulation)) = (world, stats, simulation) else {
         return;
     };
@@ -34072,7 +34932,9 @@ fn process_injected_commands(
                                     "Enemy_MinotaurBoss.prefab",
                                 )
                                 .ok_or_else(|| "raid boss archetype is unavailable".to_owned())?;
-                                if !simulation.0.start_raid(5, 50, enemy, boss) {
+                                let enemies_per_wave =
+                                    raid_enemies_per_wave(simulation_player_count(&simulation.0));
+                                if !simulation.0.start_raid(5, enemies_per_wave, enemy, boss) {
                                     return Err("raid settings are invalid".to_owned());
                                 }
                             } else if event == TownEvent::FishGod {
@@ -34327,7 +35189,11 @@ fn update_hud(
             HudMetric::Gold => town_resource_amount(&simulation.0, "resource:gold").to_string(),
             HudMetric::Ore => town_resource_amount(&simulation.0, "resource:ore").to_string(),
             HudMetric::Wood => town_resource_amount(&simulation.0, "resource:wood").to_string(),
-            HudMetric::Players => agents.iter().len().to_string(),
+            HudMetric::Players => agents
+                .iter()
+                .filter(|agent| agent.kind == ActorKind::Player)
+                .count()
+                .to_string(),
             HudMetric::Buildings => simulation.0.buildings.len().to_string(),
             HudMetric::PlayTime => hud_play_time(stats.elapsed_seconds),
         };
@@ -35560,7 +36426,7 @@ fn sync_actor_health_overlays(
     };
     let actor_positions: BTreeMap<_, _> = agents
         .iter()
-        .filter(|(agent, _)| agent.kind == ActorKind::Player)
+        .filter(|(agent, _)| matches!(agent.kind, ActorKind::Player | ActorKind::Enemy))
         .map(|(agent, transform)| (agent.id.clone(), transform.translation()))
         .collect();
     let mut existing = BTreeSet::new();
@@ -37450,6 +38316,188 @@ mod tests {
     }
 
     #[test]
+    fn town_names_have_stable_seeds_and_windows_safe_independent_save_names() {
+        assert_eq!(town_name_seed(" Bean Bay "), town_name_seed("bean bay"));
+        assert_ne!(town_name_seed("Bean Bay"), town_name_seed("Bean Vale"));
+        assert_eq!(safe_town_filename("Bean: Bay?"), "Bean_ Bay_");
+        assert_eq!(safe_town_filename("CON"), "Town_CON");
+    }
+
+    #[test]
+    fn new_town_dialog_selects_an_independent_save_and_seed_before_consent() {
+        let directory = tempfile::tempdir().unwrap();
+        let initial = directory.path().join("legacy.stbevy");
+        let mut menu = MenuRuntime::default();
+        open_new_town_dialog(&mut menu);
+        let mut app = App::new();
+        app.insert_resource(menu)
+            .insert_resource(TownSaveCatalogRuntime {
+                directory: directory.path().to_path_buf(),
+                legacy_path: initial.clone(),
+                fixed_path: None,
+                active_town: None,
+            })
+            .insert_resource(SaveRuntime {
+                store: NativeSaveStore::new(initial),
+            })
+            .insert_resource(RuntimeConfig(GameConfig::default()))
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputFocus>()
+            .add_systems(Update, town_dialog_buttons);
+        app.world_mut()
+            .spawn((TownNameField, EditableText::new("Bean Bay")));
+        app.world_mut()
+            .spawn((Interaction::Pressed, TownDialogAction::Create));
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<MenuRuntime>().page,
+            MenuPage::GoLiveConfirmation
+        );
+        assert_eq!(
+            app.world().resource::<RuntimeConfig>().0.world.seed,
+            town_name_seed("Bean Bay")
+        );
+        assert_eq!(
+            app.world()
+                .resource::<SaveRuntime>()
+                .store
+                .path()
+                .file_name()
+                .unwrap(),
+            "Bean Bay.stbevy"
+        );
+    }
+
+    #[test]
+    fn night_one_enemy_and_raid_caps_scale_from_players_not_camp_count() {
+        assert_eq!(authored_night_enemy_cap(1, 2, 3, 10), 3);
+        assert_eq!(authored_night_enemy_cap(5, 2, 3, 10), 5);
+        assert_eq!(authored_night_enemy_cap(5, 20, 3, 10), 7);
+        assert_eq!(authored_night_enemy_cap(100, 2, 3, 10), 10);
+        assert_eq!(raid_enemies_per_wave(1), 3);
+        assert_eq!(raid_enemies_per_wave(2), 4);
+        assert_eq!(raid_enemies_per_wave(25), 50);
+    }
+
+    #[test]
+    fn town_hall_loss_carries_players_and_roles_into_a_real_world_reload() {
+        let mut simulation = WorldSimulation::new(42);
+        let player = StableId::new("twitch:survivor").unwrap();
+        let enemy = StableId::new("actor:enemy_test").unwrap();
+        let role = StableId::new("role:forester").unwrap();
+        assert!(simulation.join_player(player.clone(), GridPos { x: 2, z: 3 }));
+        simulation.assign_role(&player, role.clone()).unwrap();
+        assert!(simulation.spawn_enemy(
+            enemy,
+            StableId::new("archetype:enemy:test").unwrap(),
+            GridPos { x: 9, z: 9 },
+            10,
+        ));
+        let mut app = App::new();
+        app.insert_resource(SimulationRuntime(simulation))
+            .init_resource::<TownRestartRuntime>()
+            .add_systems(Update, restart_world_after_town_hall_falls);
+
+        app.update();
+
+        let restart = app.world().resource::<TownRestartRuntime>();
+        let retained = restart.retained_players.as_ref().unwrap();
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].id, player);
+        assert_eq!(retained[0].role, role);
+        assert!(restart.suppress_exit_save);
+        assert!(app.world().contains_resource::<WorldLoadingCoverRuntime>());
+    }
+
+    #[test]
+    fn night_lights_are_prewarmed_reused_and_disabled_during_the_day() {
+        let config = GameConfig::default();
+        let mut simulation = WorldSimulation::new(config.world.seed);
+        simulation.elapsed_seconds = f64::from(config.time.seconds_per_day) * 0.8;
+        let player = StableId::new("twitch:light_test").unwrap();
+        assert!(simulation.join_player(player.clone(), GridPos { x: 2, z: 2 }));
+        let mut app = App::new();
+        app.insert_resource(RuntimeConfig(config.clone()))
+            .insert_resource(SimulationRuntime(simulation))
+            .add_systems(Update, sync_pooled_night_lights);
+        app.world_mut().spawn((
+            Agent {
+                id: player,
+                kind: ActorKind::Player,
+                archetype: StableId::new("archetype:player:test").unwrap(),
+                goal: AgentGoal::Wander,
+                spawn: GridPos { x: 2, z: 2 },
+                origin: GridPos { x: 2, z: 2 },
+                path: Vec::new(),
+                path_index: 0,
+                target: GridPos { x: 2, z: 2 },
+                action_cooldown_seconds: 0.0,
+                action_started: false,
+                repath_remaining_seconds: 0.0,
+                health_regen_accumulator: 0.0,
+                wander_sequence: 0,
+                previous_wander_origin: None,
+            },
+            GlobalTransform::from_translation(Vec3::new(1.0, 0.0, 1.0)),
+        ));
+        app.world_mut().spawn((
+            RuntimeBuilding {
+                id: StableId::new("building:test").unwrap(),
+            },
+            GlobalTransform::from_translation(Vec3::new(3.0, 0.0, 3.0)),
+        ));
+        app.world_mut().spawn((
+            CombatProjectile {
+                source: ProjectileSource::Building(StableId::new("building:test").unwrap()),
+                target: StableId::new("actor:enemy_test").unwrap(),
+                damage: 1,
+                speed_cells_per_second: 1.0,
+                visual: CombatVisualKind::Fireball,
+                trail_cooldown_seconds: 0.0,
+                remaining_seconds: 1.0,
+            },
+            GlobalTransform::from_translation(Vec3::new(2.0, 1.0, 2.0)),
+        ));
+
+        app.update();
+
+        let slot_count = app
+            .world_mut()
+            .query::<&NightPointLightPoolSlot>()
+            .iter(app.world())
+            .count();
+        let visible_at_night = app
+            .world_mut()
+            .query_filtered::<&Visibility, With<NightPointLightPoolSlot>>()
+            .iter(app.world())
+            .filter(|visibility| **visibility == Visibility::Visible)
+            .count();
+        assert_eq!(slot_count, 2 + PREWARMED_PROJECTILE_NIGHT_LIGHTS);
+        assert_eq!(visible_at_night, 3);
+
+        app.world_mut()
+            .resource_mut::<SimulationRuntime>()
+            .0
+            .elapsed_seconds = 0.0;
+        app.update();
+        let slot_count_after_day = app
+            .world_mut()
+            .query::<&NightPointLightPoolSlot>()
+            .iter(app.world())
+            .count();
+        let visible_during_day = app
+            .world_mut()
+            .query_filtered::<&Visibility, With<NightPointLightPoolSlot>>()
+            .iter(app.world())
+            .filter(|visibility| **visibility == Visibility::Visible)
+            .count();
+        assert_eq!(slot_count_after_day, slot_count);
+        assert_eq!(visible_during_day, 0);
+    }
+
+    #[test]
     fn shipping_main_menu_preserves_art_order_and_load_availability() {
         let presentation = embedded_presentation();
         let content = embedded_content();
@@ -38040,6 +39088,12 @@ mod tests {
             .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
             .insert_resource(SaveRuntime {
                 store: NativeSaveStore::new(&save_path),
+            })
+            .insert_resource(TownSaveCatalogRuntime {
+                directory: save_directory.path().to_path_buf(),
+                legacy_path: save_path.clone(),
+                fixed_path: Some(save_path),
+                active_town: None,
             })
             .add_systems(Update, main_menu_buttons);
         app.world_mut()
@@ -41686,6 +42740,7 @@ mod tests {
                     speed_cells_per_second: spawn.speed_cells_per_second,
                     visual: spawn.visual,
                     trail_cooldown_seconds: 0.0,
+                    remaining_seconds: PROJECTILE_MAX_LIFETIME_SECONDS,
                 };
                 resolve_combat_projectile_impact(&config, &mut simulation, &content, &projectile)
                     .unwrap();
@@ -41797,6 +42852,7 @@ mod tests {
             speed_cells_per_second: spawn.speed_cells_per_second,
             visual: spawn.visual,
             trail_cooldown_seconds: 0.0,
+            remaining_seconds: PROJECTILE_MAX_LIFETIME_SECONDS,
         };
         assert!(
             resolve_combat_projectile_impact(&config, &mut simulation, &content, &projectile,)
