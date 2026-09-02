@@ -1016,7 +1016,7 @@ impl WorldSimulation {
         building: &StableId,
         max_level: u16,
         upgraded_max_health: u32,
-        health_gain_per_level: u32,
+        _health_gain_per_level: u32,
         cost: &BTreeMap<StableId, u32>,
     ) -> Result<u16, SimulationError> {
         let state = self
@@ -1038,10 +1038,11 @@ impl WorldSimulation {
             .get_mut(building)
             .expect("building was validated before spending resources");
         state.level = state.level.saturating_add(1).min(max_level);
-        state.health = state
-            .health
-            .saturating_add(i32::try_from(health_gain_per_level).unwrap_or(i32::MAX))
-            .min(i32::try_from(upgraded_max_health).unwrap_or(i32::MAX));
+        // An upgrade is a new construction phase, not an instant stat change.
+        // Start at the same ten-percent scaffold state as a fresh structure so
+        // builders contribute equivalent authored construction effort.
+        state.health = i32::try_from(upgraded_max_health.div_ceil(10)).unwrap_or(i32::MAX);
+        state.complete = false;
         Ok(state.level)
     }
 
@@ -1839,6 +1840,33 @@ mod tests {
             Ok(u32::try_from(BUILDING_MAX_HEALTH).unwrap())
         );
         assert_eq!(simulation.buildings[&building].health, BUILDING_MAX_HEALTH);
+    }
+
+    #[test]
+    fn building_upgrade_reenters_the_full_construction_phase() {
+        let building = id("building:upgrade_test");
+        let mut simulation = WorldSimulation::new(12);
+        simulation.buildings.insert(
+            building.clone(),
+            BuildingState {
+                id: building.clone(),
+                archetype: id("archetype:building"),
+                position: GridPos { x: 4, z: 5 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: 100,
+                complete: true,
+            },
+        );
+        assert_eq!(
+            simulation.upgrade_building(&building, 3, 200, 100, &BTreeMap::new()),
+            Ok(2)
+        );
+        let state = &simulation.buildings[&building];
+        assert_eq!(state.health, 20);
+        assert!(!state.complete);
+        assert_eq!(simulation.work_on_building(&building, 179, 200), Ok(false));
+        assert_eq!(simulation.work_on_building(&building, 1, 200), Ok(true));
     }
 
     #[test]

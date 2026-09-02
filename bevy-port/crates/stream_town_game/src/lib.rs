@@ -59,6 +59,7 @@ use bevy::{
     },
     prelude::*,
     render::erased_render_asset::ErasedRenderAssets,
+    render::error_handler::{ErrorType, RenderError, RenderErrorHandler, RenderErrorPolicy},
     render::mesh::RenderMesh,
     render::render_asset::RenderAssets as GpuRenderAssets,
     render::render_resource::{
@@ -173,6 +174,18 @@ const PING_POINTER_MODEL_PATH: &str = "migrated/models/Models/VFX/PointerArrow.g
 const PING_POINTER_MATERIAL_ID: &str = "material:799ef8ce46a71414286fd24c033a98fe";
 const PING_POINTER_MODEL_MIN_Y: f32 = 851.829_35;
 const PING_POINTER_MODEL_HEIGHT: f32 = 314.468_26;
+const PLAYER_NAME_COLOR_PRESETS: [[u8; 3]; 10] = [
+    [238, 91, 91],
+    [244, 157, 72],
+    [239, 213, 83],
+    [112, 201, 101],
+    [74, 198, 191],
+    [83, 163, 238],
+    [132, 116, 238],
+    [194, 105, 226],
+    [232, 109, 171],
+    [232, 218, 196],
+];
 const FISH_GOD_EXIT_DELAY_SECONDS: f32 = 2.5;
 const RAINING_FISH_PREFAB_SUFFIX: &str = "VFX/Environment/VFX_RainingFish.prefab";
 const RAINING_FISH_RENDER_BUDGET: usize = 320;
@@ -872,6 +885,29 @@ struct BuildingPlacement {
     building: StableId,
     position: GridPos,
     rotation_quarter_turns: i32,
+    line_start: Option<GridPos>,
+    line_end: Option<GridPos>,
+}
+
+#[derive(Resource, Default)]
+struct PathFailureRuntime(BTreeMap<StableId, f32>);
+
+impl PathFailureRuntime {
+    fn record_failure(&mut self, actor: &StableId, delta_seconds: f32) -> bool {
+        let elapsed = self.0.entry(actor.clone()).or_default();
+        *elapsed += delta_seconds.max(0.0);
+        *elapsed >= 5.0
+    }
+
+    fn clear(&mut self, actor: &StableId) {
+        self.0.remove(actor);
+    }
+}
+
+#[derive(Resource, Default)]
+struct SurfaceErrorRuntime {
+    last_error: Option<Instant>,
+    consecutive_errors: u8,
 }
 
 #[derive(Resource, Default)]
@@ -2951,11 +2987,13 @@ struct BuildingHealthFill;
 #[derive(Component)]
 struct BuildingPlacementVisual {
     owner: StableId,
+    cell: GridPos,
 }
 
 #[derive(Component)]
 struct BuildingPlacementGhost {
     owner: StableId,
+    cell: GridPos,
     building: StableId,
     scene_asset_path: String,
 }
@@ -3066,8 +3104,8 @@ enum ActionPresentation {
         visual: CombatVisualKind,
     },
     Healing {
-        source: GridPos,
-        target: GridPos,
+        source: StableId,
+        target: StableId,
     },
     BuildingWork {
         target: GridPos,
@@ -3144,6 +3182,7 @@ struct HealingRingEffect {
     elapsed_seconds: f32,
     duration_seconds: f32,
     base_scale: f32,
+    follow_target: Option<StableId>,
 }
 
 #[derive(Component)]
@@ -3158,6 +3197,7 @@ struct HealingMoteEffect {
     base_scale: Vec3,
     distance_scale: f32,
     size_multiplier: f32,
+    follow_target: Option<StableId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -3657,6 +3697,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<AgentCommandQueue>()
             .init_resource::<BuildingCommandQueue>()
             .init_resource::<BuildingPlacers>()
+            .init_resource::<PathFailureRuntime>()
             .init_resource::<TwitchConnection>()
             .init_resource::<OperatorChatRuntime>()
             .init_resource::<SelectedCell>()
@@ -4178,7 +4219,10 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
-                apply_player_settings.run_if(resource_changed::<RuntimePlayerSettings>),
+                (
+                    sync_primary_window_settings,
+                    apply_player_settings.run_if(resource_changed::<RuntimePlayerSettings>),
+                ),
             )
             .add_systems(
                 Update,
@@ -4262,6 +4306,8 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
                     ..default()
                 }),
         )
+        .insert_resource(SurfaceErrorRuntime::default())
+        .insert_resource(RenderErrorHandler(stream_town_render_error_handler))
         .add_plugins(tidal_music::tidal_plugin(&asset_root))
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(FrameTimeDiagnosticsPlugin::new(600))
@@ -4291,6 +4337,41 @@ fn runtime_wgpu_settings() -> WgpuSettings {
         settings.backends = Some(Backends::DX12);
     }
     settings
+}
+
+fn is_transient_surface_configuration_error(error: &RenderError) -> bool {
+    matches!(error.ty, ErrorType::Validation)
+        && error.description.contains("Surface::configure")
+        && error.description.contains("Invalid surface")
+}
+
+fn stream_town_render_error_handler(
+    error: &RenderError,
+    main_world: &mut World,
+    _render_world: &mut World,
+) -> RenderErrorPolicy {
+    if is_transient_surface_configuration_error(error) {
+        let now = Instant::now();
+        let mut recovery = main_world.resource_mut::<SurfaceErrorRuntime>();
+        if recovery
+            .last_error
+            .is_none_or(|last| now.saturating_duration_since(last) > Duration::from_secs(2))
+        {
+            recovery.consecutive_errors = 0;
+        }
+        recovery.last_error = Some(now);
+        recovery.consecutive_errors = recovery.consecutive_errors.saturating_add(1);
+        if recovery.consecutive_errors <= 3 {
+            warn!(
+                attempt = recovery.consecutive_errors,
+                "ignored a transient DX12 surface reconfiguration failure"
+            );
+            return RenderErrorPolicy::Ignore;
+        }
+    }
+    error!(kind = ?error.ty, "rendering cannot safely continue");
+    main_world.write_message(AppExit::error());
+    RenderErrorPolicy::StopRendering
 }
 
 #[must_use]
@@ -5103,32 +5184,12 @@ fn setup_rendering(
 fn apply_player_settings(
     settings: Res<RuntimePlayerSettings>,
     mut commands: Commands,
-    mut windows: Query<(&mut Window, Option<&OnMonitor>), With<PrimaryWindow>>,
     mut cameras: Query<(Entity, &mut Projection), With<TownCamera>>,
     mut lights: Query<&mut DirectionalLight>,
     mut shadow_map: Option<ResMut<DirectionalLightShadowMap>>,
     mut winit: Option<ResMut<WinitSettings>>,
 ) {
     let benchmarking = std::env::var_os("STREAM_TOWN_REPORT_FRAME_TIME").is_some();
-    if let Ok((mut window, current_monitor)) = windows.single_mut() {
-        let monitor = current_monitor.map(|monitor| monitor.0);
-        window.mode = if benchmarking {
-            WindowMode::Windowed
-        } else {
-            player_window_mode(settings.0.video.display_mode, monitor)
-        };
-        window.present_mode = if benchmarking {
-            PresentMode::Immediate
-        } else if settings.0.video.vsync {
-            PresentMode::AutoVsync
-        } else {
-            PresentMode::AutoNoVsync
-        };
-        window.resolution.set(
-            f32::from(u16::try_from(settings.0.video.width).unwrap_or(u16::MAX)),
-            f32::from(u16::try_from(settings.0.video.height).unwrap_or(u16::MAX)),
-        );
-    }
     let msaa = player_msaa(&settings.0);
     for (entity, mut projection) in &mut cameras {
         if let Projection::Perspective(perspective) = &mut *projection {
@@ -5177,6 +5238,48 @@ fn apply_player_settings(
             // continuously so elapsed/joint samples represent real frames.
             winit.unfocused_mode = UpdateMode::Continuous;
         }
+    }
+}
+
+fn sync_primary_window_settings(
+    settings: Res<RuntimePlayerSettings>,
+    mut windows: Query<(&mut Window, Option<&OnMonitor>), With<PrimaryWindow>>,
+) {
+    let Ok((mut window, current_monitor)) = windows.single_mut() else {
+        return;
+    };
+    // Direct-broadcast mode deliberately hides the swapchain window. Resizing
+    // that hidden surface races DX12 capture on some drivers, so defer changes
+    // until the local window becomes visible again.
+    if !window.visible {
+        return;
+    }
+    let benchmarking = std::env::var_os("STREAM_TOWN_REPORT_FRAME_TIME").is_some();
+    let monitor = current_monitor.map(|monitor| monitor.0);
+    let desired_mode = if benchmarking {
+        WindowMode::Windowed
+    } else {
+        player_window_mode(settings.0.video.display_mode, monitor)
+    };
+    let desired_present_mode = if benchmarking {
+        PresentMode::Immediate
+    } else if settings.0.video.vsync {
+        PresentMode::AutoVsync
+    } else {
+        PresentMode::AutoNoVsync
+    };
+    let desired_width = f32::from(u16::try_from(settings.0.video.width).unwrap_or(u16::MAX));
+    let desired_height = f32::from(u16::try_from(settings.0.video.height).unwrap_or(u16::MAX));
+    if window.mode != desired_mode {
+        window.mode = desired_mode;
+    }
+    if window.present_mode != desired_present_mode {
+        window.present_mode = desired_present_mode;
+    }
+    if (window.resolution.width() - desired_width).abs() > 0.5
+        || (window.resolution.height() - desired_height).abs() > 0.5
+    {
+        window.resolution.set(desired_width, desired_height);
     }
 }
 
@@ -10984,6 +11087,33 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
         },
     ));
 
+    commands.spawn((
+        WorldEntity,
+        Hud,
+        Name::new("Twitch command guidance"),
+        UiDisplayFont,
+        Text::new("type !join to apply for citizenship\ntype !help for more commands"),
+        TextFont {
+            font_size: FontSize::Px(15.0),
+            ..default()
+        },
+        TextLayout::new(Justify::Center, LineBreak::WordBoundary),
+        TextColor(Color::srgb(0.97, 0.91, 0.7)),
+        TextShadow {
+            offset: Vec2::new(1.5, 1.5),
+            color: Color::linear_rgba(0.0, 0.0, 0.0, 0.9),
+        },
+        Pickable::IGNORE,
+        GlobalZIndex(20),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: px(12),
+            left: percent(25.0),
+            width: percent(50.0),
+            ..default()
+        },
+    ));
+
     let slider_background = render
         .selection_panel_textures
         .get(SELECTION_PANEL_TEXTURE_PATHS[0])
@@ -16187,6 +16317,8 @@ fn generate_and_spawn_world(
                         building: building.clone(),
                         position: valid_position,
                         rotation_quarter_turns: 0,
+                        line_start: None,
+                        line_end: None,
                     },
                 );
                 placers.0.insert(
@@ -16195,6 +16327,8 @@ fn generate_and_spawn_world(
                         building,
                         position: town_hall_placement,
                         rotation_quarter_turns: 1,
+                        line_start: None,
+                        line_end: None,
                     },
                 );
             }
@@ -16976,6 +17110,7 @@ fn generate_and_spawn_world(
             focus - Vec3::X * spacing,
             HealingEffectKind::Channel,
             config.0.world.cell_size,
+            None,
         );
         spawn_healing_effect(
             &mut commands,
@@ -16984,6 +17119,7 @@ fn generate_and_spawn_world(
             focus,
             HealingEffectKind::Burst,
             config.0.world.cell_size,
+            None,
         );
         spawn_healing_effect(
             &mut commands,
@@ -16992,6 +17128,7 @@ fn generate_and_spawn_world(
             focus + Vec3::X * spacing,
             HealingEffectKind::Revive,
             config.0.world.cell_size,
+            None,
         );
     }
     if std::env::var_os("STREAM_TOWN_SMOKE_COMBAT_VFX").is_some() {
@@ -18306,15 +18443,8 @@ fn ensure_actor_station(
     actor_id: &StableId,
 ) {
     let replacement = simulation.actors.get(actor_id).and_then(|actor| {
-        let current = assigned_station(content, simulation, config, actor);
         let best = best_station_id(content, simulation, config, &actor.role, actor.position);
-        let current_is_town_hall =
-            current.is_some_and(|station| station.id.as_str() == "building:townhall");
-        let specialized_station_available = best
-            .as_ref()
-            .is_some_and(|station| station.as_str() != "building:townhall");
-        (current.is_none() || (current_is_town_hall && specialized_station_available))
-            .then_some(best)
+        (actor.station != best).then_some(best)
     });
     if let Some(station) = replacement
         && let Some(actor) = simulation.actors.get_mut(actor_id)
@@ -19500,6 +19630,8 @@ fn next_agent_goal_with_station_runtime(
         }
     }
     let combat_target = if is_combat_role(&actor.role) {
+        let defender_anchor = (actor.role.as_str() == "role:defender")
+            .then(|| restored_town_hall_position(content, simulation, config));
         simulation
             .actors
             .values()
@@ -19507,6 +19639,9 @@ fn next_agent_goal_with_station_runtime(
             .filter(|target| within_player_target_search_region(target.position, current))
             .min_by_key(|target| {
                 (
+                    defender_anchor.map_or(0, |town_hall| {
+                        grid_distance_squared(target.position, town_hall)
+                    }),
                     grid_distance_squared(target.position, current),
                     target.id.clone(),
                 )
@@ -19985,7 +20120,6 @@ fn complete_agent_goal(
         AgentGoal::Heal(target_id) => {
             let healer = simulation.actors.get(actor_id)?;
             let target = simulation.actors.get(target_id)?;
-            let target_position = target.position;
             if !healer.alive
                 || !target.alive
                 || target.role.as_str() == "role:enemy"
@@ -19998,8 +20132,8 @@ fn complete_agent_goal(
                 Ok(restored) => {
                     if restored > 0 {
                         action_presentation = Some(ActionPresentation::Healing {
-                            source: current,
-                            target: target_position,
+                            source: actor_id.clone(),
+                            target: target_id.clone(),
                         });
                         true
                     } else {
@@ -20924,22 +21058,22 @@ fn healing_effect_sample(
         HealingEffectKind::Channel => HealingEffectSample {
             ring_scale: channel_size,
             mote_scale: envelope.sqrt(),
-            radial_distance: 0.28 + progress * 0.58,
-            rise: 0.18 + progress * 1.9,
+            radial_distance: 0.16 + progress * 0.28,
+            rise: 0.1 + progress * 0.8,
             rotation_radians: progress * std::f32::consts::TAU * 1.5,
         },
         HealingEffectKind::Burst => HealingEffectSample {
             ring_scale: disc_size,
             mote_scale: envelope,
-            radial_distance: 0.22 + progress * 1.35,
-            rise: 0.2 + progress * 2.4,
+            radial_distance: 0.18 + progress * 0.52,
+            rise: 0.12 + progress,
             rotation_radians: progress * std::f32::consts::TAU,
         },
         HealingEffectKind::Revive => HealingEffectSample {
-            ring_scale: disc_size * 1.35,
+            ring_scale: disc_size * 1.15,
             mote_scale: envelope,
-            radial_distance: 0.3 + progress * 1.75,
-            rise: 0.25 + progress * 3.1,
+            radial_distance: 0.22 + progress * 0.68,
+            rise: 0.16 + progress * 1.25,
             rotation_radians: progress * std::f32::consts::TAU * 1.25,
         },
     }
@@ -20952,6 +21086,7 @@ fn spawn_healing_effect(
     origin: Vec3,
     kind: HealingEffectKind,
     cell_size: f32,
+    follow_target: Option<StableId>,
 ) {
     // Unity-authored VFX sizes are already world-space values. The initial
     // port multiplied them by Bevy's two-metre grid cell a second time, which
@@ -20994,6 +21129,7 @@ fn spawn_healing_effect(
             elapsed_seconds: 0.0,
             duration_seconds,
             base_scale,
+            follow_target: follow_target.clone(),
         },
         Mesh3d(render.healing_ring.clone()),
         MeshMaterial3d(material.clone()),
@@ -21056,6 +21192,7 @@ fn spawn_healing_effect(
                 base_scale: Vec3::splat(world_scale * 0.08),
                 distance_scale: world_scale,
                 size_multiplier: mote_size_multiplier,
+                follow_target: follow_target.clone(),
             },
             Mesh3d(mesh),
             MeshMaterial3d(material),
@@ -21066,11 +21203,13 @@ fn spawn_healing_effect(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn animate_healing_effects(
     mut commands: Commands,
     time: Res<Time>,
     presentation: Res<RuntimePresentation>,
     render: Res<RenderAssets>,
+    actors: Query<(&Agent, &Transform), (Without<HealingRingEffect>, Without<HealingMoteEffect>)>,
     mut rings: Query<(
         Entity,
         &mut HealingRingEffect,
@@ -21087,11 +21226,20 @@ fn animate_healing_effects(
         Without<HealingRingEffect>,
     >,
 ) {
+    let actor_positions: BTreeMap<_, _> = actors
+        .iter()
+        .map(|(agent, transform)| (agent.id.clone(), transform.translation))
+        .collect();
     for (entity, mut effect, mut transform, mut material) in &mut rings {
         effect.elapsed_seconds += time.delta_secs();
         if effect.elapsed_seconds >= effect.duration_seconds {
             commands.entity(entity).despawn();
             continue;
+        }
+        if let Some(target) = effect.follow_target.as_ref()
+            && let Some(position) = actor_positions.get(target)
+        {
+            effect.origin = *position;
         }
         let sample = healing_effect_sample(
             &presentation.0,
@@ -21114,6 +21262,11 @@ fn animate_healing_effects(
         if effect.elapsed_seconds >= effect.duration_seconds {
             commands.entity(entity).despawn();
             continue;
+        }
+        if let Some(target) = effect.follow_target.as_ref()
+            && let Some(position) = actor_positions.get(target)
+        {
+            effect.origin = *position;
         }
         let sample = healing_effect_sample(
             &presentation.0,
@@ -22351,6 +22504,7 @@ fn move_agents(
     mut simulation: ResMut<SimulationRuntime>,
     mut stats: ResMut<SessionStats>,
     mut render_stats: ResMut<WorldRenderStats>,
+    mut path_failures: ResMut<PathFailureRuntime>,
     mut agents: Query<(
         Entity,
         &mut Agent,
@@ -22466,6 +22620,9 @@ fn move_agents(
         .map(|(entity, agent, _, _, _, _)| (agent.id.clone(), entity))
         .collect();
     agent_order.sort_by(|(left, _), (right, _)| left.cmp(right));
+    path_failures
+        .0
+        .retain(|actor, _| simulation.0.actors.contains_key(actor));
     let predictive_agents = agents
         .iter()
         .filter_map(|(_, agent, _, _, transform, _)| {
@@ -22642,6 +22799,7 @@ fn move_agents(
                 grid_to_world_on_surface(spawn, &config.0, &world.generated),
                 HealingEffectKind::Revive,
                 config.0.world.cell_size,
+                Some(agent.id.clone()),
             );
         }
         if std::env::var_os("STREAM_TOWN_SMOKE_GATE").is_some()
@@ -22750,25 +22908,41 @@ fn move_agents(
                                 );
                             }
                             ActionPresentation::Healing { source, target } => {
-                                let source =
-                                    grid_to_world_on_surface(source, &config.0, &world.generated);
-                                let target =
-                                    grid_to_world_on_surface(target, &config.0, &world.generated);
+                                let source_position = simulation
+                                    .0
+                                    .actors
+                                    .get(&source)
+                                    .map_or(location.0, |actor| actor.position);
+                                let target_position = simulation
+                                    .0
+                                    .actors
+                                    .get(&target)
+                                    .map_or(location.0, |actor| actor.position);
                                 spawn_healing_effect(
                                     &mut commands,
                                     &authored_presentation.0,
                                     &render,
-                                    source,
+                                    grid_to_world_on_surface(
+                                        source_position,
+                                        &config.0,
+                                        &world.generated,
+                                    ),
                                     HealingEffectKind::Channel,
                                     config.0.world.cell_size,
+                                    Some(source),
                                 );
                                 spawn_healing_effect(
                                     &mut commands,
                                     &authored_presentation.0,
                                     &render,
-                                    target,
+                                    grid_to_world_on_surface(
+                                        target_position,
+                                        &config.0,
+                                        &world.generated,
+                                    ),
                                     HealingEffectKind::Burst,
                                     config.0.world.cell_size,
+                                    Some(target),
                                 );
                             }
                             ActionPresentation::BuildingWork { target, sparks } => {
@@ -22900,6 +23074,35 @@ fn move_agents(
                     location.0,
                     target,
                 );
+            }
+            if planned_path.is_some() {
+                path_failures.clear(&agent.id);
+            } else if path_failures.record_failure(&agent.id, time.delta_secs()) {
+                let town_hall = restored_town_hall_position(&content.0, &simulation.0, &config.0);
+                let spawn = nearest_walkable(&world.generated, town_hall).unwrap_or(town_hall);
+                if let Some(actor) = simulation.0.actors.get_mut(&agent.id) {
+                    actor.position = spawn;
+                    actor.preferred_target = None;
+                }
+                let mut world_position =
+                    grid_to_world_on_surface(spawn, &config.0, &world.generated);
+                if !animation.native {
+                    world_position.y += animation.base_scale.y * 0.5;
+                }
+                transform.translation = world_position;
+                location.0 = spawn;
+                agent.origin = spawn;
+                agent.target = spawn;
+                agent.goal = AgentGoal::Wander;
+                agent.path.clear();
+                agent.path_index = 0;
+                agent.action_started = false;
+                agent.action_cooldown_seconds = 0.0;
+                agent.repath_remaining_seconds = 0.0;
+                agent.previous_wander_origin = None;
+                path_failures.clear(&agent.id);
+                warn!(actor = %agent.id, "automatically returned an endlessly unpathable actor to the Town Hall");
+                continue;
             }
             agent.goal = goal;
             agent.action_started = false;
@@ -23961,7 +24164,7 @@ fn sync_tiled_building_rotation(
         let quarter_turns = match building_id.as_str() {
             "building:wall" => wall_tiling(tile_value).1,
             "building:gate" => gate_tiling(tile_value),
-            _ => continue,
+            _ => state.rotation_quarter_turns,
         };
         transform.rotation = quarter_turn_rotation(quarter_turns);
     }
@@ -24321,6 +24524,17 @@ fn sync_pooled_night_lights(
 
 fn color_from_rgb8(color: [u8; 3]) -> Color {
     Color::srgb_u8(color[0], color[1], color[2])
+}
+
+fn preset_player_name_color(world_seed: u64, actor_id: &StableId) -> [u8; 3] {
+    let hash = actor_id
+        .as_str()
+        .bytes()
+        .fold(world_seed ^ 0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3)
+        });
+    PLAYER_NAME_COLOR_PRESETS
+        [usize::try_from(hash % PLAYER_NAME_COLOR_PRESETS.len() as u64).expect("preset index fits")]
 }
 
 fn srgb_channel_to_linear(channel: u8) -> f32 {
@@ -24830,6 +25044,7 @@ fn attach_converted_animations(
     applied: Query<(), (With<ConvertedAnimationDriver>, Without<ActivePetVisual>)>,
     pets: Query<(), With<ActivePetVisual>>,
     fish_gods: Query<(), With<FishGodAnimation>>,
+    actors: Query<&Agent>,
 ) {
     let (Some(asset_server), Some(mut animation_clips), Some(mut animation_graphs)) =
         (asset_server, animation_clips, animation_graphs)
@@ -24839,7 +25054,11 @@ fn attach_converted_animations(
     let animation_budget = animation_detail_budget();
     let mut remaining = animation_budget.saturating_sub(applied.iter().count());
     for (actor_root, spec) in &specs {
-        let is_unbudgeted = pets.contains(actor_root) || fish_gods.contains(actor_root);
+        let is_unbudgeted = pets.contains(actor_root)
+            || fish_gods.contains(actor_root)
+            || actors
+                .get(actor_root)
+                .is_ok_and(|actor| actor.kind == ActorKind::Enemy);
         if !is_unbudgeted && remaining == 0 {
             continue;
         }
@@ -29226,6 +29445,71 @@ fn apply_building_commands(
     }
 }
 
+fn wall_line_cells(start: GridPos, end: GridPos) -> Result<Vec<GridPos>, String> {
+    if start.x != end.x && start.z != end.z {
+        return Err("wall endpoints must be orthogonal (same row or same column)".to_owned());
+    }
+    if start.x == end.x {
+        let (minimum, maximum) = if start.z <= end.z {
+            (start.z, end.z)
+        } else {
+            (end.z, start.z)
+        };
+        Ok((minimum..=maximum)
+            .map(|z| GridPos { x: start.x, z })
+            .collect())
+    } else {
+        let (minimum, maximum) = if start.x <= end.x {
+            (start.x, end.x)
+        } else {
+            (end.x, start.x)
+        };
+        Ok((minimum..=maximum)
+            .map(|x| GridPos { x, z: start.z })
+            .collect())
+    }
+}
+
+fn placement_visual_cells(placement: &BuildingPlacement) -> Vec<GridPos> {
+    if placement.building.as_str() == "building:wall"
+        && let (Some(start), Some(end)) = (placement.line_start, placement.line_end)
+    {
+        return wall_line_cells(start, end).unwrap_or_else(|_| vec![placement.position]);
+    }
+    vec![placement.position]
+}
+
+fn placement_at_cell(placement: &BuildingPlacement, cell: GridPos) -> BuildingPlacement {
+    BuildingPlacement {
+        building: placement.building.clone(),
+        position: cell,
+        rotation_quarter_turns: placement.rotation_quarter_turns,
+        line_start: None,
+        line_end: None,
+    }
+}
+
+fn building_placement_is_available(
+    world: &GeneratedWorld,
+    placement: &BuildingPlacement,
+    definition: &BuildingDef,
+) -> bool {
+    let footprint = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
+    placement_visual_cells(placement)
+        .into_iter()
+        .all(|cell| building_site_is_available(world, cell, footprint))
+}
+
+fn scaled_building_cost(
+    cost: &BTreeMap<StableId, u32>,
+    multiplier: usize,
+) -> BTreeMap<StableId, u32> {
+    let multiplier = u32::try_from(multiplier).unwrap_or(u32::MAX);
+    cost.iter()
+        .map(|(resource, amount)| (resource.clone(), amount.saturating_mul(multiplier)))
+        .collect()
+}
+
 #[allow(clippy::type_complexity)]
 fn sync_building_placers(
     mut commands: Commands,
@@ -29251,6 +29535,7 @@ fn sync_building_placers(
         Without<BuildingPlacementVisual>,
     >,
 ) {
+    let mut active_visuals = BTreeSet::new();
     for (entity, visual, mut transform, mut material) in &mut visuals {
         let Some(placement) = placers.0.get(&visual.owner) else {
             commands.entity(entity).despawn();
@@ -29260,46 +29545,64 @@ fn sync_building_placers(
             commands.entity(entity).despawn();
             continue;
         };
+        if !placement_visual_cells(placement).contains(&visual.cell) {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let cell_placement = placement_at_cell(placement, visual.cell);
         update_placer_visual(
             &config.0,
             &world.generated,
             &render,
-            placement,
+            &cell_placement,
             definition,
             &mut transform,
             &mut material,
         );
+        material.0 = if building_placement_is_available(&world.generated, placement, definition) {
+            render.placement_valid.clone()
+        } else {
+            render.placement_invalid.clone()
+        };
+        active_visuals.insert((visual.owner.clone(), visual.cell));
     }
     for (owner, placement) in &placers.0 {
-        if visuals
-            .iter()
-            .any(|(_, visual, _, _)| visual.owner == *owner)
-        {
-            continue;
-        }
         let Some(definition) = content.0.buildings.get(&placement.building) else {
             continue;
         };
-        let mut transform = Transform::default();
-        let mut material = MeshMaterial3d(render.placement_valid.clone());
-        update_placer_visual(
-            &config.0,
-            &world.generated,
-            &render,
-            placement,
-            definition,
-            &mut transform,
-            &mut material,
-        );
-        commands.spawn((
-            WorldEntity,
-            BuildingPlacementVisual {
-                owner: owner.clone(),
-            },
-            Mesh3d(render.cube.clone()),
-            material,
-            transform,
-        ));
+        for cell in placement_visual_cells(placement) {
+            if active_visuals.contains(&(owner.clone(), cell)) {
+                continue;
+            }
+            let cell_placement = placement_at_cell(placement, cell);
+            let mut transform = Transform::default();
+            let mut material = MeshMaterial3d(render.placement_valid.clone());
+            update_placer_visual(
+                &config.0,
+                &world.generated,
+                &render,
+                &cell_placement,
+                definition,
+                &mut transform,
+                &mut material,
+            );
+            material.0 = if building_placement_is_available(&world.generated, placement, definition)
+            {
+                render.placement_valid.clone()
+            } else {
+                render.placement_invalid.clone()
+            };
+            commands.spawn((
+                WorldEntity,
+                BuildingPlacementVisual {
+                    owner: owner.clone(),
+                    cell,
+                },
+                Mesh3d(render.cube.clone()),
+                material,
+                transform,
+            ));
+        }
     }
 
     let mut active_ghosts = BTreeSet::new();
@@ -29320,26 +29623,25 @@ fn sync_building_placers(
             .and_then(|archetype| archetype_scene_for_age(archetype, age));
         if ghost.building != placement.building
             || scene.is_none_or(|scene| scene.asset_path != ghost.scene_asset_path)
+            || !placement_visual_cells(placement).contains(&ghost.cell)
         {
             commands.entity(entity).despawn();
             continue;
         }
+        let cell_placement = placement_at_cell(placement, ghost.cell);
         update_placer_ghost_transform(
             &config.0,
             &world.generated,
-            placement,
+            &cell_placement,
             definition,
             &mut transform,
         );
-        active_ghosts.insert(ghost.owner.clone());
+        active_ghosts.insert((ghost.owner.clone(), ghost.cell));
     }
     let Some(asset_server) = asset_server.as_deref() else {
         return;
     };
     for (owner, placement) in &placers.0 {
-        if active_ghosts.contains(owner) {
-            continue;
-        }
         let Some(definition) = content.0.buildings.get(&placement.building) else {
             continue;
         };
@@ -29352,31 +29654,39 @@ fn sync_building_placers(
         else {
             continue;
         };
-        let mut transform = Transform::default();
-        update_placer_ghost_transform(
-            &config.0,
-            &world.generated,
-            placement,
-            definition,
-            &mut transform,
-        );
-        commands.spawn((
-            WorldEntity,
-            BuildingPlacementGhost {
-                owner: owner.clone(),
-                building: placement.building.clone(),
-                scene_asset_path: scene.asset_path.clone(),
-            },
-            BuildingPlacementGhostHiddenNodes(main_menu_hidden_model_node_names(
-                &content.0,
-                &definition.archetype,
-                scene,
-            )),
-            WorldAssetRoot(
-                asset_server.load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
-            ),
-            transform,
-        ));
+        for cell in placement_visual_cells(placement) {
+            if active_ghosts.contains(&(owner.clone(), cell)) {
+                continue;
+            }
+            let cell_placement = placement_at_cell(placement, cell);
+            let mut transform = Transform::default();
+            update_placer_ghost_transform(
+                &config.0,
+                &world.generated,
+                &cell_placement,
+                definition,
+                &mut transform,
+            );
+            commands.spawn((
+                WorldEntity,
+                BuildingPlacementGhost {
+                    owner: owner.clone(),
+                    cell,
+                    building: placement.building.clone(),
+                    scene_asset_path: scene.asset_path.clone(),
+                },
+                BuildingPlacementGhostHiddenNodes(main_menu_hidden_model_node_names(
+                    &content.0,
+                    &definition.archetype,
+                    scene,
+                )),
+                WorldAssetRoot(
+                    asset_server
+                        .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
+                ),
+                transform,
+            ));
+        }
     }
 }
 
@@ -29479,13 +29789,7 @@ fn placement_ghost_material(
         content
             .buildings
             .get(&placement.building)
-            .is_some_and(|definition| {
-                building_site_is_available(
-                    world,
-                    placement.position,
-                    rotated_footprint(definition.footprint, placement.rotation_quarter_turns),
-                )
-            })
+            .is_some_and(|definition| building_placement_is_available(world, placement, definition))
     });
     if available {
         render.placement_valid.clone()
@@ -29529,6 +29833,28 @@ fn building_placement_overlay_text(
     format!("{owner_name} · {} floorplan", definition.display_name)
 }
 
+fn building_placement_overlay_centre(
+    placement: &BuildingPlacement,
+    definition: &BuildingDef,
+) -> GridPos {
+    let cells = placement_visual_cells(placement);
+    let first = cells.first().copied().unwrap_or(placement.position);
+    let last = cells.last().copied().unwrap_or(placement.position);
+    let footprint = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
+    GridPos {
+        x: first
+            .x
+            .saturating_add(last.x)
+            .saturating_div(2)
+            .saturating_add(footprint[0] / 2),
+        z: first
+            .z
+            .saturating_add(last.z)
+            .saturating_div(2)
+            .saturating_add(footprint[1] / 2),
+    }
+}
+
 #[allow(clippy::type_complexity)]
 fn sync_building_placement_overlays(
     mut commands: Commands,
@@ -29560,11 +29886,7 @@ fn sync_building_placement_overlays(
             commands.entity(entity).despawn();
             continue;
         };
-        let effective = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
-        let centre = GridPos {
-            x: placement.position.x.saturating_add(effective[0] / 2),
-            z: placement.position.z.saturating_add(effective[1] / 2),
-        };
+        let centre = building_placement_overlay_centre(placement, definition);
         let world_position = grid_to_world_on_surface(centre, &config.0, &world.generated)
             + Vec3::Y * config.0.world.cell_size * 0.35;
         let Some(screen) = overlay_viewport_position(camera, camera_transform, world_position)
@@ -29584,11 +29906,7 @@ fn sync_building_placement_overlays(
         let Some(definition) = content.0.buildings.get(&placement.building) else {
             continue;
         };
-        let effective = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
-        let centre = GridPos {
-            x: placement.position.x.saturating_add(effective[0] / 2),
-            z: placement.position.z.saturating_add(effective[1] / 2),
-        };
+        let centre = building_placement_overlay_centre(placement, definition);
         let world_position = grid_to_world_on_surface(centre, &config.0, &world.generated)
             + Vec3::Y * config.0.world.cell_size * 0.35;
         let Some(screen) = overlay_viewport_position(camera, camera_transform, world_position)
@@ -34403,6 +34721,24 @@ fn constructed_building_count(simulation: &WorldSimulation) -> usize {
         .count()
 }
 
+fn hud_building_count(content: &ContentCatalog, simulation: &WorldSimulation) -> usize {
+    simulation
+        .buildings
+        .values()
+        .filter(|state| {
+            content
+                .buildings
+                .iter()
+                .find(|(_, definition)| definition.archetype == state.archetype)
+                .is_some_and(|(id, definition)| {
+                    id.as_str() != "building:townhall"
+                        && id.as_str() != "building:wall"
+                        && definition.projectile_shooter.is_none()
+                })
+        })
+        .count()
+}
+
 fn upgrade_building_instance(
     content: &ContentCatalog,
     simulation: &mut WorldSimulation,
@@ -34438,6 +34774,42 @@ fn upgrade_building_instance(
             &cost,
         )
         .map_err(|error| error.to_string())
+}
+
+fn rotate_building_instance(
+    content: &ContentCatalog,
+    simulation: &mut WorldSimulation,
+    runtime_id: &StableId,
+    quarter_turns: i32,
+) -> Result<(String, i32), String> {
+    let state = simulation
+        .buildings
+        .get(runtime_id)
+        .ok_or_else(|| format!("unknown building BID {runtime_id}"))?;
+    let (definition_id, definition) = content
+        .buildings
+        .iter()
+        .find(|(_, definition)| definition.archetype == state.archetype)
+        .ok_or_else(|| format!("BID {runtime_id} has no building definition"))?;
+    if definition.footprint[0] != definition.footprint[1] {
+        return Err(format!(
+            "{} has a non-square footprint and cannot be rotated after placement",
+            definition.display_name
+        ));
+    }
+    if matches!(definition_id.as_str(), "building:wall" | "building:gate") {
+        return Err(format!(
+            "{} orientation is controlled by its neighboring tiles",
+            definition.display_name
+        ));
+    }
+    let name = definition.display_name.clone();
+    let state = simulation
+        .buildings
+        .get_mut(runtime_id)
+        .expect("building was validated");
+    state.rotation_quarter_turns = state.rotation_quarter_turns.saturating_add(quarter_turns);
+    Ok((name, state.rotation_quarter_turns.rem_euclid(4) * 90))
 }
 
 fn sell_town_resource(
@@ -34564,11 +34936,14 @@ fn process_injected_commands(
                             .unwrap_or_else(|| {
                                 StableId::new("archetype:viewer").expect("static ID")
                             });
+                            let name_color =
+                                preset_player_name_color(simulation.0.world_seed, &actor_id);
                             if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
                                 actor.archetype = Some(player_archetype.clone());
                                 actor.display_name = Some(pending.display_name.clone());
                                 actor.login_name = Some(pending.login_name.clone());
                                 actor.user_type = user_type;
+                                actor.customization.name_color = Some(name_color);
                                 if matches!(
                                     user_type,
                                     StreamUserType::Subscriber | StreamUserType::GameMaster
@@ -34689,14 +35064,13 @@ fn process_injected_commands(
                         .filter(|id| content.0.buildings.contains_key(id))
                         .ok_or_else(|| format!("unknown building {requested}"))?;
                     let definition = &content.0.buildings[&building_id];
-                    let ids = simulation
-                        .0
-                        .buildings
-                        .values()
-                        .filter(|building| building.archetype == definition.archetype)
+                    let instances = building_instance_ids(&content.0, &simulation.0, &building_id);
+                    let ids = instances
+                        .iter()
                         .enumerate()
-                        .map(|(index, building)| format!("{}={}", index + 1, building.id))
+                        .map(|(index, building)| format!("{}={building}", index + 1))
                         .collect::<Vec<_>>();
+                    spawn_numbered_world_labels(&mut ecs, &instances);
                     Ok(if ids.is_empty() {
                         format!("no {} buildings", definition.display_name)
                     } else {
@@ -34732,7 +35106,8 @@ fn process_injected_commands(
                             &building_id,
                             building,
                         );
-                        if simulation.0.building_costs_enabled
+                        if building_id.as_str() != "building:wall"
+                            && simulation.0.building_costs_enabled
                             && let Some(message) = building_shortage_message(
                                 &simulation.0,
                                 &building.display_name,
@@ -34752,6 +35127,8 @@ fn process_injected_commands(
                                 building: building_id,
                                 position: near,
                                 rotation_quarter_turns: rotation,
+                                line_start: None,
+                                line_end: None,
                             },
                         );
                         Ok(format!(
@@ -34778,23 +35155,57 @@ fn process_injected_commands(
                             .saturating_add(rotation_delta);
                     }
                     let definition = &content.0.buildings[&placement.building];
-                    let footprint =
-                        rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
-                    let validity = if building_site_is_available(
-                        &world.generated,
-                        placement.position,
-                        footprint,
-                    ) {
-                        "valid"
-                    } else {
-                        "blocked"
-                    };
+                    let validity =
+                        if building_placement_is_available(&world.generated, placement, definition)
+                        {
+                            "valid"
+                        } else {
+                            "blocked"
+                        };
                     Ok(format!(
                         "{} placer moved to {},{} at {} degrees ({validity})",
                         definition.display_name,
                         placement.position.x,
                         placement.position.z,
                         placement.rotation_quarter_turns.rem_euclid(4) * 90
+                    ))
+                }
+                ChatCommand::BeginBuildingLine => {
+                    let placement = queues
+                        .placers
+                        .0
+                        .get_mut(&actor_id)
+                        .ok_or_else(|| "not in building placement mode".to_owned())?;
+                    if placement.building.as_str() != "building:wall" {
+                        return Err("!beginplace is only used for wall placement".to_owned());
+                    }
+                    placement.line_start = Some(placement.position);
+                    placement.line_end = None;
+                    Ok(format!(
+                        "wall start set at {},{}; move to the other endpoint and use !endplace",
+                        placement.position.x, placement.position.z
+                    ))
+                }
+                ChatCommand::EndBuildingLine => {
+                    let placement = queues
+                        .placers
+                        .0
+                        .get_mut(&actor_id)
+                        .ok_or_else(|| "not in building placement mode".to_owned())?;
+                    if placement.building.as_str() != "building:wall" {
+                        return Err("!endplace is only used for wall placement".to_owned());
+                    }
+                    let start = placement
+                        .line_start
+                        .ok_or_else(|| "set the first wall endpoint with !beginplace".to_owned())?;
+                    placement.line_end = None;
+                    let cells = wall_line_cells(start, placement.position)?;
+                    placement.line_end = Some(placement.position);
+                    Ok(format!(
+                        "wall endpoint set at {},{} ({} sections); review the ghost then use !confirm",
+                        placement.position.x,
+                        placement.position.z,
+                        cells.len()
                     ))
                 }
                 ChatCommand::ConfirmBuilding => {
@@ -34810,13 +35221,26 @@ fn process_injected_commands(
                     {
                         return Err(format!("{} can no longer be placed", building.display_name));
                     }
+                    let cells = if placement.building.as_str() == "building:wall" {
+                        let start = placement.line_start.ok_or_else(|| {
+                            "wall placement requires !beginplace before !confirm".to_owned()
+                        })?;
+                        let end = placement.line_end.ok_or_else(|| {
+                            "wall placement requires !endplace before !confirm".to_owned()
+                        })?;
+                        wall_line_cells(start, end)?
+                    } else {
+                        vec![placement.position]
+                    };
                     let footprint =
                         rotated_footprint(building.footprint, placement.rotation_quarter_turns);
-                    if !building_site_is_available(&world.generated, placement.position, footprint)
+                    if cells
+                        .iter()
+                        .any(|cell| !building_site_is_available(&world.generated, *cell, footprint))
                     {
                         return Err("building placement is blocked or outside the world".to_owned());
                     }
-                    let cost = if simulation.0.building_costs_enabled {
+                    let unit_cost = if simulation.0.building_costs_enabled {
                         building_construction_cost(
                             &content.0,
                             &simulation.0,
@@ -34826,51 +35250,67 @@ fn process_injected_commands(
                     } else {
                         BTreeMap::new()
                     };
+                    let cost = scaled_building_cost(&unit_cost, cells.len());
                     if let Some(message) =
                         building_shortage_message(&simulation.0, &building.display_name, &cost)
                     {
                         return Err(message);
                     }
-                    let runtime_id = runtime_building_id(&simulation.0);
-                    let region =
-                        building_region(placement.position, footprint, &world.generated)
-                            .ok_or_else(|| "building placement is outside the world".to_owned())?;
-                    simulation
-                        .0
-                        .construct_rotated(
-                            runtime_id.clone(),
-                            building.archetype.clone(),
-                            placement.position,
-                            placement.rotation_quarter_turns,
-                            building_base_max_health(&content.0, building),
-                            &cost,
-                        )
-                        .map_err(|error| error.to_string())?;
-                    world
-                        .generated
-                        .navigation
-                        .set_blocked(region, true)
-                        .map_err(|error| error.to_string())?;
+                    let regions = cells
+                        .iter()
+                        .map(|cell| {
+                            building_region(*cell, footprint, &world.generated)
+                                .map(|region| (*cell, region))
+                                .ok_or_else(|| "building placement is outside the world".to_owned())
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    let mut first = true;
+                    let no_cost = BTreeMap::new();
+                    for (cell, region) in regions {
+                        let runtime_id = runtime_building_id(&simulation.0);
+                        let section_cost = if first { &cost } else { &no_cost };
+                        simulation
+                            .0
+                            .construct_rotated(
+                                runtime_id.clone(),
+                                building.archetype.clone(),
+                                cell,
+                                placement.rotation_quarter_turns,
+                                building_base_max_health(&content.0, building),
+                                section_cost,
+                            )
+                            .map_err(|error| error.to_string())?;
+                        first = false;
+                        world
+                            .generated
+                            .navigation
+                            .set_blocked(region, true)
+                            .map_err(|error| error.to_string())?;
+                        spawn_runtime_building(
+                            &mut ecs,
+                            &config.0,
+                            &world.generated,
+                            &presentation.0,
+                            asset_server.as_deref(),
+                            &asset_root.0,
+                            &render,
+                            &simulation.0.buildings[&runtime_id],
+                            building,
+                            &content.0.archetypes[&building.archetype],
+                            cell,
+                            building.footprint,
+                            building_age(&content.0, &simulation.0, &placement.building),
+                        );
+                    }
                     if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
                         actor.last_building_position = Some(placement.position);
                     }
                     queues.placers.0.remove(&actor_id);
-                    spawn_runtime_building(
-                        &mut ecs,
-                        &config.0,
-                        &world.generated,
-                        &presentation.0,
-                        asset_server.as_deref(),
-                        &asset_root.0,
-                        &render,
-                        &simulation.0.buildings[&runtime_id],
-                        building,
-                        &content.0.archetypes[&building.archetype],
-                        placement.position,
-                        building.footprint,
-                        building_age(&content.0, &simulation.0, &placement.building),
-                    );
-                    Ok(format!("placed {} construction", building.display_name))
+                    Ok(if cells.len() == 1 {
+                        format!("placed {} construction", building.display_name)
+                    } else {
+                        format!("placed {} wall sections for construction", cells.len())
+                    })
                 }
                 ChatCommand::CancelBuilding => queues
                     .placers
@@ -34884,31 +35324,41 @@ fn process_injected_commands(
                     })
                     .ok_or_else(|| "not in building placement mode".to_owned()),
                 ChatCommand::Upgrade(requested) => {
-                    let building_id = building_definition_id(&content.0, requested);
-                    building_id.and_then(|building_id| {
-                        let definition = &content.0.buildings[&building_id];
-                        let candidate = simulation
-                            .0
-                            .buildings
-                            .values()
-                            .filter(|building| {
-                                building.archetype == definition.archetype && building.complete
-                            })
-                            .min_by_key(|building| (building.level, building.id.clone()))
-                            .map(|building| building.id.clone())
-                            .ok_or_else(|| {
-                                format!("no completed {} is available", definition.display_name)
-                            })?;
-                        upgrade_building_instance(
-                            &content.0,
-                            &mut simulation.0,
-                            &building_id,
-                            &candidate,
-                        )
-                        .map(|level| {
-                            format!("upgraded {} to level {level}", definition.display_name)
-                        })
+                    let building_state =
+                        simulation.0.buildings.get(requested).ok_or_else(|| {
+                            format!("unknown building BID {requested}; use !bid <building>")
+                        })?;
+                    let (building_id, definition) = content
+                        .0
+                        .buildings
+                        .iter()
+                        .find(|(_, definition)| definition.archetype == building_state.archetype)
+                        .ok_or_else(|| format!("BID {requested} has no building definition"))?;
+                    let building_id = building_id.clone();
+                    let name = definition.display_name.clone();
+                    upgrade_building_instance(
+                        &content.0,
+                        &mut simulation.0,
+                        &building_id,
+                        requested,
+                    )
+                    .map(|level| {
+                        format!("started {name} BID {requested} level {level} construction")
                     })
+                }
+                ChatCommand::RotateBuilding {
+                    building,
+                    quarter_turns,
+                } => {
+                    let (name, degrees) = rotate_building_instance(
+                        &content.0,
+                        &mut simulation.0,
+                        building,
+                        *quarter_turns,
+                    )?;
+                    Ok(format!(
+                        "rotated {name} BID {building} to {degrees} degrees"
+                    ))
                 }
                 ChatCommand::Level(requested) => {
                     let role = prefixed_id(requested, "role:")
@@ -35536,7 +35986,7 @@ fn process_injected_commands(
                         .filter(|actor| actor.id.as_str().starts_with("twitch:"))
                         .count(),
                     recruited_actor_ids(&simulation.0).len(),
-                    simulation.0.buildings.len(),
+                    hud_building_count(&content.0, &simulation.0),
                     simulation.0.day,
                     simulation.0.season,
                     simulation.0.weather,
@@ -35618,6 +36068,7 @@ fn process_injected_commands(
                         grid_to_world_on_surface(spawn, &config.0, &world.generated),
                         HealingEffectKind::Revive,
                         config.0.world.cell_size,
+                        Some(target.clone()),
                     );
                     Ok(format!("revived {target} without a food cost"))
                 }
@@ -35909,6 +36360,7 @@ fn process_injected_commands(
                             grid_to_world_on_surface(spawn, &config.0, &world.generated),
                             HealingEffectKind::Revive,
                             config.0.world.cell_size,
+                            Some(target_id.clone()),
                         );
                         if !self_revive {
                             let experience_multiplier = content
@@ -36117,7 +36569,7 @@ fn update_hud(
                 })
                 .count()
                 .to_string(),
-            HudMetric::Buildings => simulation.0.buildings.len().to_string(),
+            HudMetric::Buildings => hud_building_count(&content.0, &simulation.0).to_string(),
             HudMetric::PlayTime => hud_play_time(stats.elapsed_seconds),
         };
     }
@@ -41022,7 +41474,7 @@ mod tests {
             BuildingState {
                 id: station_id.clone(),
                 archetype: lumbermill.archetype.clone(),
-                position: GridPos { x: 11, z: 10 },
+                position: GridPos { x: 16, z: 10 },
                 rotation_quarter_turns: 0,
                 level: 1,
                 health: BUILDING_MAX_HEALTH,
@@ -41030,6 +41482,36 @@ mod tests {
             },
         );
 
+        ensure_actor_station(&content, &mut simulation, &config, &actor_id);
+        assert_eq!(
+            simulation.actors[&actor_id].station,
+            Some(station_id.clone())
+        );
+
+        let closer_station = StableId::new("building:closer_runtime_station").unwrap();
+        simulation.buildings.insert(
+            closer_station.clone(),
+            BuildingState {
+                id: closer_station.clone(),
+                archetype: lumbermill.archetype.clone(),
+                position: GridPos { x: 11, z: 10 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: BUILDING_MAX_HEALTH,
+                complete: true,
+            },
+        );
+        ensure_actor_station(&content, &mut simulation, &config, &actor_id);
+        assert_eq!(
+            simulation.actors[&actor_id].station,
+            Some(closer_station.clone())
+        );
+
+        simulation
+            .buildings
+            .get_mut(&closer_station)
+            .unwrap()
+            .complete = false;
         ensure_actor_station(&content, &mut simulation, &config, &actor_id);
         assert_eq!(
             simulation.actors[&actor_id].station,
@@ -41756,6 +42238,69 @@ mod tests {
         assert_eq!(
             next_agent_goal(&healing, &world, &config, &content, &priest, current).0,
             AgentGoal::Heal(patient)
+        );
+    }
+
+    #[test]
+    fn defenders_prioritize_threats_nearest_the_town_hall_only() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world(&config.world);
+        let town_hall = town_hall_grid_position(&config);
+        let defender_position = GridPos {
+            x: town_hall.x.saturating_add(20),
+            z: town_hall.z,
+        };
+        let close_to_defender = GridPos {
+            x: defender_position.x.saturating_sub(1),
+            z: defender_position.z,
+        };
+        let close_to_town = GridPos {
+            x: town_hall.x.saturating_add(5),
+            z: town_hall.z,
+        };
+        let fighter = StableId::new("npc:defender_priority").unwrap();
+        let near_actor = StableId::new("enemy:near_actor").unwrap();
+        let near_town = StableId::new("enemy:near_town").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        assert!(simulation.join_player(fighter.clone(), defender_position));
+        assert!(simulation.join_player(near_actor.clone(), close_to_defender));
+        assert!(simulation.join_player(near_town.clone(), close_to_town));
+        for enemy in [&near_actor, &near_town] {
+            simulation
+                .assign_role(enemy, StableId::new("role:enemy").unwrap())
+                .unwrap();
+        }
+        simulation
+            .assign_role(&fighter, StableId::new("role:defender").unwrap())
+            .unwrap();
+        assert_eq!(
+            next_agent_goal(
+                &simulation,
+                &world,
+                &config,
+                &content,
+                &fighter,
+                defender_position,
+            )
+            .0,
+            AgentGoal::Attack(near_town.clone())
+        );
+
+        simulation
+            .assign_role(&fighter, StableId::new("role:ranger").unwrap())
+            .unwrap();
+        assert_eq!(
+            next_agent_goal(
+                &simulation,
+                &world,
+                &config,
+                &content,
+                &fighter,
+                defender_position,
+            )
+            .0,
+            AgentGoal::Attack(near_actor)
         );
     }
 
@@ -44748,7 +45293,7 @@ mod tests {
         assert!(matches!(
             presentation,
             Some(ActionPresentation::Healing { source, target })
-                if source == priest_position && target == patient_position
+                if source == priest && target == patient
         ));
         assert_eq!(simulation.actors[&patient].health, 82);
     }
@@ -45056,8 +45601,20 @@ mod tests {
         );
         assert_eq!(
             simulation.buildings[&runtime_id].health,
-            building_max_health(&content, &simulation.buildings[&runtime_id]) - 7
+            (building_max_health(&content, &simulation.buildings[&runtime_id]) + 9) / 10
         );
+        assert!(!simulation.buildings[&runtime_id].complete);
+        while !simulation.buildings[&runtime_id].complete {
+            complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &config,
+                &content,
+                &builder,
+                &repair_goal,
+                builder_position,
+            );
+        }
     }
 
     #[test]
@@ -47018,6 +47575,8 @@ mod tests {
             building: building_id,
             position: valid_position,
             rotation_quarter_turns: 0,
+            line_start: None,
+            line_end: None,
         };
         update_placer_visual(
             &config,
@@ -47068,6 +47627,8 @@ mod tests {
             building: building_id,
             position,
             rotation_quarter_turns: 1,
+            line_start: None,
+            line_end: None,
         };
         let mut transform = Transform::default();
         update_placer_ghost_transform(&config, &world, &placement, definition, &mut transform);
@@ -50545,6 +51106,8 @@ mod tests {
                 building: StableId::new("building:wall").unwrap(),
                 position: GridPos { x: 3, z: 3 },
                 rotation_quarter_turns: 0,
+                line_start: None,
+                line_end: None,
             },
         );
         let live_actor_ids = app
@@ -51352,6 +51915,29 @@ mod tests {
         );
         assert_eq!(position, GridPos { x: 4, z: 0 });
         assert_eq!(rotation, -2);
+
+        let content = embedded_content();
+        let house = &content.buildings[&StableId::new("building:house").unwrap()];
+        assert_eq!(house.footprint[0], house.footprint[1]);
+        let runtime_id = StableId::new("building:rotation_test").unwrap();
+        let mut simulation = WorldSimulation::new(1);
+        simulation.buildings.insert(
+            runtime_id.clone(),
+            BuildingState {
+                id: runtime_id.clone(),
+                archetype: house.archetype.clone(),
+                position: GridPos { x: 8, z: 8 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: 100,
+                complete: true,
+            },
+        );
+        assert_eq!(
+            rotate_building_instance(&content, &mut simulation, &runtime_id, -1),
+            Ok((house.display_name.clone(), 270))
+        );
+        assert_eq!(simulation.buildings[&runtime_id].rotation_quarter_turns, -1);
     }
 
     #[test]
@@ -51375,5 +51961,113 @@ mod tests {
             assert_eq!(actual, expected, "{direction:?}");
             assert_eq!(rotation, 0);
         }
+    }
+
+    #[test]
+    fn wall_lines_require_orthogonal_endpoints_and_include_both_ends() {
+        let horizontal = wall_line_cells(GridPos { x: 8, z: 5 }, GridPos { x: 4, z: 5 })
+            .expect("horizontal line");
+        assert_eq!(horizontal.len(), 5);
+        assert_eq!(horizontal.first(), Some(&GridPos { x: 4, z: 5 }));
+        assert_eq!(horizontal.last(), Some(&GridPos { x: 8, z: 5 }));
+        let vertical =
+            wall_line_cells(GridPos { x: 3, z: 2 }, GridPos { x: 3, z: 6 }).expect("vertical line");
+        assert_eq!(vertical.len(), 5);
+        assert!(wall_line_cells(GridPos { x: 2, z: 2 }, GridPos { x: 3, z: 3 }).is_err());
+
+        let wood = StableId::new("resource:wood").unwrap();
+        let cost = BTreeMap::from([(wood.clone(), 7)]);
+        assert_eq!(scaled_building_cost(&cost, horizontal.len())[&wood], 35);
+    }
+
+    #[test]
+    fn endless_path_failures_trigger_only_after_five_seconds() {
+        let actor = StableId::new("actor:path_failure").unwrap();
+        let mut failures = PathFailureRuntime::default();
+        assert!(!failures.record_failure(&actor, 4.99));
+        assert!(failures.record_failure(&actor, 0.01));
+        failures.clear(&actor);
+        assert!(!failures.record_failure(&actor, 0.01));
+    }
+
+    #[test]
+    fn player_name_presets_are_deterministic_and_catalogued() {
+        let actor = StableId::new("twitch:colour_test").unwrap();
+        let color = preset_player_name_color(44, &actor);
+        assert_eq!(color, preset_player_name_color(44, &actor));
+        assert!(PLAYER_NAME_COLOR_PRESETS.contains(&color));
+    }
+
+    #[test]
+    fn healing_effect_extent_stays_within_character_scale() {
+        let presentation = embedded_presentation();
+        for kind in [
+            HealingEffectKind::Channel,
+            HealingEffectKind::Burst,
+            HealingEffectKind::Revive,
+        ] {
+            let duration = healing_effect_duration(&presentation, kind);
+            for step in 0_u16..=100 {
+                let sample = healing_effect_sample(
+                    &presentation,
+                    kind,
+                    duration * f32::from(step) / 100.0,
+                    duration,
+                );
+                assert!(sample.radial_distance <= 0.9 + f32::EPSILON, "{kind:?}");
+                assert!(sample.rise <= 1.41 + f32::EPSILON, "{kind:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn hud_building_count_excludes_town_hall_walls_and_towers() {
+        let content = embedded_content();
+        let mut simulation = WorldSimulation::new(1);
+        for (runtime, definition_id) in [
+            ("building:townhall", "building:townhall"),
+            ("building:test_wall", "building:wall"),
+            ("building:test_tower", "building:tower"),
+            ("building:test_house", "building:house"),
+        ] {
+            let definition = &content.buildings[&StableId::new(definition_id).unwrap()];
+            let id = StableId::new(runtime).unwrap();
+            simulation.buildings.insert(
+                id.clone(),
+                BuildingState {
+                    id,
+                    archetype: definition.archetype.clone(),
+                    position: GridPos { x: 4, z: 4 },
+                    rotation_quarter_turns: 0,
+                    level: 1,
+                    health: 100,
+                    complete: true,
+                },
+            );
+        }
+        assert_eq!(hud_building_count(&content, &simulation), 1);
+    }
+
+    #[test]
+    fn transient_dx12_surface_configuration_errors_are_recoverable() {
+        let error = RenderError {
+            ty: ErrorType::Validation,
+            description: "In Surface::configure\n  Invalid surface".to_owned(),
+            source: None,
+        };
+        assert!(is_transient_surface_configuration_error(&error));
+        let unrelated = RenderError {
+            ty: ErrorType::Validation,
+            description: "some other validation error".to_owned(),
+            source: None,
+        };
+        assert!(!is_transient_surface_configuration_error(&unrelated));
+    }
+
+    #[test]
+    fn water_shader_uses_scene_lighting() {
+        let shader = include_str!("../../../assets/shaders/water_material.wgsl");
+        assert!(shader.contains("apply_pbr_lighting(pbr_input)"));
+        assert!(!shader.contains("keep it unlit"));
     }
 }

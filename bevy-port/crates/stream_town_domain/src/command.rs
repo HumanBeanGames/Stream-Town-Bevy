@@ -37,6 +37,10 @@ pub fn unity_command_usage(input: &str) -> Option<&'static str> {
         "level" => "!level <role> OR !level <building> <id> [amount]",
         "remove" => "!remove <building> <id>",
         "bid" => "!bid <building>",
+        "upgrade" => "!upgrade <BID>",
+        "beginplace" => "!beginplace",
+        "endplace" => "!endplace",
+        "rotatebuilding" => "!rotatebuilding <BID> [quarter turns]",
         "station" => "!station <id> (or !station to list IDs)",
         "target" => "!target <id> (or !target to list IDs)",
         "hair" => "!hair <index>",
@@ -115,11 +119,17 @@ pub enum ChatCommand {
     Build(StableId),
     BuildingCost(StableId),
     MoveBuilding(Vec<BuildingAction>),
+    BeginBuildingLine,
+    EndBuildingLine,
     ConfirmBuilding,
     CancelBuilding,
     Buildings,
     BuildingIds(StableId),
     Upgrade(StableId),
+    RotateBuilding {
+        building: StableId,
+        quarter_turns: i32,
+    },
     Level(StableId),
     LevelBuilding {
         building: StableId,
@@ -464,6 +474,27 @@ impl FromStr for ChatCommand {
                 parse_building_actions(Some(command.as_str()), parts).map(Self::MoveBuilding)
             }
             "level" => parse_level_command(parts),
+            "rotatebuilding" => {
+                let building = content_id(
+                    parts
+                        .next()
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
+                )?;
+                let quarter_turns = parts.next().map_or(Ok(1), |value| {
+                    value
+                        .parse::<i32>()
+                        .ok()
+                        .filter(|turns| *turns != 0)
+                        .ok_or(CommandParseError::InvalidAmount)
+                })?;
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                Ok(Self::RotateBuilding {
+                    building,
+                    quarter_turns,
+                })
+            }
             "levelall" => {
                 let building = content_id(
                     parts
@@ -571,6 +602,8 @@ impl FromStr for ChatCommand {
                     "save" => no_argument(argument, Self::Save),
                     "help" => no_argument(argument, Self::Help),
                     "confirm" | "accept" => no_argument(argument, Self::ConfirmBuilding),
+                    "beginplace" => no_argument(argument, Self::BeginBuildingLine),
+                    "endplace" => no_argument(argument, Self::EndBuildingLine),
                     "cancel" => no_argument(argument, Self::CancelBuilding),
                     "recruits" => no_argument(argument, Self::RecruitCount),
                     "rulervote" => no_argument(argument, Self::StartRulerVote),
@@ -930,6 +963,21 @@ mod tests {
             }]))
         );
         assert_eq!("!accept".parse(), Ok(ChatCommand::ConfirmBuilding));
+        assert_eq!("!beginplace".parse(), Ok(ChatCommand::BeginBuildingLine));
+        assert_eq!("!endplace".parse(), Ok(ChatCommand::EndBuildingLine));
+        assert_eq!(
+            "!upgrade building:runtime_00000004".parse(),
+            Ok(ChatCommand::Upgrade(
+                StableId::new("building:runtime_00000004").unwrap()
+            ))
+        );
+        assert_eq!(
+            "!rotatebuilding building:runtime_00000004 -1".parse(),
+            Ok(ChatCommand::RotateBuilding {
+                building: StableId::new("building:runtime_00000004").unwrap(),
+                quarter_turns: -1,
+            })
+        );
         assert_eq!("!cancel".parse(), Ok(ChatCommand::CancelBuilding));
         assert_eq!(
             "!level lumbermill 2 3".parse(),

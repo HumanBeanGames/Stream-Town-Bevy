@@ -2,7 +2,7 @@
     forward_io::{FragmentOutput, VertexOutput},
     mesh_view_bindings as view_bindings,
     pbr_fragment::pbr_input_from_standard_material,
-    pbr_functions::{alpha_discard, main_pass_post_lighting_processing},
+    pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
 }
 
 struct WaterMaterialUniform {
@@ -189,15 +189,14 @@ fn fragment(
         pbr_input.material.base_color,
     );
 
-    var out: FragmentOutput;
-    // Unity authored this as a stylized final colour, so keep it unlit to avoid
-    // the grazing-angle HDR mirror. Compress overbright foam uniformly instead
-    // of clipping each RGB channel: the latter collapsed the surface, depth,
-    // and foam into a flat cyan strip.
+    // Preserve the authored colour variation while feeding it through Bevy's
+    // PBR lighting. The material remains rough and non-reflective on the Rust
+    // side, avoiding the old grazing-angle HDR mirror without making the water
+    // ignore sunlight, ambient light, and night entirely.
     let authored = max(pbr_input.material.base_color.rgb, vec3<f32>(0.0));
     let peak = max(authored.r, max(authored.g, authored.b));
     let bounded = authored / max(1.0, peak / 0.92);
-    out.color = vec4<f32>(
+    pbr_input.material.base_color = vec4<f32>(
         bounded,
         clamp(
             pbr_input.material.base_color.a,
@@ -205,6 +204,8 @@ fn fragment(
             water_material.opacity_controls.y,
         ),
     );
+    var out: FragmentOutput;
+    out.color = apply_pbr_lighting(pbr_input);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }

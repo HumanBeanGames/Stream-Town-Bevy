@@ -36,7 +36,7 @@ masters as appropriate.
 | `!townstats` | Show town statistics. |
 | `!buildings` | List building types. |
 | `!cost <building>` | Show the building's current discounted construction cost and technology-limited maximum level. Alias: `!buildcost`. |
-| `!bid <building>` | List instance IDs for a building type. |
+| `!bid <building>` | List instance IDs for a building type and briefly display each number above its building. |
 | `!recruits` | Show the recruit count. |
 | `!rid` | List recruit IDs. |
 | `!rinfo <id>` | Show a recruit. |
@@ -56,9 +56,12 @@ masters as appropriate.
 | `!move <up\|down\|left\|right\|rotate> [amount]` | Move or rotate the pending building. |
 | `!up [amount]`, `!down [amount]`, `!left [amount]`, `!right [amount]` | Short forms for moving the pending building in visible screen directions. |
 | `!rotate [amount]` | Rotate the pending building by quarter turns. |
+| `!beginplace` | While placing a wall, set or replace its first endpoint. |
+| `!endplace` | Set or replace an orthogonal wall endpoint and preview the full line. |
 | `!confirm` / `!accept` | Confirm pending building placement. |
 | `!cancel` | Cancel pending building placement. |
-| `!upgrade <building>` | Upgrade a building type. |
+| `!upgrade <BID>` | Pay for and begin construction of the next level on one exact building. |
+| `!rotatebuilding <BID> [quarter turns]` | Rotate an already placed square-footprint building. Walls and gates orient from their neighbours. |
 | `!level <role>` | Spend resources to level a role. |
 | `!level <building> <id> [amount]` | Level a building instance. |
 | `!levelall <building> <level>` | Level every instance of a building type. |
