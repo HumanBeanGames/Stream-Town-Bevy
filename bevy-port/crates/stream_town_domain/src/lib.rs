@@ -68,8 +68,8 @@ pub use runtime_console::{
 };
 pub use save::{
     ActorKind, CURRENT_WORLD_SNAPSHOT_SCHEMA, LegacyMigrationMetadata, LegacySaveInfo,
-    LegacySaveKind, NativeSaveError, NativeSaveStore, SavedActor, SavedTerrainMesh,
-    SavedTerrainMeshError, WorldSnapshot, inspect_legacy_save,
+    LegacySaveKind, NATIVE_SAVE_BACKUP_GENERATIONS, NativeSaveError, NativeSaveStore, SavedActor,
+    SavedTerrainMesh, SavedTerrainMeshError, WorldSnapshot, inspect_legacy_save,
 };
 pub use settings::{
     AudioMixSettings, BuildingHealthDisplayMode, CURRENT_PLAYER_SETTINGS_SCHEMA, CameraSettings,

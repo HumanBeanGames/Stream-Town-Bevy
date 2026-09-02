@@ -11,9 +11,9 @@ use image::{DynamicImage, RgbImage, imageops::FilterType};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
-    ActorKind, ContentCatalog, DirtyRegion, GameConfig, GridPos, NativeSaveStore, PlayerSettings,
-    PresentationCatalog, SHIPPING_SECONDS_PER_DAY, TechnologyGraphLayout,
-    generate_world_with_content,
+    ActorKind, ContentCatalog, DirtyRegion, GameConfig, GridPos, NATIVE_SAVE_BACKUP_GENERATIONS,
+    NativeSaveStore, PlayerSettings, PresentationCatalog, SHIPPING_SECONDS_PER_DAY,
+    TechnologyGraphLayout, generate_world_with_content,
 };
 use walkdir::WalkDir;
 
@@ -153,6 +153,7 @@ fn purge_save_enemies(path: &Path) -> Result<()> {
             recovery.display()
         )
     })?;
+    let archived_backups = archive_purge_backup_history(&store, &recovery)?;
 
     snapshot
         .actors
@@ -185,12 +186,75 @@ fn purge_save_enemies(path: &Path) -> Result<()> {
     {
         bail!("purged save still contains enemy actors");
     }
+    seed_clean_purge_backup(&store)?;
     println!(
-        "Purged {} enemies from {}; recovery copy: {}",
+        "Purged {} enemies from {}; recovery copy: {}; archived backup generations: {}",
         enemy_ids.len(),
         path.display(),
-        recovery.display()
+        recovery.display(),
+        archived_backups,
     );
+    Ok(())
+}
+
+fn archive_purge_backup_history(store: &NativeSaveStore, recovery: &Path) -> Result<usize> {
+    let backups = (1..=NATIVE_SAVE_BACKUP_GENERATIONS)
+        .map(|generation| store.backup_path_at(generation))
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    if backups.is_empty() {
+        return Ok(0);
+    }
+    let archive = std::path::PathBuf::from(format!("{}.history", recovery.display()));
+    fs::create_dir_all(&archive).with_context(|| {
+        format!(
+            "failed to create pre-purge backup archive {}",
+            archive.display()
+        )
+    })?;
+    for backup in &backups {
+        let file_name = backup
+            .file_name()
+            .context("rolling backup has no file name")?;
+        fs::copy(backup, archive.join(file_name)).with_context(|| {
+            format!(
+                "failed to archive rolling backup {} before purge",
+                backup.display()
+            )
+        })?;
+    }
+    Ok(backups.len())
+}
+
+fn seed_clean_purge_backup(store: &NativeSaveStore) -> Result<()> {
+    let backup = store.backup_path();
+    let temporary = std::path::PathBuf::from(format!("{}.clean.tmp", backup.display()));
+    fs::copy(store.path(), &temporary).with_context(|| {
+        format!(
+            "failed to stage clean post-purge backup {}",
+            temporary.display()
+        )
+    })?;
+    NativeSaveStore::new(&temporary)
+        .load()
+        .with_context(|| format!("staged clean backup is invalid: {}", temporary.display()))?;
+    for generation in 1..=NATIVE_SAVE_BACKUP_GENERATIONS {
+        let path = store.backup_path_at(generation);
+        if path.exists() {
+            fs::remove_file(&path).with_context(|| {
+                format!("failed to clear old rolling backup {}", path.display())
+            })?;
+        }
+    }
+    fs::rename(&temporary, &backup).with_context(|| {
+        format!(
+            "failed to install clean post-purge backup {}",
+            backup.display()
+        )
+    })?;
+    NativeSaveStore::new(&backup)
+        .load()
+        .with_context(|| format!("clean post-purge backup is invalid: {}", backup.display()))?;
     Ok(())
 }
 

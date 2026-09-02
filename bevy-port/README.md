@@ -226,8 +226,11 @@ current generator fingerprint changed.
 For the one-time oversized-enemy-save correction, stop the game and run
 `cargo run -p xtask -- purge-save-enemies --save .stream-town/saves/<Town>.stbevy`.
 The command preserves the unmodified source as a uniquely named
-`.pre-enemy-purge` recovery file, removes enemy actors and stale raid tracking,
-writes through the normal rotating save store, and reload-validates the result.
+`.pre-enemy-purge` recovery file, archives any older rolling generations beside
+it in a `.history` directory, removes enemy actors and stale raid tracking,
+writes through the normal rotating save store, and reload-validates both the
+result and a clean replacement `.bak`. Automatic recovery therefore cannot
+silently restore the purged enemies.
 Legacy Unity saves are never modified by migration tools. `import-save` is an
 optional one-time compatibility command only. The production generator never
 loads a Unity save: `export-world-oracle` emits sanitized counts and position
