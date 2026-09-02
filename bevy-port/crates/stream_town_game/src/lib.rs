@@ -140,11 +140,16 @@ const WATER_SURFACE_LIFT_METRES: f32 = 0.20;
 const TERRAIN_HIGH_DETAIL_RADIUS: f32 = 220.0;
 const TERRAIN_MEDIUM_DETAIL_RADIUS: f32 = 440.0;
 const TERRAIN_LOD_HYSTERESIS: f32 = 36.0;
-// Keep every shipping-sized town actor on its authored skinned rig. Larger
-// stress-test crowds still retain a bounded fallback, which can be overridden
-// explicitly with STREAM_TOWN_ACTOR_SCENE_BUDGET/STREAM_TOWN_ANIMATION_BUDGET.
-const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 64;
+// Keep every practical shipping town actor on its authored skinned rig. The
+// former 64-actor ceiling was shared by citizens and enemies, so later joins
+// could remain capsule placeholders and their animations could be withheld.
+// Explicit benchmark mode retains its measured low-detail ceiling.
+const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 6_400;
 const PERFORMANCE_ACTOR_DETAIL_BUDGET: usize = 16;
+const HEALING_CHANNEL_RING_SCALE: f32 = 0.035;
+const HEALING_BURST_RING_SCALE: f32 = 0.24;
+const HEALING_MOTE_SCALE: f32 = 0.035;
+const HEALING_EMISSIVE_MAX_COMPONENT: f32 = 3.5;
 // Orthographic framing is retained only for deterministic close-up smoke tests.
 // Shipping gameplay uses the perspective camera authored in MainCamera.prefab.
 const UNITY_TOWN_CAMERA_FOV_DEGREES: f32 = 60.0;
@@ -2614,6 +2619,9 @@ struct FoliageRenderBatch(FoliageBatchKey);
 
 #[derive(Component)]
 struct Hud;
+
+#[derive(Component)]
+struct HudCommandGuidance;
 
 #[derive(Component)]
 struct HudResourceStrip;
@@ -11089,7 +11097,7 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
 
     commands.spawn((
         WorldEntity,
-        Hud,
+        HudCommandGuidance,
         Name::new("Twitch command guidance"),
         UiDisplayFont,
         Text::new("type !join to apply for citizenship\ntype !help for more commands"),
@@ -20978,9 +20986,26 @@ fn healing_burst_effect(presentation: &PresentationCatalog) -> (&StableId, &Heal
 }
 
 fn healing_material(color: [f32; 4], alpha_scale: f32) -> StandardMaterial {
+    // Unity's VFX gradients are authored in HDR linear colour. Feeding values
+    // such as green=16.9 directly into Bevy bloom makes a character-sized cue
+    // look screen-sized. Preserve the hue and authored HDR intent while
+    // bounding the emission to the same range as the rest of the port's VFX.
+    let peak = color[0].max(color[1]).max(color[2]).max(1.0);
+    let normalized = [color[0] / peak, color[1] / peak, color[2] / peak];
+    let emissive_gain = peak.min(HEALING_EMISSIVE_MAX_COMPONENT);
     StandardMaterial {
-        base_color: Color::linear_rgba(color[0], color[1], color[2], color[3] * alpha_scale),
-        emissive: LinearRgba::new(color[0], color[1], color[2], 1.0),
+        base_color: Color::linear_rgba(
+            normalized[0],
+            normalized[1],
+            normalized[2],
+            color[3] * alpha_scale,
+        ),
+        emissive: LinearRgba::new(
+            normalized[0] * emissive_gain,
+            normalized[1] * emissive_gain,
+            normalized[2] * emissive_gain,
+            1.0,
+        ),
         alpha_mode: AlphaMode::Blend,
         unlit: true,
         ..default()
@@ -21058,22 +21083,22 @@ fn healing_effect_sample(
         HealingEffectKind::Channel => HealingEffectSample {
             ring_scale: channel_size,
             mote_scale: envelope.sqrt(),
-            radial_distance: 0.16 + progress * 0.28,
-            rise: 0.1 + progress * 0.8,
+            radial_distance: 0.1 + progress * 0.2,
+            rise: 0.08 + progress * 0.48,
             rotation_radians: progress * std::f32::consts::TAU * 1.5,
         },
         HealingEffectKind::Burst => HealingEffectSample {
             ring_scale: disc_size,
             mote_scale: envelope,
-            radial_distance: 0.18 + progress * 0.52,
-            rise: 0.12 + progress,
+            radial_distance: 0.12 + progress * 0.32,
+            rise: 0.1 + progress * 0.6,
             rotation_radians: progress * std::f32::consts::TAU,
         },
         HealingEffectKind::Revive => HealingEffectSample {
             ring_scale: disc_size * 1.15,
             mote_scale: envelope,
-            radial_distance: 0.22 + progress * 0.68,
-            rise: 0.16 + progress * 1.25,
+            radial_distance: 0.14 + progress * 0.42,
+            rise: 0.12 + progress * 0.78,
             rotation_radians: progress * std::f32::consts::TAU * 1.25,
         },
     }
@@ -21103,7 +21128,7 @@ fn spawn_healing_effect(
                     .get(effect)
                     .cloned()
                     .unwrap_or_else(|| render.healing_green.clone()),
-                world_scale * definition.exposed_size * 0.085,
+                world_scale * definition.exposed_size * HEALING_CHANNEL_RING_SCALE,
             )
         }
         HealingEffectKind::Burst | HealingEffectKind::Revive => {
@@ -21116,7 +21141,7 @@ fn spawn_healing_effect(
                     .and_then(|materials| materials.first())
                     .cloned()
                     .unwrap_or_else(|| render.healing_green.clone()),
-                world_scale * 0.55,
+                world_scale * HEALING_BURST_RING_SCALE,
             )
         }
     };
@@ -21189,7 +21214,7 @@ fn spawn_healing_effect(
                 duration_seconds,
                 angle_radians,
                 phase,
-                base_scale: Vec3::splat(world_scale * 0.08),
+                base_scale: Vec3::splat(world_scale * HEALING_MOTE_SCALE),
                 distance_scale: world_scale,
                 size_multiplier: mote_size_multiplier,
                 follow_target: follow_target.clone(),
@@ -41323,11 +41348,11 @@ mod tests {
     }
 
     #[test]
-    fn production_crowd_lod_budget_matches_measured_gpu_gate() {
-        assert_eq!(actor_detail_budget(None, false), 64);
+    fn runtime_and_benchmark_crowd_budgets_are_separate() {
+        assert_eq!(actor_detail_budget(None, false), 6_400);
         assert_eq!(actor_detail_budget(None, true), 16);
         assert_eq!(actor_detail_budget(Some("24"), true), 24);
-        assert_eq!(actor_detail_budget(Some("invalid"), false), 64);
+        assert_eq!(actor_detail_budget(Some("invalid"), false), 6_400);
     }
 
     #[test]
@@ -48133,6 +48158,10 @@ mod tests {
             .world_mut()
             .query_filtered::<Entity, (With<Button>, With<WorldEntity>)>();
         assert_eq!(buttons.iter(app.world()).count(), 0);
+        let mut primary_huds = app.world_mut().query::<&Hud>();
+        assert_eq!(primary_huds.iter(app.world()).count(), 1);
+        let mut command_guidance = app.world_mut().query::<&HudCommandGuidance>();
+        assert_eq!(command_guidance.iter(app.world()).count(), 1);
         assert!(
             !app.world()
                 .contains_resource::<PointerObjectSelectionEnabled>()
@@ -52014,10 +52043,52 @@ mod tests {
                     duration * f32::from(step) / 100.0,
                     duration,
                 );
-                assert!(sample.radial_distance <= 0.9 + f32::EPSILON, "{kind:?}");
-                assert!(sample.rise <= 1.41 + f32::EPSILON, "{kind:?}");
+                let ring_base_scale = match kind {
+                    HealingEffectKind::Channel => {
+                        healing_channel_effect(&presentation).1.exposed_size
+                            * HEALING_CHANNEL_RING_SCALE
+                    }
+                    HealingEffectKind::Burst | HealingEffectKind::Revive => {
+                        HEALING_BURST_RING_SCALE
+                    }
+                };
+                let ring_world_radius = ring_base_scale * sample.ring_scale;
+                let mote_transform_scale = if kind == HealingEffectKind::Channel {
+                    HEALING_MOTE_SCALE * sample.mote_scale * 1.2
+                } else {
+                    HEALING_MOTE_SCALE
+                        * healing_burst_effect(&presentation)
+                            .1
+                            .plus_size_multiplier(f32::from(step) / 100.0)
+                            .unwrap_or_default()
+                        * if kind == HealingEffectKind::Revive {
+                            1.25
+                        } else {
+                            1.0
+                        }
+                };
+                // VFX_Plus.glb has a six-metre maximum imported extent; the
+                // channel uses the unit-diameter procedural sphere. Their
+                // final geometry, not merely their transforms, stays hand-sized.
+                let mote_mesh_extent = if kind == HealingEffectKind::Channel {
+                    1.0
+                } else {
+                    6.000_001
+                };
+                let mote_world_extent = mote_transform_scale * mote_mesh_extent;
+                assert!(ring_world_radius <= 0.56 + f32::EPSILON, "{kind:?}");
+                assert!(mote_world_extent <= 0.14 + f32::EPSILON, "{kind:?}");
+                assert!(sample.radial_distance <= 0.56 + f32::EPSILON, "{kind:?}");
+                assert!(sample.rise <= 0.9 + f32::EPSILON, "{kind:?}");
             }
         }
+        let material = healing_material([0.266_204_9, 16.948_38, 0.0, 1.0], 1.0);
+        let emissive = material.emissive.to_f32_array();
+        assert!(
+            emissive[..3]
+                .iter()
+                .all(|component| *component <= HEALING_EMISSIVE_MAX_COMPONENT)
+        );
     }
 
     #[test]

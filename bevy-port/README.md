@@ -833,13 +833,14 @@ as Unity's `MaterialPropertyBlock` did; inherited glTF fallback materials are
 promoted to the same material before recolouring, so converted model bindings
 cannot bypass customization.
 Converted animation clips and graphs are shared by rig/controller instead of
-being rebuilt per actor. The runtime keeps 16 fully authored, animated character
-scenes and represents the rest of a large crowd with lightweight capsule LODs;
-all actors retain authoritative gameplay, movement, identity, selection, and
-save state. `STREAM_TOWN_ACTOR_SCENE_BUDGET` and
-`STREAM_TOWN_ANIMATION_BUDGET` override those diagnostic budgets. Twitch joins,
-recruits, runtime enemies, and save-restored actors automatically promote from
-the lightweight representation whenever detail capacity is available.
+being rebuilt per actor. Normal gameplay budgets 6,400 authored character
+scenes and animations, one hundred times the former ceiling, so practical towns
+do not strand later citizens as capsule placeholders when enemy populations are
+present. Explicit performance diagnostics retain bounded scene and animation
+budgets through `STREAM_TOWN_ACTOR_SCENE_BUDGET`,
+`STREAM_TOWN_ANIMATION_BUDGET`, and the frame-time benchmark mode. All actors
+retain authoritative gameplay, movement, identity, selection, and save state
+while their scene is being promoted.
 All 16 reachable Unity `EnemyModelHandler` records are typed content. Detailed
 enemy scenes deterministically select one base and weapon plus independent
 optional nodes from the persistent actor ID, keep permanent nodes visible, and
