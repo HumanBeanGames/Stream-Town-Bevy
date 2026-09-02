@@ -112,6 +112,8 @@ const PREWARMED_PROJECTILE_NIGHT_LIGHTS: usize = 32;
 const PROJECTILE_MAX_LIFETIME_SECONDS: f32 = 12.0;
 const UNITY_AUTHORED_GRID_CELL_SIZE: f32 = 2.0;
 const TWITCH_COMMAND_HELP_URL: &str = "https://github.com/HumanBeanGames/Stream-Town-Bevy/blob/codex/bevy-migration/TWITCH_COMMANDS.md";
+const BUILDING_PLACEMENT_TIMEOUT_SECONDS: f32 = 30.0;
+const HEALING_TARGET_EFFECT_SCALE: f32 = 0.125;
 const INVALID_TWITCH_COMMAND_REPLY: &str = "Invalid Command! Type !help for the list of commands!";
 const TECHNOLOGY_VOTE_DURATION_SECONDS: f32 = 60.0;
 const TECHNOLOGY_VOTE_OPTION_COUNT: usize = 3;
@@ -892,6 +894,7 @@ struct BuildingPlacement {
     rotation_quarter_turns: i32,
     line_start: Option<GridPos>,
     line_end: Option<GridPos>,
+    inactivity_seconds: f32,
 }
 
 #[derive(Resource, Default)]
@@ -917,6 +920,36 @@ struct SurfaceErrorRuntime {
 
 #[derive(Resource, Default)]
 struct BuildingPlacers(BTreeMap<StableId, BuildingPlacement>);
+
+fn expire_inactive_building_placements(time: Res<Time>, mut placers: ResMut<BuildingPlacers>) {
+    let delta_seconds = time.delta_secs();
+    placers
+        .0
+        .retain(|_, placement| building_placement_remains_active(placement, delta_seconds));
+}
+
+fn building_placement_remains_active(
+    placement: &mut BuildingPlacement,
+    delta_seconds: f32,
+) -> bool {
+    placement.inactivity_seconds += delta_seconds.max(0.0);
+    placement.inactivity_seconds < BUILDING_PLACEMENT_TIMEOUT_SECONDS
+}
+
+#[derive(Clone, Debug, Default)]
+struct RegenerationWorkerState {
+    initialized: bool,
+    next_ready_seconds: f64,
+    prospector_step: u32,
+}
+
+#[derive(Resource, Default)]
+struct RegenerationRoleRuntime {
+    elapsed_seconds: f64,
+    next_resource_serial: u64,
+    workers: BTreeMap<StableId, RegenerationWorkerState>,
+    recently_fallen_trees: VecDeque<GridPos>,
+}
 
 #[derive(SystemParam)]
 struct RuntimeCommandQueues<'w> {
@@ -1557,6 +1590,7 @@ struct RenderAssets {
     food: Handle<StandardMaterial>,
     building: Handle<StandardMaterial>,
     construction: Handle<StandardMaterial>,
+    regeneration_buildings: BTreeMap<String, Handle<StandardMaterial>>,
     placement_valid: Handle<BoundsMaterial>,
     placement_invalid: Handle<BoundsMaterial>,
     enemy_idle: Handle<StandardMaterial>,
@@ -2596,6 +2630,12 @@ enum AgentGoal {
     AttackBuilding(StableId),
     Heal(StableId),
     Construct(StableId),
+    PlantTree(GridPos),
+    Prospect {
+        cell: GridPos,
+        sequence: u32,
+    },
+    PlantBush(GridPos),
 }
 
 #[derive(Component, Clone, Copy)]
@@ -3685,6 +3725,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<WorldRenderStats>()
             .init_resource::<CrowdSeparationRuntime>()
             .init_resource::<StationTargetRuntime>()
+            .init_resource::<RegenerationRoleRuntime>()
             .init_resource::<RulerVoteAnnouncementRuntime>()
             .init_resource::<InjectedCommands>()
             .init_resource::<CommandFeedback>()
@@ -4202,7 +4243,8 @@ impl Plugin for StreamTownGamePlugin {
                         .after(move_agents)
                         .after(apply_agent_commands),
                     apply_building_commands.after(process_injected_commands),
-                    sync_building_placers.after(process_injected_commands),
+                    expire_inactive_building_placements.after(process_injected_commands),
+                    sync_building_placers.after(expire_inactive_building_placements),
                     apply_building_placement_ghosts.after(sync_building_placers),
                     sync_building_placement_overlays
                         .after(process_injected_commands)
@@ -5079,6 +5121,32 @@ fn setup_rendering(
             perceptual_roughness: 0.88,
             ..default()
         }),
+        regeneration_buildings: BTreeMap::from([
+            (
+                "11111111111111111111111111111111".to_owned(),
+                materials.add(StandardMaterial {
+                    base_color: Color::srgb(0.08, 0.30, 0.12),
+                    perceptual_roughness: 0.82,
+                    ..default()
+                }),
+            ),
+            (
+                "22222222222222222222222222222222".to_owned(),
+                materials.add(StandardMaterial {
+                    base_color: Color::srgb(0.30, 0.32, 0.35),
+                    perceptual_roughness: 0.86,
+                    ..default()
+                }),
+            ),
+            (
+                "33333333333333333333333333333333".to_owned(),
+                materials.add(StandardMaterial {
+                    base_color: Color::srgb(0.20, 0.08, 0.25),
+                    perceptual_roughness: 0.82,
+                    ..default()
+                }),
+            ),
+        ]),
         placement_valid,
         placement_invalid,
         enemy_idle: materials.add(Color::srgb(0.72, 0.12, 0.12)),
@@ -16163,6 +16231,7 @@ fn generate_and_spawn_world(
             .map_or(0, PresentedRenderFrames::current);
         selected.0 = None;
         commands.insert_resource(SelectedActor::default());
+        commands.insert_resource(RegenerationRoleRuntime::default());
         *render_stats = WorldRenderStats::default();
         let Some(prepared) = loading.prepared_world.as_mut() else {
             loading.phase = WorldLoadingPhase::Loading;
@@ -16327,6 +16396,7 @@ fn generate_and_spawn_world(
                         rotation_quarter_turns: 0,
                         line_start: None,
                         line_end: None,
+                        inactivity_seconds: 0.0,
                     },
                 );
                 placers.0.insert(
@@ -16337,6 +16407,7 @@ fn generate_and_spawn_world(
                         rotation_quarter_turns: 1,
                         line_start: None,
                         line_end: None,
+                        inactivity_seconds: 0.0,
                     },
                 );
             }
@@ -17921,6 +17992,23 @@ fn prefab_material_spec(
             renderer_materials,
         },
     )
+}
+
+fn building_prefab_material_spec(
+    archetype: &ArchetypeDef,
+    scene: &ArchetypeScene,
+    presentation: &PresentationCatalog,
+    render: &RenderAssets,
+) -> Option<MaterialOverrideSpec> {
+    render
+        .regeneration_buildings
+        .get(&archetype.source_guid)
+        .map(|material| MaterialOverrideSpec {
+            fallback: Some(ResolvedMaterialHandle::Standard(material.clone())),
+            model_materials: BTreeMap::new(),
+            renderer_materials: Vec::new(),
+        })
+        .or_else(|| prefab_material_spec(archetype, scene, presentation, render))
 }
 
 fn converted_asset_exists(asset_root: &Path, asset_path: &str) -> bool {
@@ -19871,11 +19959,592 @@ fn next_agent_goal_with_station_runtime(
     )
 }
 
-fn complete_agent_goal(
+fn regeneration_role_interval_seconds(role: &StableId, level: u16) -> Option<f64> {
+    let progress = f64::from(level.saturating_sub(1).min(99)) / 99.0;
+    match role.as_str() {
+        "role:forester" => Some(300.0 + (20.0 - 300.0) * progress),
+        "role:tender" => Some(600.0 + (120.0 - 600.0) * progress),
+        _ => None,
+    }
+}
+
+fn prospector_discovery_denominator(level: u16) -> u64 {
+    let progress = u64::from(level.saturating_sub(1).min(99));
+    1_000_u64.saturating_sub(900 * progress / 99).max(100)
+}
+
+fn regeneration_role_level(actor: &ActorState) -> u16 {
+    actor
+        .role_progression
+        .get(&actor.role)
+        .map_or(1, |progress| progress.level.max(1))
+}
+
+fn regeneration_hut<'a>(
+    content: &'a ContentCatalog,
+    simulation: &'a WorldSimulation,
+    role: &StableId,
+    from: GridPos,
+) -> Option<&'a BuildingState> {
+    simulation
+        .buildings
+        .values()
+        .filter(|building| building.complete)
+        .filter(|building| {
+            building_def_for_archetype(content, &building.archetype).is_some_and(|definition| {
+                definition.role_slots.iter().any(|slot| slot.role == *role)
+            })
+        })
+        .min_by_key(|building| {
+            (
+                grid_distance_squared(building.position, from),
+                building.id.clone(),
+            )
+        })
+}
+
+fn offset_grid(position: GridPos, x: i32, z: i32, world: &GeneratedWorld) -> Option<GridPos> {
+    let x = i32::from(position.x).checked_add(x)?;
+    let z = i32::from(position.z).checked_add(z)?;
+    (x >= 0
+        && z >= 0
+        && x < i32::from(world.navigation.width())
+        && z < i32::from(world.navigation.height()))
+    .then(|| GridPos {
+        x: u16::try_from(x).expect("checked world x fits u16"),
+        z: u16::try_from(z).expect("checked world z fits u16"),
+    })
+}
+
+fn active_resource_at(world: &GeneratedWorld, position: GridPos) -> bool {
+    world
+        .resources
+        .iter()
+        .any(|resource| resource.amount > 0 && resource.position == position)
+}
+
+fn squared_distance_from_region(position: GridPos, region: stream_town_domain::DirtyRegion) -> u64 {
+    let dx = if position.x < region.min.x {
+        region.min.x - position.x
+    } else {
+        position.x.saturating_sub(region.max.x)
+    };
+    let dz = if position.z < region.min.z {
+        region.min.z - position.z
+    } else {
+        position.z.saturating_sub(region.max.z)
+    };
+    u64::from(dx) * u64::from(dx) + u64::from(dz) * u64::from(dz)
+}
+
+fn cell_is_clear_of_buildings(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    position: GridPos,
+    minimum_distance: u16,
+) -> bool {
+    let minimum_squared = u64::from(minimum_distance) * u64::from(minimum_distance);
+    simulation.buildings.values().all(|building| {
+        let Some(definition) = building_def_for_archetype(content, &building.archetype) else {
+            return true;
+        };
+        let footprint = rotated_footprint(definition.footprint, building.rotation_quarter_turns);
+        building_region(building.position, footprint, world)
+            .is_none_or(|region| squared_distance_from_region(position, region) >= minimum_squared)
+    })
+}
+
+fn cell_is_clear_of_trees(
+    world: &GeneratedWorld,
+    position: GridPos,
+    minimum_distance: u16,
+) -> bool {
+    let minimum_squared = u64::from(minimum_distance) * u64::from(minimum_distance);
+    world.resources.iter().all(|resource| {
+        resource.amount == 0
+            || resource.target_kind.as_str() != "target:tree"
+            || grid_distance_squared(resource.position, position) >= minimum_squared
+    })
+}
+
+fn valid_regeneration_cell(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    position: GridPos,
+) -> bool {
+    world.navigation.is_walkable(position)
+        && !active_resource_at(world, position)
+        && cell_is_clear_of_buildings(content, simulation, world, position, 1)
+}
+
+fn planting_approach(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    plant: GridPos,
+    from: GridPos,
+) -> Option<GridPos> {
+    let mut candidates = (-1..=1)
+        .flat_map(|z| (-1..=1).map(move |x| (x, z)))
+        .filter(|(x, z)| *x != 0 || *z != 0)
+        .filter_map(|(x, z)| offset_grid(plant, x, z, world))
+        .filter(|candidate| world.navigation.is_walkable(*candidate))
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|candidate| {
+        (
+            grid_distance_squared(*candidate, from),
+            candidate.z,
+            candidate.x,
+        )
+    });
+    candidates.into_iter().find(|candidate| {
+        try_agent_path(
+            &world.navigation,
+            content,
+            simulation,
+            &ActorKind::Player,
+            from,
+            *candidate,
+        )
+        .is_some()
+    })
+}
+
+fn stable_id_hash(value: &StableId) -> u64 {
+    value
+        .as_str()
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+}
+
+fn regenerated_resource_offset(id: &StableId, position: GridPos) -> [i16; 2] {
+    let hash = seagull_hash(
+        stable_id_hash(id),
+        u64::from(position.x) | (u64::from(position.z) << 16),
+        0x5245_4752_4F57,
+    );
+    let component =
+        |bits: u64| i16::try_from(bits % 501).expect("hashed resource offset fits i16") - 250;
+    [component(hash), component(hash >> 32)]
+}
+
+fn forester_planting_cell(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    runtime: &RegenerationRoleRuntime,
+    actor: &StableId,
+    hut: GridPos,
+    from: GridPos,
+) -> Option<(GridPos, GridPos)> {
+    let mut recent = runtime
+        .recently_fallen_trees
+        .iter()
+        .rev()
+        .copied()
+        .collect::<Vec<_>>();
+    recent.truncate(64);
+    let offsets = [
+        (0, 0),
+        (1, 0),
+        (0, 1),
+        (-1, 0),
+        (0, -1),
+        (1, 1),
+        (-1, 1),
+        (-1, -1),
+        (1, -1),
+        (2, 0),
+        (0, 2),
+        (-2, 0),
+        (0, -2),
+    ];
+    for fallen in recent {
+        for (x, z) in offsets {
+            let Some(candidate) = offset_grid(fallen, x, z, world) else {
+                continue;
+            };
+            if valid_regeneration_cell(content, simulation, world, candidate)
+                && let Some(approach) =
+                    planting_approach(content, simulation, world, candidate, from)
+            {
+                return Some((candidate, approach));
+            }
+        }
+    }
+
+    let mut beside_trees = world
+        .resources
+        .iter()
+        .filter(|resource| resource.amount > 0 && resource.target_kind.as_str() == "target:tree")
+        .flat_map(|tree| {
+            offsets
+                .into_iter()
+                .skip(1)
+                .filter_map(|(x, z)| offset_grid(tree.position, x, z, world))
+        })
+        .filter(|candidate| valid_regeneration_cell(content, simulation, world, *candidate))
+        .collect::<Vec<_>>();
+    beside_trees.sort_by_key(|candidate| {
+        (
+            grid_distance_squared(*candidate, hut),
+            seagull_hash(
+                world.seed ^ stable_id_hash(actor),
+                u64::from(candidate.x) | (u64::from(candidate.z) << 16),
+                0x464F_5245_5354,
+            ),
+        )
+    });
+    if let Some(result) = beside_trees.into_iter().find_map(|candidate| {
+        planting_approach(content, simulation, world, candidate, from)
+            .map(|approach| (candidate, approach))
+    }) {
+        return Some(result);
+    }
+
+    let radius = 20_i32;
+    let mut fallback = (-radius..=radius)
+        .flat_map(|z| (-radius..=radius).map(move |x| (x, z)))
+        .filter_map(|(x, z)| offset_grid(hut, x, z, world))
+        .filter(|candidate| valid_regeneration_cell(content, simulation, world, *candidate))
+        .filter(|candidate| cell_is_clear_of_buildings(content, simulation, world, *candidate, 3))
+        .collect::<Vec<_>>();
+    fallback.sort_by_key(|candidate| {
+        seagull_hash(
+            world.seed ^ stable_id_hash(actor),
+            u64::from(candidate.x) | (u64::from(candidate.z) << 16),
+            0x4641_4C4C_4241_434B,
+        )
+    });
+    fallback.into_iter().find_map(|candidate| {
+        planting_approach(content, simulation, world, candidate, from)
+            .map(|approach| (candidate, approach))
+    })
+}
+
+fn tender_planting_cell(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    actor: &StableId,
+    hut: GridPos,
+    from: GridPos,
+) -> Option<(GridPos, GridPos)> {
+    let radius = 24_i32;
+    let mut fields = (-radius..=radius)
+        .flat_map(|z| (-radius..=radius).map(move |x| (x, z)))
+        .filter_map(|(x, z)| offset_grid(hut, x, z, world))
+        .filter(|candidate| valid_regeneration_cell(content, simulation, world, *candidate))
+        .filter(|candidate| cell_is_clear_of_buildings(content, simulation, world, *candidate, 10))
+        .filter(|candidate| cell_is_clear_of_trees(world, *candidate, 5))
+        .collect::<Vec<_>>();
+    fields.sort_by_key(|candidate| {
+        let nearest_resource = world
+            .resources
+            .iter()
+            .filter(|resource| resource.amount > 0)
+            .map(|resource| grid_distance_squared(resource.position, *candidate))
+            .min()
+            .unwrap_or(u64::MAX);
+        (
+            std::cmp::Reverse(nearest_resource),
+            seagull_hash(
+                world.seed ^ stable_id_hash(actor),
+                u64::from(candidate.x) | (u64::from(candidate.z) << 16),
+                0x5445_4E44_4552,
+            ),
+        )
+    });
+    fields.into_iter().find_map(|candidate| {
+        planting_approach(content, simulation, world, candidate, from)
+            .map(|approach| (candidate, approach))
+    })
+}
+
+fn prospector_spiral_cells(world: &GeneratedWorld, hut: GridPos) -> Vec<GridPos> {
+    let mut cells = Vec::new();
+    for radius in 5_i32..=20 {
+        for z in 0..=radius {
+            if let Some(cell) = offset_grid(hut, radius, z, world) {
+                cells.push(cell);
+            }
+        }
+        for x in (-radius..radius).rev() {
+            if let Some(cell) = offset_grid(hut, x, radius, world) {
+                cells.push(cell);
+            }
+        }
+        for z in (-radius..radius).rev() {
+            if let Some(cell) = offset_grid(hut, -radius, z, world) {
+                cells.push(cell);
+            }
+        }
+        for x in (-radius + 1)..=radius {
+            if let Some(cell) = offset_grid(hut, x, -radius, world) {
+                cells.push(cell);
+            }
+        }
+        for z in (-radius + 1)..0 {
+            if let Some(cell) = offset_grid(hut, radius, z, world) {
+                cells.push(cell);
+            }
+        }
+    }
+    cells.retain(|cell| world.navigation.is_walkable(*cell));
+    cells
+}
+
+fn regeneration_agent_goal(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    runtime: &mut RegenerationRoleRuntime,
+    actor_id: &StableId,
+    current: GridPos,
+) -> Option<(AgentGoal, GridPos)> {
+    let actor = simulation.actors.get(actor_id)?;
+    if !matches!(
+        actor.role.as_str(),
+        "role:forester" | "role:prospector" | "role:tender"
+    ) {
+        return None;
+    }
+    let hut = regeneration_hut(content, simulation, &actor.role, current)?.position;
+    let level = regeneration_role_level(actor);
+    if let Some(interval) = regeneration_role_interval_seconds(&actor.role, level) {
+        let worker = runtime.workers.entry(actor_id.clone()).or_default();
+        if !worker.initialized {
+            worker.initialized = true;
+            worker.next_ready_seconds = runtime.elapsed_seconds + interval;
+            return None;
+        }
+        if runtime.elapsed_seconds < worker.next_ready_seconds {
+            return None;
+        }
+    }
+    match actor.role.as_str() {
+        "role:forester" => {
+            forester_planting_cell(content, simulation, world, runtime, actor_id, hut, current)
+                .map(|(plant, approach)| (AgentGoal::PlantTree(plant), approach))
+        }
+        "role:tender" => tender_planting_cell(content, simulation, world, actor_id, hut, current)
+            .map(|(plant, approach)| (AgentGoal::PlantBush(plant), approach)),
+        "role:prospector" => {
+            let cells = prospector_spiral_cells(world, hut);
+            if cells.is_empty() {
+                return None;
+            }
+            let worker = runtime.workers.entry(actor_id.clone()).or_default();
+            worker.initialized = true;
+            let sequence = worker.prospector_step;
+            worker.prospector_step = worker.prospector_step.wrapping_add(1);
+            let cell = cells[usize::try_from(sequence).unwrap_or_default() % cells.len()];
+            Some((AgentGoal::Prospect { cell, sequence }, cell))
+        }
+        _ => None,
+    }
+}
+
+fn resource_amount_for_target(content: &ContentCatalog, target: &str) -> u32 {
+    content
+        .resource_generation
+        .iter()
+        .find(|layer| layer.target_kind.as_str() == target)
+        .map_or(1, |layer| layer.amount)
+}
+
+fn spawn_regenerated_resource(
+    runtime: &mut RegenerationRoleRuntime,
+    world: &mut GeneratedWorld,
+    content: &ContentCatalog,
+    kind: &str,
+    target: &str,
+    position: GridPos,
+) -> bool {
+    if active_resource_at(world, position) || !world.navigation.is_walkable(position) {
+        return false;
+    }
+    let id = loop {
+        let serial = runtime.next_resource_serial;
+        runtime.next_resource_serial = runtime.next_resource_serial.wrapping_add(1);
+        let candidate = StableId::new(format!(
+            "resource:regrown_{}_{}_{}_{}_{serial:08x}",
+            target.trim_start_matches("target:"),
+            world.seed,
+            position.x,
+            position.z,
+        ))
+        .expect("regrown resource ID is valid");
+        if !world
+            .resources
+            .iter()
+            .any(|resource| resource.id == candidate)
+        {
+            break candidate;
+        }
+    };
+    let offset_milli_cells = regenerated_resource_offset(&id, position);
+    world.resources.push(stream_town_domain::GeneratedResource {
+        id,
+        kind: StableId::new(kind).expect("static regenerated resource kind"),
+        target_kind: StableId::new(target).expect("static regenerated target kind"),
+        position,
+        offset_milli_cells,
+        generation_occupancy: [0, 0],
+        amount: resource_amount_for_target(content, target),
+    });
+    let _ = world.navigation.set_blocked(
+        stream_town_domain::DirtyRegion {
+            min: position,
+            max: position,
+        },
+        true,
+    );
+    true
+}
+
+fn restored_regenerated_resource(
+    id: &StableId,
+    amount: u32,
+) -> Option<stream_town_domain::GeneratedResource> {
+    let mut parts = id.as_str().strip_prefix("resource:regrown_")?.split('_');
+    let target_name = parts.next()?;
+    let _seed = parts.next()?.parse::<u64>().ok()?;
+    let x = parts.next()?.parse::<u16>().ok()?;
+    let z = parts.next()?.parse::<u16>().ok()?;
+    let _serial = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let (kind, target_kind) = match target_name {
+        "tree" => ("resource:wood", "target:tree"),
+        "ore" => ("resource:ore", "target:ore"),
+        "bush" => ("resource:food", "target:bush"),
+        _ => return None,
+    };
+    let position = GridPos { x, z };
+    Some(stream_town_domain::GeneratedResource {
+        id: id.clone(),
+        kind: StableId::new(kind).expect("static regenerated resource kind"),
+        target_kind: StableId::new(target_kind).expect("static regenerated target kind"),
+        position,
+        offset_milli_cells: regenerated_resource_offset(id, position),
+        generation_occupancy: [0, 0],
+        amount,
+    })
+}
+
+fn complete_regeneration_goal(
+    simulation: &WorldSimulation,
+    world: &mut GeneratedWorld,
+    content: &ContentCatalog,
+    runtime: &mut RegenerationRoleRuntime,
+    actor_id: &StableId,
+    goal: &AgentGoal,
+) -> bool {
+    let Some(actor) = simulation.actors.get(actor_id) else {
+        return false;
+    };
+    let level = regeneration_role_level(actor);
+    match goal {
+        AgentGoal::PlantTree(position) => {
+            let planted = spawn_regenerated_resource(
+                runtime,
+                world,
+                content,
+                "resource:wood",
+                "target:tree",
+                *position,
+            );
+            if let Some(interval) = regeneration_role_interval_seconds(&actor.role, level) {
+                runtime
+                    .workers
+                    .entry(actor_id.clone())
+                    .or_default()
+                    .next_ready_seconds = runtime.elapsed_seconds + interval;
+            }
+            planted
+        }
+        AgentGoal::PlantBush(position) => {
+            let planted = spawn_regenerated_resource(
+                runtime,
+                world,
+                content,
+                "resource:food",
+                "target:bush",
+                *position,
+            );
+            if let Some(interval) = regeneration_role_interval_seconds(&actor.role, level) {
+                runtime
+                    .workers
+                    .entry(actor_id.clone())
+                    .or_default()
+                    .next_ready_seconds = runtime.elapsed_seconds + interval;
+            }
+            planted
+        }
+        AgentGoal::Prospect { cell, sequence } => {
+            let denominator = prospector_discovery_denominator(level);
+            let roll = seagull_hash(
+                world.seed ^ stable_id_hash(actor_id),
+                u64::from(*sequence),
+                0x5052_4F53_5045_4354,
+            );
+            if !roll.is_multiple_of(denominator) {
+                return true;
+            }
+            let count = 3 + usize::try_from((roll >> 32) % 3).expect("ore count fits usize");
+            let offsets = [
+                (1, 0),
+                (0, 1),
+                (-1, 0),
+                (0, -1),
+                (1, 1),
+                (-1, 1),
+                (-1, -1),
+                (1, -1),
+                (2, 0),
+                (0, 2),
+                (-2, 0),
+                (0, -2),
+            ];
+            let mut spawned = 0;
+            for (x, z) in offsets {
+                let Some(position) = offset_grid(*cell, x, z, world) else {
+                    continue;
+                };
+                if valid_regeneration_cell(content, simulation, world, position)
+                    && spawn_regenerated_resource(
+                        runtime,
+                        world,
+                        content,
+                        "resource:ore",
+                        "target:ore",
+                        position,
+                    )
+                {
+                    spawned += 1;
+                    if spawned >= count {
+                        break;
+                    }
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn complete_agent_goal_with_regeneration(
     simulation: &mut WorldSimulation,
     world: &mut GeneratedWorld,
     config: &GameConfig,
     content: &ContentCatalog,
+    regeneration: &mut RegenerationRoleRuntime,
     actor_id: &StableId,
     goal: &AgentGoal,
     current: GridPos,
@@ -19935,6 +20604,9 @@ fn complete_agent_goal(
             let stored_amount = amount.min(remaining_carry);
             resource.amount -= amount;
             let resource_kind = resource.kind.clone();
+            let cleared_tree = (resource.amount == 0
+                && resource.target_kind.as_str() == "target:tree")
+                .then_some(resource.position);
             let cleared_position = (resource.amount == 0
                 && resource.target_kind.as_str() != "target:fish")
                 .then_some(resource.position);
@@ -19953,6 +20625,12 @@ fn complete_agent_goal(
                         },
                         false,
                     );
+                }
+                if let Some(position) = cleared_tree {
+                    regeneration.recently_fallen_trees.push_back(position);
+                    while regeneration.recently_fallen_trees.len() > 128 {
+                        regeneration.recently_fallen_trees.pop_front();
+                    }
                 }
                 if amount > 0
                     && let Some(pet) = gathering_pet
@@ -20227,6 +20905,9 @@ fn complete_agent_goal(
                 }
             }
         }
+        AgentGoal::PlantTree(_) | AgentGoal::Prospect { .. } | AgentGoal::PlantBush(_) => {
+            complete_regeneration_goal(simulation, world, content, regeneration, actor_id, goal)
+        }
         AgentGoal::WaitForStorage | AgentGoal::Wander => false,
     };
     let grants_role_experience = action_succeeded
@@ -20234,7 +20915,10 @@ fn complete_agent_goal(
             AgentGoal::Gather(_)
             | AgentGoal::HarvestFarm(_)
             | AgentGoal::Attack(_)
-            | AgentGoal::Heal(_) => true,
+            | AgentGoal::Heal(_)
+            | AgentGoal::PlantTree(_)
+            | AgentGoal::Prospect { .. }
+            | AgentGoal::PlantBush(_) => true,
             // Unity's Builder action applies its final construction tick, then
             // returns false after the Construction target flag disappears.
             // Completed-building repair and deposits are not PlayerAction
@@ -20268,6 +20952,28 @@ fn complete_agent_goal(
         }
     }
     action_presentation
+}
+
+#[cfg(test)]
+fn complete_agent_goal(
+    simulation: &mut WorldSimulation,
+    world: &mut GeneratedWorld,
+    config: &GameConfig,
+    content: &ContentCatalog,
+    actor_id: &StableId,
+    goal: &AgentGoal,
+    current: GridPos,
+) -> Option<ActionPresentation> {
+    complete_agent_goal_with_regeneration(
+        simulation,
+        world,
+        config,
+        content,
+        &mut RegenerationRoleRuntime::default(),
+        actor_id,
+        goal,
+        current,
+    )
 }
 
 fn resource_cell_has_active_generation_occupant(
@@ -21117,6 +21823,14 @@ fn spawn_healing_effect(
     // port multiplied them by Bevy's two-metre grid cell a second time, which
     // made the green heal/revive burst look like a monster-sized screen flash.
     let world_scale = (cell_size / UNITY_AUTHORED_GRID_CELL_SIZE).clamp(0.25, 4.0);
+    // The on-target heal flash is deliberately much smaller than the caster
+    // channel and the ten-minute revive burst. It remains attached to the
+    // healed actor without washing over nearby characters or the camera.
+    let target_scale = if kind == HealingEffectKind::Burst {
+        HEALING_TARGET_EFFECT_SCALE
+    } else {
+        1.0
+    };
     let duration_seconds = healing_effect_duration(presentation, kind);
     let (effect, material, base_scale) = match kind {
         HealingEffectKind::Channel => {
@@ -21141,7 +21855,7 @@ fn spawn_healing_effect(
                     .and_then(|materials| materials.first())
                     .cloned()
                     .unwrap_or_else(|| render.healing_green.clone()),
-                world_scale * HEALING_BURST_RING_SCALE,
+                world_scale * HEALING_BURST_RING_SCALE * target_scale,
             )
         }
     };
@@ -21214,8 +21928,8 @@ fn spawn_healing_effect(
                 duration_seconds,
                 angle_radians,
                 phase,
-                base_scale: Vec3::splat(world_scale * HEALING_MOTE_SCALE),
-                distance_scale: world_scale,
+                base_scale: Vec3::splat(world_scale * HEALING_MOTE_SCALE * target_scale),
+                distance_scale: world_scale * target_scale,
                 size_multiplier: mote_size_multiplier,
                 follow_target: follow_target.clone(),
             },
@@ -22177,7 +22891,12 @@ fn action_cooldown(
     goal: &AgentGoal,
 ) -> f32 {
     let fallback = match goal {
-        AgentGoal::Attack(_) | AgentGoal::AttackBuilding(_) | AgentGoal::Heal(_) => 1.0,
+        AgentGoal::Attack(_)
+        | AgentGoal::AttackBuilding(_)
+        | AgentGoal::Heal(_)
+        | AgentGoal::PlantTree(_)
+        | AgentGoal::Prospect { .. }
+        | AgentGoal::PlantBush(_) => 1.0,
         AgentGoal::Construct(_) => 0.5,
         AgentGoal::Gather(_) | AgentGoal::HarvestFarm(_) => 0.75,
         // `PlayerInventory.DepositResources` waits 2.5 seconds before its
@@ -22202,6 +22921,9 @@ fn action_cooldown(
             | AgentGoal::Gather(_)
             | AgentGoal::HarvestFarm(_)
             | AgentGoal::Heal(_)
+            | AgentGoal::PlantTree(_)
+            | AgentGoal::Prospect { .. }
+            | AgentGoal::PlantBush(_)
     ) {
         effective_role_stats(content, simulation, actor).map_or(fallback, |stats| {
             milli_units_as_f32(stats.action_milliseconds).max(0.1)
@@ -22320,6 +23042,8 @@ fn agent_action_facing_grid(
         AgentGoal::Attack(actor) | AgentGoal::Heal(actor) => {
             simulation.actors.get(actor).map(|actor| actor.position)
         }
+        AgentGoal::PlantTree(position) | AgentGoal::PlantBush(position) => Some(*position),
+        AgentGoal::Prospect { cell, .. } => Some(*cell),
         AgentGoal::Deposit | AgentGoal::WaitForStorage | AgentGoal::Wander => None,
     }
 }
@@ -22530,6 +23254,7 @@ fn move_agents(
     mut stats: ResMut<SessionStats>,
     mut render_stats: ResMut<WorldRenderStats>,
     mut path_failures: ResMut<PathFailureRuntime>,
+    mut regeneration: ResMut<RegenerationRoleRuntime>,
     mut agents: Query<(
         Entity,
         &mut Agent,
@@ -22541,6 +23266,7 @@ fn move_agents(
     buildings: Query<(Entity, &RuntimeBuilding)>,
 ) {
     stats.elapsed_seconds += time.delta_secs_f64();
+    regeneration.elapsed_seconds += time.delta_secs_f64();
     simulation
         .0
         .tick(time.delta_secs(), config.0.time.seconds_per_day);
@@ -22903,11 +23629,12 @@ fn move_agents(
                     continue;
                 }
                 if action_phase == ArrivedActionPhase::Complete {
-                    if let Some(presentation) = complete_agent_goal(
+                    if let Some(presentation) = complete_agent_goal_with_regeneration(
                         &mut simulation.0,
                         &mut world.generated,
                         &config.0,
                         &content.0,
+                        &mut regeneration,
                         &agent.id,
                         &agent.goal,
                         location.0,
@@ -23025,19 +23752,29 @@ fn move_agents(
                 StableId::new("system:unreachable-resource").expect("static stable ID");
             let mut rejected_resources = 0_usize;
             let (goal, target, mut planned_path) = loop {
-                let (candidate_goal, candidate_target) = next_agent_goal_with_station_runtime(
+                let (candidate_goal, candidate_target) = regeneration_agent_goal(
+                    &content.0,
                     &simulation.0,
                     &world.generated,
-                    &config.0,
-                    &content.0,
-                    &station_targets,
+                    &mut regeneration,
                     &agent.id,
                     location.0,
-                    &planning_reservations,
-                    &target_assignment_counts,
-                    &occupied_approaches,
-                    &construction_approaches,
-                );
+                )
+                .unwrap_or_else(|| {
+                    next_agent_goal_with_station_runtime(
+                        &simulation.0,
+                        &world.generated,
+                        &config.0,
+                        &content.0,
+                        &station_targets,
+                        &agent.id,
+                        location.0,
+                        &planning_reservations,
+                        &target_assignment_counts,
+                        &occupied_approaches,
+                        &construction_approaches,
+                    )
+                });
                 if candidate_goal == AgentGoal::Wander {
                     break (candidate_goal, candidate_target, None);
                 }
@@ -23384,7 +24121,13 @@ fn deterministic_overlap_direction(left: &StableId, right: &StableId) -> Vec2 {
 }
 
 fn sync_resource_nodes(
+    mut commands: Commands,
     content: Res<RuntimeContent>,
+    presentation: Res<RuntimePresentation>,
+    config: Res<RuntimeConfig>,
+    render: Res<RenderAssets>,
+    asset_server: Option<Res<AssetServer>>,
+    asset_root: Res<RuntimeAssetRoot>,
     simulation: Res<SimulationRuntime>,
     world: Res<WorldRuntime>,
     mut resources: Query<(&ResourceNode, &GridLocation, &mut Visibility)>,
@@ -23401,7 +24144,9 @@ fn sync_resource_nodes(
             building_region(camp.position, archetype.footprint, &world.generated)
         })
         .collect::<Vec<_>>();
+    let mut spawned_ids = BTreeSet::new();
     for (node, location, mut visibility) in &mut resources {
+        spawned_ids.insert(node.id.clone());
         let available = world
             .generated
             .resources
@@ -23416,6 +24161,25 @@ fn sync_resource_nodes(
         } else {
             Visibility::Hidden
         };
+    }
+    for resource in world
+        .generated
+        .resources
+        .iter()
+        .filter(|resource| resource.amount > 0 && !spawned_ids.contains(&resource.id))
+    {
+        let position = generated_resource_world_position(resource, &config.0, &world.generated);
+        spawn_resource_visual(
+            &mut commands,
+            &content.0,
+            &presentation.0,
+            &render,
+            asset_server.as_deref(),
+            &asset_root.0,
+            resource,
+            position,
+            &config.0,
+        );
     }
 }
 
@@ -23506,9 +24270,12 @@ fn sync_building_presentation(
                 let archetype = &content.0.archetypes[&building.archetype];
                 world_asset.0 = asset_server
                     .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone()));
-                if let Some(material) =
-                    prefab_material_spec(archetype, scene, &authored_presentation.0, &render)
-                {
+                if let Some(material) = building_prefab_material_spec(
+                    archetype,
+                    scene,
+                    &authored_presentation.0,
+                    &render,
+                ) {
                     commands.entity(entity).insert(material);
                 }
             }
@@ -27407,15 +28174,19 @@ fn agent_action_animation(
         | AgentGoal::Construct(_)
         | AgentGoal::Attack(_)
         | AgentGoal::AttackBuilding(_)
-        | AgentGoal::Heal(_) => enemy_animation_contract(content, actor, &agent.id).map_or_else(
-            || {
-                content
-                    .roles
-                    .get(&actor.role)
-                    .map(|role| role.action_animation.clone())
-            },
-            |contract| Some(contract.action_animation),
-        ),
+        | AgentGoal::Heal(_)
+        | AgentGoal::PlantTree(_)
+        | AgentGoal::Prospect { .. }
+        | AgentGoal::PlantBush(_) => enemy_animation_contract(content, actor, &agent.id)
+            .map_or_else(
+                || {
+                    content
+                        .roles
+                        .get(&actor.role)
+                        .map(|role| role.action_animation.clone())
+                },
+                |contract| Some(contract.action_animation),
+            ),
         AgentGoal::Deposit | AgentGoal::WaitForStorage | AgentGoal::Wander => None,
     }
 }
@@ -29511,6 +30282,7 @@ fn placement_at_cell(placement: &BuildingPlacement, cell: GridPos) -> BuildingPl
         rotation_quarter_turns: placement.rotation_quarter_turns,
         line_start: None,
         line_end: None,
+        inactivity_seconds: placement.inactivity_seconds,
     }
 }
 
@@ -31686,6 +32458,22 @@ fn load_input(
     }
 
     if !snapshot.resource_nodes.is_empty() {
+        let restored_regrowth = snapshot
+            .resource_nodes
+            .iter()
+            .filter(|(id, _)| {
+                !restored_world
+                    .resources
+                    .iter()
+                    .any(|resource| resource.id == **id)
+            })
+            .filter_map(|(id, amount)| restored_regenerated_resource(id, *amount))
+            .filter(|resource| {
+                resource.position.x < restored_world.navigation.width()
+                    && resource.position.z < restored_world.navigation.height()
+            })
+            .collect::<Vec<_>>();
+        restored_world.resources.extend(restored_regrowth);
         let mut depleted_land = Vec::new();
         for resource in &mut restored_world.resources {
             if let Some(remaining) = snapshot.resource_nodes.get(&resource.id) {
@@ -31706,6 +32494,17 @@ fn load_input(
                     false,
                 );
             }
+        }
+        for resource in restored_world.resources.iter().filter(|resource| {
+            resource.amount > 0 && resource.id.as_str().starts_with("resource:regrown_")
+        }) {
+            let _ = restored_world.navigation.set_blocked(
+                stream_town_domain::DirtyRegion {
+                    min: resource.position,
+                    max: resource.position,
+                },
+                true,
+            );
         }
     }
     ensure_town_hall_state(&content.0, &restored_config, &mut snapshot.simulation);
@@ -33778,7 +34577,9 @@ fn spawn_runtime_building(
                 .with_rotation(rotation)
                 .with_scale(base_scale),
         ));
-        if let Some(material) = prefab_material_spec(archetype, scene, presentation, render) {
+        if let Some(material) =
+            building_prefab_material_spec(archetype, scene, presentation, render)
+        {
             entity.insert(material);
         }
     } else {
@@ -34078,7 +34879,7 @@ fn item_info(
             role.display_name, role.base_action_amount, role.base_health, role.base_carry_capacity
         ));
     }
-    if let Some(building_id) = prefixed_id(requested, "building:")
+    if let Ok(building_id) = building_definition_id(content, requested)
         && let Some(building) = content.buildings.get(&building_id)
     {
         let instances = building_instance_ids(content, simulation, &building_id);
@@ -34087,10 +34888,7 @@ fn item_info(
                 .get(usize::from(instance.saturating_sub(1)))
                 .and_then(|runtime_id| simulation.buildings.get(runtime_id))
                 .ok_or_else(|| {
-                    format!(
-                        "{} building ID {instance} does not exist",
-                        building.display_name
-                    )
+                    format!("{} BID {instance} does not exist", building.display_name)
                 })?;
             let max_health = building_max_health(content, state);
             let max_level = maximum_building_level(content, simulation, &building_id);
@@ -34111,7 +34909,7 @@ fn item_info(
                 format!("next upgrade {cost}")
             };
             return Ok(format!(
-                "{} #{instance}: level {}/{max_level}, health {}/{max_health}, {status}, at {},{}, {next_upgrade}",
+                "{} BID {instance}: level {}/{max_level}, health {}/{max_health}, {status}, at {},{}, {next_upgrade}",
                 building.display_name,
                 state.level,
                 state.health,
@@ -34717,9 +35515,56 @@ fn building_definition_id(
     content: &ContentCatalog,
     requested: &StableId,
 ) -> Result<StableId, String> {
-    prefixed_id(requested, "building:")
-        .filter(|id| content.buildings.contains_key(id))
+    if let Some(id) =
+        prefixed_id(requested, "building:").filter(|id| content.buildings.contains_key(id))
+    {
+        return Ok(id);
+    }
+    let normalized = normalize_building_command_name(requested.as_str());
+    content
+        .buildings
+        .iter()
+        .find(|(id, definition)| {
+            normalize_building_command_name(id.as_str().trim_start_matches("building:"))
+                == normalized
+                || normalize_building_command_name(&definition.display_name) == normalized
+        })
+        .map(|(id, _)| id.clone())
         .ok_or_else(|| format!("unknown building {requested}"))
+}
+
+fn normalize_building_command_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn building_command_name(definition: &stream_town_domain::BuildingDef) -> String {
+    twitch_pascal_case(&definition.display_name.replace([' ', '-', '_'], "_"))
+}
+
+fn numbered_building_instance_id(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    requested: &StableId,
+    index: u16,
+) -> Result<(StableId, StableId), String> {
+    let building_id = building_definition_id(content, requested)?;
+    let definition = &content.buildings[&building_id];
+    let instances = building_instance_ids(content, simulation, &building_id);
+    let runtime_id = instances
+        .get(usize::from(index.saturating_sub(1)))
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "{} BID {index} does not exist; use !bid {}",
+                definition.display_name,
+                building_command_name(definition)
+            )
+        })?;
+    Ok((building_id, runtime_id))
 }
 
 fn building_instance_ids(
@@ -35077,7 +35922,7 @@ fn process_injected_commands(
                             building.placeable
                                 && building_is_unlocked(&content.0, &simulation.0, id)
                         })
-                        .map(|(_, building)| building.display_name.as_str())
+                        .map(|(_, building)| building_command_name(building))
                         .collect::<Vec<_>>();
                     Ok(format!("unlocked buildings: {}", names.join(", ")))
                 }
@@ -35085,21 +35930,19 @@ fn process_injected_commands(
                     building_cost_summary(&content.0, &simulation.0, requested)
                 }
                 ChatCommand::BuildingIds(requested) => {
-                    let building_id = prefixed_id(requested, "building:")
-                        .filter(|id| content.0.buildings.contains_key(id))
-                        .ok_or_else(|| format!("unknown building {requested}"))?;
+                    let building_id = building_definition_id(&content.0, requested)?;
                     let definition = &content.0.buildings[&building_id];
                     let instances = building_instance_ids(&content.0, &simulation.0, &building_id);
                     let ids = instances
                         .iter()
                         .enumerate()
-                        .map(|(index, building)| format!("{}={building}", index + 1))
+                        .map(|(index, _)| (index + 1).to_string())
                         .collect::<Vec<_>>();
                     spawn_numbered_world_labels(&mut ecs, &instances);
                     Ok(if ids.is_empty() {
                         format!("no {} buildings", definition.display_name)
                     } else {
-                        format!("{} IDs: {}", definition.display_name, ids.join(", "))
+                        format!("{} BIDs: {}", definition.display_name, ids.join(", "))
                     })
                 }
                 ChatCommand::Build(requested) => {
@@ -35154,6 +35997,7 @@ fn process_injected_commands(
                                 rotation_quarter_turns: rotation,
                                 line_start: None,
                                 line_end: None,
+                                inactivity_seconds: 0.0,
                             },
                         );
                         Ok(format!(
@@ -35171,6 +36015,7 @@ fn process_injected_commands(
                     let (position, rotation_delta) =
                         shift_grid_position(placement.position, actions, &world.generated);
                     placement.position = position;
+                    placement.inactivity_seconds = 0.0;
                     placement.rotation_quarter_turns = placement
                         .rotation_quarter_turns
                         .saturating_add(rotation_delta);
@@ -35206,6 +36051,7 @@ fn process_injected_commands(
                     }
                     placement.line_start = Some(placement.position);
                     placement.line_end = None;
+                    placement.inactivity_seconds = 0.0;
                     Ok(format!(
                         "wall start set at {},{}; move to the other endpoint and use !endplace",
                         placement.position.x, placement.position.z
@@ -35226,6 +36072,7 @@ fn process_injected_commands(
                     placement.line_end = None;
                     let cells = wall_line_cells(start, placement.position)?;
                     placement.line_end = Some(placement.position);
+                    placement.inactivity_seconds = 0.0;
                     Ok(format!(
                         "wall endpoint set at {},{} ({} sections); review the ghost then use !confirm",
                         placement.position.x,
@@ -35348,42 +36195,32 @@ fn process_injected_commands(
                         )
                     })
                     .ok_or_else(|| "not in building placement mode".to_owned()),
-                ChatCommand::Upgrade(requested) => {
-                    let building_state =
-                        simulation.0.buildings.get(requested).ok_or_else(|| {
-                            format!("unknown building BID {requested}; use !bid <building>")
-                        })?;
-                    let (building_id, definition) = content
-                        .0
-                        .buildings
-                        .iter()
-                        .find(|(_, definition)| definition.archetype == building_state.archetype)
-                        .ok_or_else(|| format!("BID {requested} has no building definition"))?;
-                    let building_id = building_id.clone();
-                    let name = definition.display_name.clone();
+                ChatCommand::Upgrade { building, index } => {
+                    let (building_id, runtime_id) =
+                        numbered_building_instance_id(&content.0, &simulation.0, building, *index)?;
+                    let name = content.0.buildings[&building_id].display_name.clone();
                     upgrade_building_instance(
                         &content.0,
                         &mut simulation.0,
                         &building_id,
-                        requested,
+                        &runtime_id,
                     )
-                    .map(|level| {
-                        format!("started {name} BID {requested} level {level} construction")
-                    })
+                    .map(|level| format!("started {name} BID {index} level {level} construction"))
                 }
                 ChatCommand::RotateBuilding {
                     building,
+                    index,
                     quarter_turns,
                 } => {
+                    let (_, runtime_id) =
+                        numbered_building_instance_id(&content.0, &simulation.0, building, *index)?;
                     let (name, degrees) = rotate_building_instance(
                         &content.0,
                         &mut simulation.0,
-                        building,
+                        &runtime_id,
                         *quarter_turns,
                     )?;
-                    Ok(format!(
-                        "rotated {name} BID {building} to {degrees} degrees"
-                    ))
+                    Ok(format!("rotated {name} BID {index} to {degrees} degrees"))
                 }
                 ChatCommand::Level(requested) => {
                     let role = prefixed_id(requested, "role:")
@@ -35494,6 +36331,9 @@ fn process_injected_commands(
                     }
                 }
                 ChatCommand::RemoveBuilding { building, index } => {
+                    if !simulation.0.is_ruler(&actor_id) {
+                        return Err("only the current Ruler can remove buildings".to_owned());
+                    }
                     let building_id = building_definition_id(&content.0, building)?;
                     if building_id.as_str() == "building:townhall" {
                         return Err("the Town Hall cannot be removed".to_owned());
@@ -35864,61 +36704,30 @@ fn process_injected_commands(
                     actor.customization.name_color = Some(*color);
                     Ok(format!("name colour changed to {}", format_rgb(*color)))
                 }
-                ChatCommand::SetBuildingNightLight { building, color } => {
+                ChatCommand::SetBuildingNightLight {
+                    building,
+                    index,
+                    color,
+                } => {
                     if !simulation.0.is_ruler(&actor_id) {
                         return Err("this command is restricted to the current Ruler".to_owned());
                     }
-                    if !simulation.0.buildings.contains_key(building) {
-                        return Err(format!("unknown building BID {building}"));
-                    }
+                    let (_, runtime_id) =
+                        numbered_building_instance_id(&content.0, &simulation.0, building, *index)?;
                     simulation
                         .0
                         .building_night_light_colors
-                        .insert(building.clone(), *color);
+                        .insert(runtime_id, *color);
                     Ok(format!(
-                        "building {building} night light changed to {}",
+                        "building {} BID {index} night light changed to {}",
+                        building_command_name(
+                            &content.0.buildings[&building_definition_id(&content.0, building,)?]
+                        ),
                         format_rgb(*color)
                     ))
                 }
-                ChatCommand::Pets | ChatCommand::Pet(None) => {
-                    let actor = simulation
-                        .0
-                        .actors
-                        .get(&actor_id)
-                        .ok_or_else(|| "join before checking pets".to_owned())?;
-                    Ok(if actor.unlocked_pets.is_empty() {
-                        "You have no pets".to_owned()
-                    } else {
-                        format!(
-                            "Pets: {}, ",
-                            actor
-                                .unlocked_pets
-                                .iter()
-                                .map(|pet| twitch_pascal_case(
-                                    pet.as_str().trim_start_matches("pet:")
-                                ))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
-                    })
-                }
-                ChatCommand::Pet(Some(requested)) => {
-                    let requested = prefixed_id(requested, "pet:")
-                        .ok_or_else(|| format!("invalid pet {requested}"))?;
-                    let actor = simulation
-                        .0
-                        .actors
-                        .get_mut(&actor_id)
-                        .ok_or_else(|| "join before selecting a pet".to_owned())?;
-                    if requested.as_str() == "pet:none" {
-                        actor.active_pet = None;
-                        Ok("pet deactivated".to_owned())
-                    } else if actor.unlocked_pets.contains(&requested) {
-                        actor.active_pet = Some(requested.clone());
-                        Ok(format!("active pet changed to {requested}"))
-                    } else {
-                        Err(format!("{requested} is not unlocked"))
-                    }
+                ChatCommand::Pets | ChatCommand::Pet(_) => {
+                    Err("pet commands are not implemented yet".to_owned())
                 }
                 ChatCommand::Camera(actions) => {
                     require_ruler_or_staff(&simulation.0, &pending)?;
@@ -36153,33 +36962,8 @@ fn process_injected_commands(
                 }
                 ChatCommand::GivePet { player, pet } => {
                     require_game_master(&config.0, &pending)?;
-                    let target = resolve_player_id(&simulation.0, player)
-                        .ok_or_else(|| format!("unknown player {player}"))?;
-                    let pet = prefixed_id(pet, "pet:")
-                        .filter(|pet| {
-                            matches!(
-                                pet.as_str(),
-                                "pet:none"
-                                    | "pet:redpanda"
-                                    | "pet:red_panda"
-                                    | "pet:fishgod"
-                                    | "pet:fish_god"
-                                    | "pet:giraffe"
-                                    | "pet:duck"
-                                    | "pet:butterfly"
-                            )
-                        })
-                        .map(|pet| match pet.as_str() {
-                            "pet:redpanda" => StableId::new("pet:red_panda").expect("static ID"),
-                            "pet:fishgod" => StableId::new("pet:fish_god").expect("static ID"),
-                            _ => pet,
-                        })
-                        .ok_or_else(|| format!("unknown pet {pet}"))?;
-                    simulation
-                        .0
-                        .unlock_pet(&target, pet.clone())
-                        .map_err(|error| error.to_string())?;
-                    Ok(format!("unlocked {pet} for {target}"))
+                    let _ = (player, pet);
+                    Err("pet commands are not implemented yet".to_owned())
                 }
                 ChatCommand::QueueEvent(requested) => {
                     require_game_master(&config.0, &pending)?;
@@ -36402,44 +37186,7 @@ fn process_injected_commands(
                         Ok(format!("revived {target_id}"))
                     })
                 }
-                ChatCommand::Praise => {
-                    if !simulation.0.actors.contains_key(&actor_id) {
-                        Err("join before praising the Fish God".to_owned())
-                    } else if simulation.0.fish_god.is_none() {
-                        if simulation.0.start_fish_god(false) {
-                            simulation
-                                .0
-                                .praise_fish_god(&actor_id)
-                                .map(|_| "the Fish God answered; praise accepted (1/20)".to_owned())
-                                .map_err(|error| error.to_string())
-                        } else if simulation.0.active_event.is_some() {
-                            Err("another event is active".to_owned())
-                        } else {
-                            Ok("the Fish God did not answer this praise".to_owned())
-                        }
-                    } else {
-                        simulation
-                            .0
-                            .praise_fish_god(&actor_id)
-                            .map(|completed| {
-                                if completed {
-                                    "the Fish God was pleased: the town received 1,000 food"
-                                        .to_owned()
-                                } else {
-                                    let event = simulation
-                                        .0
-                                        .fish_god
-                                        .as_ref()
-                                        .expect("incomplete praise retains event");
-                                    format!(
-                                        "Fish God praise {}/{}",
-                                        event.praises_given, event.praises_required
-                                    )
-                                }
-                            })
-                            .map_err(|error| error.to_string())
-                    }
-                }
+                ChatCommand::Praise => Err("!praise is not implemented yet".to_owned()),
                 ChatCommand::Experience => simulation
                     .0
                     .actors
@@ -39003,10 +39750,21 @@ mod tests {
 
         let details = item_info(&content, &simulation, &house_id, Some(1)).unwrap();
 
-        assert!(details.contains("House #1"), "{details}");
+        assert!(details.contains("House BID 1"), "{details}");
         assert!(details.contains("level 1/1"), "{details}");
         assert!(details.contains("health 80/"), "{details}");
         assert!(details.contains("at 21,34"), "{details}");
+        assert!(
+            item_info(
+                &content,
+                &simulation,
+                &StableId::new("prospectorhut").unwrap(),
+                None,
+            )
+            .unwrap()
+            .starts_with("Prospector Hut:"),
+            "PascalCase command names must resolve building IDs containing underscores"
+        );
     }
 
     #[test]
@@ -47602,6 +48360,7 @@ mod tests {
             rotation_quarter_turns: 0,
             line_start: None,
             line_end: None,
+            inactivity_seconds: 0.0,
         };
         update_placer_visual(
             &config,
@@ -47654,6 +48413,7 @@ mod tests {
             rotation_quarter_turns: 1,
             line_start: None,
             line_end: None,
+            inactivity_seconds: 0.0,
         };
         let mut transform = Transform::default();
         update_placer_ghost_transform(&config, &world, &placement, definition, &mut transform);
@@ -49087,7 +49847,7 @@ mod tests {
     #[test]
     fn embedded_unity_content_catalog_is_valid() {
         let content = embedded_content();
-        assert_eq!(content.archetypes.len(), 215);
+        assert_eq!(content.archetypes.len(), 218);
         assert_eq!(content.foliage.len(), 4);
         assert_eq!(
             content
@@ -49097,10 +49857,10 @@ mod tests {
                 .sum::<usize>(),
             21
         );
-        assert_eq!(content.buildings.len(), 26);
-        assert_eq!(content.roles.len(), 15);
-        assert_eq!(content.technology.nodes.len(), 363);
-        assert_eq!(content.technology.groups.len(), 20);
+        assert_eq!(content.buildings.len(), 29);
+        assert_eq!(content.roles.len(), 18);
+        assert_eq!(content.technology.nodes.len(), 366);
+        assert_eq!(content.technology.groups.len(), 21);
         let logger = &content.roles[&StableId::new("role:logger").unwrap()];
         assert_eq!(logger.base_action_amount, 1);
         assert_eq!(logger.experience_multiplier_per_thousand, 1_000);
@@ -49115,6 +49875,333 @@ mod tests {
         );
         let ranger = &content.roles[&StableId::new("role:ranger").unwrap()];
         assert_eq!(ranger.base_action_range_milli_cells, 6_000);
+    }
+
+    fn regeneration_role_fixture(
+        role_name: &str,
+        building_name: &str,
+    ) -> (
+        GameConfig,
+        ContentCatalog,
+        GeneratedWorld,
+        WorldSimulation,
+        RegenerationRoleRuntime,
+        StableId,
+        GridPos,
+    ) {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world_with_content(&config.world, &content);
+        let role = StableId::new(format!("role:{role_name}")).unwrap();
+        let building_id = StableId::new(format!("building:{building_name}")).unwrap();
+        let definition = &content.buildings[&building_id];
+        let hut = find_building_site(
+            &world,
+            GridPos {
+                x: config.world.width / 2,
+                z: config.world.height / 2,
+            },
+            definition.footprint,
+        )
+        .expect("regeneration test hut has a valid site");
+        let runtime_id = StableId::new(format!("building:test_{building_name}")).unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        simulation.buildings.insert(
+            runtime_id.clone(),
+            BuildingState {
+                id: runtime_id,
+                archetype: definition.archetype.clone(),
+                position: hut,
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: 50,
+                complete: true,
+            },
+        );
+        let region = building_region(hut, definition.footprint, &world).unwrap();
+        world.navigation.set_blocked(region, true).unwrap();
+        let actor_position = nearest_walkable(&world, hut).unwrap();
+        let actor = StableId::new(format!("twitch:test_{role_name}")).unwrap();
+        assert!(simulation.join_player(actor.clone(), actor_position));
+        simulation.assign_role(&actor, role.clone()).unwrap();
+        simulation
+            .actors
+            .get_mut(&actor)
+            .unwrap()
+            .role_progression
+            .insert(
+                role,
+                stream_town_domain::RoleProgress {
+                    level: 100,
+                    experience: 0,
+                },
+            );
+        let mut runtime = RegenerationRoleRuntime {
+            elapsed_seconds: 1_000.0,
+            ..default()
+        };
+        runtime.workers.insert(
+            actor.clone(),
+            RegenerationWorkerState {
+                initialized: true,
+                next_ready_seconds: 0.0,
+                prospector_step: 0,
+            },
+        );
+        (config, content, world, simulation, runtime, actor, hut)
+    }
+
+    #[test]
+    fn regeneration_roles_and_buildings_execute_their_authored_tasks() {
+        let (_, content, mut world, simulation, mut runtime, actor, hut) =
+            regeneration_role_fixture("forester", "nursery");
+        let from = simulation.actors[&actor].position;
+        let fallen = (0..world.navigation.height())
+            .flat_map(|z| (0..world.navigation.width()).map(move |x| GridPos { x, z }))
+            .find(|candidate| {
+                grid_distance_squared(*candidate, hut) >= 100
+                    && valid_regeneration_cell(&content, &simulation, &world, *candidate)
+                    && planting_approach(&content, &simulation, &world, *candidate, from).is_some()
+            })
+            .expect("test world has a reachable former tree site");
+        runtime.recently_fallen_trees.push_back(fallen);
+        let trees_before = world
+            .resources
+            .iter()
+            .filter(|resource| {
+                resource.amount > 0 && resource.target_kind.as_str() == "target:tree"
+            })
+            .count();
+        let (goal, _) =
+            regeneration_agent_goal(&content, &simulation, &world, &mut runtime, &actor, from)
+                .expect("ready forester chooses a planting task");
+        assert!(matches!(goal, AgentGoal::PlantTree(_)));
+        assert!(complete_regeneration_goal(
+            &simulation,
+            &mut world,
+            &content,
+            &mut runtime,
+            &actor,
+            &goal,
+        ));
+        assert_eq!(
+            world
+                .resources
+                .iter()
+                .filter(|resource| resource.amount > 0
+                    && resource.target_kind.as_str() == "target:tree")
+                .count(),
+            trees_before + 1
+        );
+        let planted_tree = world
+            .resources
+            .iter()
+            .find(|resource| resource.id.as_str().starts_with("resource:regrown_tree_"))
+            .expect("forester creates a persistable regenerated tree");
+        let restored_tree = restored_regenerated_resource(&planted_tree.id, planted_tree.amount)
+            .expect("regenerated resource ID restores from a native save");
+        assert_eq!(restored_tree, *planted_tree);
+        assert!(
+            planted_tree
+                .offset_milli_cells
+                .iter()
+                .all(|offset| (-250..=250).contains(offset)),
+            "regrown resources retain the central-half-cell visual offset contract"
+        );
+        assert!(
+            (regeneration_role_interval_seconds(&StableId::new("role:forester").unwrap(), 100,)
+                .unwrap()
+                - 20.0)
+                .abs()
+                < f64::EPSILON
+        );
+
+        let (_, content, mut world, simulation, mut runtime, actor, hut) =
+            regeneration_role_fixture("prospector", "prospector_hut");
+        let from = simulation.actors[&actor].position;
+        let (spiral_goal, _) =
+            regeneration_agent_goal(&content, &simulation, &world, &mut runtime, &actor, from)
+                .expect("prospector starts the authored spiral");
+        let AgentGoal::Prospect { cell, .. } = spiral_goal else {
+            panic!("prospector did not receive a prospect goal");
+        };
+        let radius = cell.x.abs_diff(hut.x).max(cell.z.abs_diff(hut.z));
+        assert!((5..=20).contains(&radius));
+        let successful_sequence = (0..100_000_u32)
+            .find(|sequence| {
+                seagull_hash(
+                    world.seed ^ stable_id_hash(&actor),
+                    u64::from(*sequence),
+                    0x5052_4F53_5045_4354,
+                )
+                .is_multiple_of(prospector_discovery_denominator(100))
+            })
+            .expect("deterministic prospect sequence contains a discovery");
+        let ore_before = world
+            .resources
+            .iter()
+            .filter(|resource| resource.amount > 0 && resource.target_kind.as_str() == "target:ore")
+            .count();
+        assert!(complete_regeneration_goal(
+            &simulation,
+            &mut world,
+            &content,
+            &mut runtime,
+            &actor,
+            &AgentGoal::Prospect {
+                cell,
+                sequence: successful_sequence,
+            },
+        ));
+        let ore_added = world
+            .resources
+            .iter()
+            .filter(|resource| resource.amount > 0 && resource.target_kind.as_str() == "target:ore")
+            .count()
+            - ore_before;
+        assert!((3..=5).contains(&ore_added));
+
+        let (_, content, mut world, simulation, mut runtime, actor, _) =
+            regeneration_role_fixture("tender", "greenhouse");
+        let cleared = world
+            .resources
+            .iter_mut()
+            .filter(|resource| resource.target_kind.as_str() != "target:fish")
+            .map(|resource| {
+                resource.amount = 0;
+                resource.position
+            })
+            .collect::<Vec<_>>();
+        for position in cleared {
+            world
+                .navigation
+                .set_blocked(
+                    stream_town_domain::DirtyRegion {
+                        min: position,
+                        max: position,
+                    },
+                    false,
+                )
+                .unwrap();
+        }
+        let from = simulation.actors[&actor].position;
+        let (goal, _) =
+            regeneration_agent_goal(&content, &simulation, &world, &mut runtime, &actor, from)
+                .expect("ready tender chooses a field planting task");
+        let AgentGoal::PlantBush(field) = goal else {
+            panic!("tender did not receive a bush planting goal");
+        };
+        assert!(cell_is_clear_of_buildings(
+            &content,
+            &simulation,
+            &world,
+            field,
+            10,
+        ));
+        assert!(cell_is_clear_of_trees(&world, field, 5));
+        assert!(complete_regeneration_goal(
+            &simulation,
+            &mut world,
+            &content,
+            &mut runtime,
+            &actor,
+            &AgentGoal::PlantBush(field),
+        ));
+        assert_eq!(
+            world
+                .resources
+                .iter()
+                .filter(|resource| resource.amount > 0
+                    && resource.target_kind.as_str() == "target:bush")
+                .count(),
+            1
+        );
+
+        for (technology, building, forbidden_resource) in [
+            ("tech:native_nursery", "building:nursery", "resource:wood"),
+            (
+                "tech:native_prospector_hut",
+                "building:prospector_hut",
+                "resource:ore",
+            ),
+            (
+                "tech:native_greenhouse",
+                "building:greenhouse",
+                "resource:food",
+            ),
+        ] {
+            let node = &content.technology.nodes[&StableId::new(technology).unwrap()];
+            assert!(node.prerequisites.is_empty());
+            assert!(!node.initially_unlocked);
+            assert!(
+                node.unlocked_buildings
+                    .contains(&StableId::new(building).unwrap())
+            );
+            assert!(node.objectives.iter().all(|objective| {
+                content.objectives[objective]
+                    .resource
+                    .as_ref()
+                    .map(StableId::as_str)
+                    != Some(forbidden_resource)
+            }));
+        }
+    }
+
+    #[test]
+    fn inactive_building_placements_expire_after_thirty_seconds() {
+        let mut placement = BuildingPlacement {
+            building: StableId::new("building:house").unwrap(),
+            position: GridPos { x: 1, z: 1 },
+            rotation_quarter_turns: 0,
+            line_start: None,
+            line_end: None,
+            inactivity_seconds: 0.0,
+        };
+        assert!(building_placement_remains_active(&mut placement, 29.99));
+        assert!(!building_placement_remains_active(&mut placement, 0.01));
+        placement.inactivity_seconds = 0.0;
+        assert!(building_placement_remains_active(&mut placement, 1.0));
+    }
+
+    #[test]
+    fn building_command_names_and_numbered_bids_are_stable() {
+        let content = embedded_content();
+        assert_eq!(
+            building_definition_id(&content, &StableId::new("orestorage").unwrap()).unwrap(),
+            StableId::new("building:orestorage").unwrap()
+        );
+        assert!(
+            content
+                .buildings
+                .values()
+                .all(|definition| !building_command_name(definition).contains(char::is_whitespace))
+        );
+        let building_id = StableId::new("building:tower").unwrap();
+        let definition = &content.buildings[&building_id];
+        let mut simulation = WorldSimulation::new(1);
+        for serial in [3, 1, 2] {
+            let id = StableId::new(format!("building:runtime_{serial:08}")).unwrap();
+            simulation.buildings.insert(
+                id.clone(),
+                BuildingState {
+                    id,
+                    archetype: definition.archetype.clone(),
+                    position: GridPos { x: serial, z: 1 },
+                    rotation_quarter_turns: 0,
+                    level: 1,
+                    health: 100,
+                    complete: true,
+                },
+            );
+        }
+        let (_, runtime) = numbered_building_instance_id(
+            &content,
+            &simulation,
+            &StableId::new("tower").unwrap(),
+            2,
+        )
+        .unwrap();
+        assert_eq!(runtime.as_str(), "building:runtime_00000002");
     }
 
     #[test]
@@ -50500,13 +51587,14 @@ mod tests {
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
             Duration::from_millis(250),
         ));
-        for _ in 0..128 {
+        for _ in 0..1_024 {
             app.update();
             if *app.world().resource::<State<GameState>>().get() == GameState::InGame
                 && app.world().contains_resource::<GameplayReady>()
             {
                 break;
             }
+            std::thread::yield_now();
         }
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
             Duration::ZERO,
@@ -51137,6 +52225,7 @@ mod tests {
                 rotation_quarter_turns: 0,
                 line_start: None,
                 line_end: None,
+                inactivity_seconds: 0.0,
             },
         );
         let live_actor_ids = app
@@ -51311,9 +52400,10 @@ mod tests {
             assert!(!simulation.role_limits_enabled);
             assert_eq!(town_resource_amount(simulation, "resource:wood"), 5_123);
             assert!(
-                simulation.actors[&StableId::new("twitch:debug_viewer").unwrap()]
+                !simulation.actors[&StableId::new("twitch:debug_viewer").unwrap()]
                     .unlocked_pets
-                    .contains(&StableId::new("pet:duck").unwrap())
+                    .contains(&StableId::new("pet:duck").unwrap()),
+                "recognized pet commands must remain explicit no-ops until pets are implemented"
             );
             assert_eq!(
                 simulation.queued_events.len() + usize::from(simulation.fish_god.is_some()),
@@ -51681,6 +52771,37 @@ mod tests {
         );
         let removed_position =
             app.world().resource::<SimulationRuntime>().0.buildings[&saved_building_id].position;
+
+        // Staff privileges must not bypass the Ruler-only removal rule.
+        app.world_mut()
+            .resource_mut::<InjectedCommands>()
+            .0
+            .push_back(PendingChatCommand {
+                actor_id: actor_id.clone(),
+                login_name: "debug_viewer".to_owned(),
+                display_name: "debug_viewer".to_owned(),
+                command: ChatCommand::RemoveBuilding {
+                    building: available_building.0.clone(),
+                    index: 1,
+                },
+                is_broadcaster: true,
+                is_moderator: true,
+                is_subscriber: true,
+                origin: CommandOrigin::LocalDebug,
+            });
+        app.update();
+        assert!(
+            app.world()
+                .resource::<SimulationRuntime>()
+                .0
+                .buildings
+                .contains_key(&saved_building_id)
+        );
+
+        app.world_mut()
+            .resource_mut::<SimulationRuntime>()
+            .0
+            .current_ruler = Some(actor_id.clone());
         app.world_mut()
             .resource_mut::<InjectedCommands>()
             .0
@@ -52043,6 +53164,11 @@ mod tests {
                     duration * f32::from(step) / 100.0,
                     duration,
                 );
+                let target_scale = if kind == HealingEffectKind::Burst {
+                    HEALING_TARGET_EFFECT_SCALE
+                } else {
+                    1.0
+                };
                 let ring_base_scale = match kind {
                     HealingEffectKind::Channel => {
                         healing_channel_effect(&presentation).1.exposed_size
@@ -52051,7 +53177,7 @@ mod tests {
                     HealingEffectKind::Burst | HealingEffectKind::Revive => {
                         HEALING_BURST_RING_SCALE
                     }
-                };
+                } * target_scale;
                 let ring_world_radius = ring_base_scale * sample.ring_scale;
                 let mote_transform_scale = if kind == HealingEffectKind::Channel {
                     HEALING_MOTE_SCALE * sample.mote_scale * 1.2
@@ -52075,13 +53201,17 @@ mod tests {
                 } else {
                     6.000_001
                 };
-                let mote_world_extent = mote_transform_scale * mote_mesh_extent;
+                let mote_world_extent = mote_transform_scale * mote_mesh_extent * target_scale;
                 assert!(ring_world_radius <= 0.56 + f32::EPSILON, "{kind:?}");
                 assert!(mote_world_extent <= 0.14 + f32::EPSILON, "{kind:?}");
-                assert!(sample.radial_distance <= 0.56 + f32::EPSILON, "{kind:?}");
+                assert!(
+                    sample.radial_distance * target_scale <= 0.56 + f32::EPSILON,
+                    "{kind:?}"
+                );
                 assert!(sample.rise <= 0.9 + f32::EPSILON, "{kind:?}");
             }
         }
+        assert!((HEALING_TARGET_EFFECT_SCALE - 1.0 / 8.0).abs() < f32::EPSILON);
         let material = healing_material([0.266_204_9, 16.948_38, 0.0, 1.0], 1.0);
         let emissive = material.emissive.to_f32_array();
         assert!(

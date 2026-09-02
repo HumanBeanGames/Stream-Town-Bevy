@@ -37,10 +37,10 @@ pub fn unity_command_usage(input: &str) -> Option<&'static str> {
         "level" => "!level <role> OR !level <building> <id> [amount]",
         "remove" => "!remove <building> <id>",
         "bid" => "!bid <building>",
-        "upgrade" => "!upgrade <BID>",
+        "upgrade" => "!upgrade <building> <BID>",
         "beginplace" => "!beginplace",
         "endplace" => "!endplace",
-        "rotatebuilding" => "!rotatebuilding <BID> [quarter turns]",
+        "rotatebuilding" => "!rotatebuilding <building> <BID> [quarter turns]",
         "station" => "!station <id> (or !station to list IDs)",
         "target" => "!target <id> (or !target to list IDs)",
         "hair" => "!hair <index>",
@@ -51,7 +51,7 @@ pub fn unity_command_usage(input: &str) -> Option<&'static str> {
         "eyecolor" => "!eyecolor <index>",
         "light" | "lightcolor" | "lightcolour" => "!light <name|#RRGGBB>",
         "namecolor" | "namecolour" => "!namecolor <name|#RRGGBB>",
-        "buildinglight" => "!buildinglight <BID> <name|#RRGGBB> (Ruler only)",
+        "buildinglight" => "!buildinglight <building> <BID> <name|#RRGGBB> (Ruler only)",
         "addresource" => "!addresource <resource> <amount>",
         "vote" => "!vote <option number>",
         "modrole" => "!modrole <player> <role>",
@@ -125,9 +125,13 @@ pub enum ChatCommand {
     CancelBuilding,
     Buildings,
     BuildingIds(StableId),
-    Upgrade(StableId),
+    Upgrade {
+        building: StableId,
+        index: u16,
+    },
     RotateBuilding {
         building: StableId,
+        index: u16,
         quarter_turns: i32,
     },
     Level(StableId),
@@ -178,6 +182,7 @@ pub enum ChatCommand {
     SetNameColor([u8; 3]),
     SetBuildingNightLight {
         building: StableId,
+        index: u16,
         color: [u8; 3],
     },
     Roles,
@@ -480,6 +485,10 @@ impl FromStr for ChatCommand {
                         .next()
                         .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
                 )?;
+                let index = parts
+                    .next()
+                    .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))
+                    .and_then(parse_index)?;
                 let quarter_turns = parts.next().map_or(Ok(1), |value| {
                     value
                         .parse::<i32>()
@@ -492,6 +501,7 @@ impl FromStr for ChatCommand {
                 }
                 Ok(Self::RotateBuilding {
                     building,
+                    index,
                     quarter_turns,
                 })
             }
@@ -527,6 +537,21 @@ impl FromStr for ChatCommand {
                     return Err(CommandParseError::TooManyArguments);
                 }
                 Ok(Self::RemoveBuilding { building, index })
+            }
+            "upgrade" => {
+                let building = content_id(
+                    parts
+                        .next()
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
+                )?;
+                let index = parts
+                    .next()
+                    .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))
+                    .and_then(parse_index)?;
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                Ok(Self::Upgrade { building, index })
             }
             "hair" | "eyes" | "facialhair" | "body" | "haircolor" | "eyecolor" => {
                 let index = parts
@@ -570,6 +595,10 @@ impl FromStr for ChatCommand {
                         .next()
                         .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
                 )?;
+                let index = parts
+                    .next()
+                    .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))
+                    .and_then(parse_index)?;
                 let color = parse_chat_color(
                     parts
                         .next()
@@ -578,7 +607,11 @@ impl FromStr for ChatCommand {
                 if parts.next().is_some() {
                     return Err(CommandParseError::TooManyArguments);
                 }
-                Ok(Self::SetBuildingNightLight { building, color })
+                Ok(Self::SetBuildingNightLight {
+                    building,
+                    index,
+                    color,
+                })
             }
             _ => {
                 let argument = parts.next();
@@ -620,7 +653,6 @@ impl FromStr for ChatCommand {
                     "rdismiss" => with_index(&command, argument, Self::DismissRecruit),
                     "build" => with_id(&command, argument, Self::Build),
                     "cost" | "buildcost" => with_id(&command, argument, Self::BuildingCost),
-                    "upgrade" => with_id(&command, argument, Self::Upgrade),
                     "vote" => with_id(&command, argument, Self::Vote),
                     "event" => with_id(&command, argument, Self::TriggerEvent),
                     "revive" => optional_id(argument).map(Self::Revive),
@@ -864,8 +896,8 @@ mod tests {
     fn valid_source_command(command: &str) -> String {
         let arguments = match command {
             "build" | "bid" => " house",
+            "upgrade" | "remove" => " house 1",
             "move" | "cam" => " up 2",
-            "remove" => " house 1",
             "hair" | "facialhair" | "eyes" | "body" | "haircolor" | "eyecolor" | "vote"
             | "rinfo" | "rdismiss" | "givexpall" => " 1",
             "addresource" => " wood 1",
@@ -930,8 +962,11 @@ mod tests {
             Ok(ChatCommand::BuildingCost(StableId::new("house").unwrap()))
         );
         assert_eq!(
-            "!upgrade house".parse(),
-            Ok(ChatCommand::Upgrade(StableId::new("house").unwrap()))
+            "!upgrade Tower 3".parse(),
+            Ok(ChatCommand::Upgrade {
+                building: StableId::new("tower").unwrap(),
+                index: 3,
+            })
         );
         assert_eq!(
             "!level logger".parse(),
@@ -966,15 +1001,17 @@ mod tests {
         assert_eq!("!beginplace".parse(), Ok(ChatCommand::BeginBuildingLine));
         assert_eq!("!endplace".parse(), Ok(ChatCommand::EndBuildingLine));
         assert_eq!(
-            "!upgrade building:runtime_00000004".parse(),
-            Ok(ChatCommand::Upgrade(
-                StableId::new("building:runtime_00000004").unwrap()
-            ))
+            "!upgrade OreStorage 4".parse(),
+            Ok(ChatCommand::Upgrade {
+                building: StableId::new("orestorage").unwrap(),
+                index: 4,
+            })
         );
         assert_eq!(
-            "!rotatebuilding building:runtime_00000004 -1".parse(),
+            "!rotatebuilding Tower 4 -1".parse(),
             Ok(ChatCommand::RotateBuilding {
-                building: StableId::new("building:runtime_00000004").unwrap(),
+                building: StableId::new("tower").unwrap(),
+                index: 4,
                 quarter_turns: -1,
             })
         );
@@ -1081,9 +1118,10 @@ mod tests {
             Ok(ChatCommand::SetNameColor([0x72, 0xC8, 0xFF]))
         );
         assert_eq!(
-            "!buildinglight building:house:2 blue".parse(),
+            "!buildinglight House 2 blue".parse(),
             Ok(ChatCommand::SetBuildingNightLight {
-                building: StableId::new("building:house:2").unwrap(),
+                building: StableId::new("house").unwrap(),
+                index: 2,
                 color: [72, 128, 255],
             })
         );

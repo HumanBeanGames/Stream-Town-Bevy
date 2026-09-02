@@ -55,7 +55,14 @@ pub fn convert(
     let source = fs::read_to_string(graph_path)
         .with_context(|| format!("failed to read {}", graph_path.display()))?;
     let (groups, nodes) = parse_unity_graph(&source)?;
-    let layout = build_layout(&catalog, &groups, &nodes)?;
+    let preserved = output_path
+        .is_file()
+        .then(|| {
+            ron::from_str::<TechnologyGraphLayout>(&fs::read_to_string(output_path)?)
+                .with_context(|| format!("failed to parse existing {}", output_path.display()))
+        })
+        .transpose()?;
+    let layout = build_layout(&catalog, &groups, &nodes, preserved.as_ref())?;
     layout.validate(&catalog.technology)?;
 
     let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
@@ -83,6 +90,7 @@ fn build_layout(
     catalog: &ContentCatalog,
     authored_groups: &[AuthoredGroup],
     authored_nodes: &[AuthoredNode],
+    preserved: Option<&TechnologyGraphLayout>,
 ) -> Result<TechnologyGraphLayout> {
     let groups_by_name: BTreeMap<_, _> = authored_groups
         .iter()
@@ -99,33 +107,51 @@ fn build_layout(
         bail!("Unity technology graph contains duplicate node names");
     }
 
+    let fallback = TechnologyGraphLayout::automatic(&catalog.technology);
     let mut layout = TechnologyGraphLayout::default();
     for (id, node) in &catalog.technology.nodes {
-        let authored = nodes_by_name
-            .get(node.display_name.as_str())
-            .with_context(|| {
-                format!(
-                    "catalog technology {id} ({}) is absent from the Unity graph",
-                    node.display_name
-                )
-            })?;
-        layout.nodes.insert(
-            id.clone(),
-            TechnologyNodeLayout {
-                position: authored.position,
-            },
-        );
+        if let Some(authored) = nodes_by_name.get(node.display_name.as_str()) {
+            layout.nodes.insert(
+                id.clone(),
+                TechnologyNodeLayout {
+                    position: authored.position,
+                },
+            );
+        } else if id.as_str().starts_with("tech:native_") {
+            let retained = preserved
+                .and_then(|layout| layout.nodes.get(id))
+                .or_else(|| fallback.nodes.get(id))
+                .copied()
+                .context("automatic native technology layout is incomplete")?;
+            layout.nodes.insert(id.clone(), retained);
+        } else {
+            bail!(
+                "catalog technology {id} ({}) is absent from the Unity graph",
+                node.display_name
+            );
+        }
     }
 
     for (group_id, group) in &catalog.technology.groups {
-        let authored = groups_by_name
-            .get(group.display_name.as_str())
-            .with_context(|| {
-                format!(
-                    "catalog technology group {group_id} ({}) is absent from the Unity graph",
-                    group.display_name
-                )
-            })?;
+        let Some(authored) = groups_by_name.get(group.display_name.as_str()) else {
+            if group
+                .nodes
+                .iter()
+                .all(|id| id.as_str().starts_with("tech:native_"))
+            {
+                let retained = preserved
+                    .and_then(|layout| layout.groups.get(group_id))
+                    .or_else(|| fallback.groups.get(group_id))
+                    .copied()
+                    .context("automatic native technology-group layout is incomplete")?;
+                layout.groups.insert(group_id.clone(), retained);
+                continue;
+            }
+            bail!(
+                "catalog technology group {group_id} ({}) is absent from the Unity graph",
+                group.display_name
+            );
+        };
         let mut left = authored.position.x;
         let mut top = authored.position.y;
         let mut right = left + GraphSize::default().width;
@@ -275,11 +301,11 @@ mod tests {
             "../../../../Assets/Scripts/TechTree/Editor/Graphs/TechTreeV2Graph.asset"
         ))
         .unwrap();
-        let converted = build_layout(&catalog, &groups, &nodes).unwrap();
         let checked_in: TechnologyGraphLayout = ron::from_str(include_str!(
             "../../../assets/content/technology_layout.ron"
         ))
         .unwrap();
+        let converted = build_layout(&catalog, &groups, &nodes, Some(&checked_in)).unwrap();
 
         assert_eq!(converted, checked_in);
         checked_in.validate(&catalog.technology).unwrap();

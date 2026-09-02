@@ -180,7 +180,23 @@ fn validate() -> Result<()> {
     )
     .with_context(|| format!("failed to parse {}", technology_layout_path.display()))?;
     technology_layout.validate(&content.technology)?;
-    if technology_layout.nodes.len() != 363 || technology_layout.groups.len() != 20 {
+    let converted_unity_nodes = technology_layout
+        .nodes
+        .keys()
+        .filter(|id| !id.as_str().starts_with("tech:native_"))
+        .count();
+    let converted_unity_groups = content
+        .technology
+        .groups
+        .values()
+        .filter(|group| {
+            group
+                .nodes
+                .iter()
+                .any(|id| !id.as_str().starts_with("tech:native_"))
+        })
+        .count();
+    if converted_unity_nodes != 363 || converted_unity_groups != 20 {
         bail!("technology graph layout no longer covers the verified Unity graph");
     }
     let presentation_path = Path::new("assets/content/presentation.ron");
@@ -337,7 +353,7 @@ fn validate() -> Result<()> {
     if content.foliage.len() != 4
         || foliage_variants != 21
         || passive_resource_generators != 1
-        || building_model_handlers != 42
+        || building_model_handlers != 48
         || storage_model_handlers != 6
         || rotating_nodes != 3
         || disable_after_time_prefabs != 1
@@ -345,8 +361,8 @@ fn validate() -> Result<()> {
         || pet_archetypes.len() != 1
         || pet_model_count != 5
         || !pet_contract_matches
-        || targeting_scores != 26
-        || target_sizes != 44
+        || targeting_scores != 29
+        || target_sizes != 47
         || (
             enemy_model_handlers,
             enemy_base_models,
@@ -368,22 +384,22 @@ fn validate() -> Result<()> {
             content.source_records.len(),
         ) != (
             stream_town_domain::CURRENT_CONTENT_SCHEMA,
-            215,
-            288,
-            26,
-            15,
-            422,
-            363,
-            20,
+            218,
+            294,
+            29,
+            18,
+            425,
+            366,
+            21,
             362,
-            1,
+            4,
             404,
         )
         || content.loading_screen.progress_milli_per_second != 500
         || content.loading_screen.completion_hold_milliseconds != 500
         || content.loading_screen.tooltips.len() != 1
     {
-        bail!("authored content counts differ from the verified Unity baseline");
+        bail!("authored content counts differ from the verified catalog baseline");
     }
     let health_definitions = content
         .archetypes
@@ -439,9 +455,9 @@ fn validate() -> Result<()> {
         .values()
         .filter(|archetype| archetype.enemy_spawner.is_some())
         .count();
-    if building_health.len() != 26
-        || building_base_health != 4_275
-        || building_level_health != 905
+    if building_health.len() != 29
+        || building_base_health != 4_425
+        || building_level_health != 1_055
         || (
             health_definitions,
             projectile_shooters,
@@ -451,7 +467,7 @@ fn validate() -> Result<()> {
             enemy_retaliation,
             goblin_sensor_ranges,
             standard_sensor_ranges,
-        ) != (42, 1, 9, 1, 9, 9, 1, 8)
+        ) != (45, 1, 9, 1, 9, 9, 1, 8)
     {
         bail!(
             "authored combat component counts differ from the verified Unity baseline: building health {} definitions, {} base total, {} per-level total; {health_definitions} total health, {projectile_shooters} projectile shooters, {enemy_definitions} enemies, {enemy_spawners} spawners, {enemy_resource_rewards} rewards",
@@ -859,7 +875,7 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration, 215 prefab archetypes with 44 target sizes, 1 disable-after-time lifetime, 1 unit health-bar contract, and 1 exact pet follower with 5 authored models, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 3 authored rotating nodes, 1 passive resource generator, 26 target scoring definitions, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, 122 embedded FBX clips, 2 active fish-school bindings, 14 role-audio contracts with 35 variants, and all 253 converted models are valid; checked {checked_json} generated JSON files"
+        "Configuration, 218 prefab archetypes with 47 target sizes, 1 disable-after-time lifetime, 1 unit health-bar contract, and 1 exact pet follower with 5 authored models, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 48 building model handlers, 6 storage model handlers, 3 authored rotating nodes, 1 passive resource generator, 29 target scoring definitions, 29 building health definitions, 45 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 425 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, 122 embedded FBX clips, 2 active fish-school bindings, 14 role-audio contracts with 35 variants, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }

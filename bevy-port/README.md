@@ -141,20 +141,23 @@ cargo run -p stream_town_migrate -- convert-content generated/unity-export.json 
 The editor exporter resolves GUIDs, object references, prefab sources and
 overrides, ScriptableObject data, and the four shipping scene hierarchies. Its
 migration-only A* types are inert compile stubs and are not navigation code.
-The content conversion selects the active Unity containers and emits a validated
-catalog of 26 production buildings, 215 prefab archetypes, 288 model scene
-variants, 15 roles, and the 363-node shipping technology graph. It derives
+The content conversion selects the active Unity containers and emits the 26
+production buildings, 215 prefab archetypes, 288 model scene variants, 15 roles,
+and 363-node shipping technology graph. The checked-in catalog then adds three
+Bevy-native resource-renewal buildings, archetypes, roles, objectives, and
+technology roots, for validated totals of 29 buildings, 218 archetypes, 294
+scene variants, 18 roles, 425 objectives, and 366 technology nodes. It derives
 building footprints from Unity's authored two-unit grid sizes, emits typed build
 and level costs, `Placeable`, `CanLevel`, per-level multipliers, and all 413
 authored technology effects plus every shipping role's action, XP multiplier,
 level curves, health, retained defense data, movement, carry, resource-affinity, station/target
-  masks, all 15 equipment sets, all four reachable building storage components,
-  all 11 reachable building role-slot modifiers,
-  all 42 reachable prefab health definitions, all nine pooled enemy combat definitions,
+  masks, all 18 equipment sets, all four reachable building storage components,
+  all 14 reachable building role-slot modifiers,
+  all 45 reachable prefab health definitions, all nine pooled enemy combat definitions,
   the authored Goblin camp weights and spawn transforms, the Tower's consolidated projectile
   shooter, the Marketplace's authored level-scaled passive gold generator, all
-  nine authored enemy kill rewards, all 42 reachable construction/upgrade model
-handlers, all six storage-fill model handlers, and 422 typed objectives from the production
+  nine authored enemy kill rewards, all 48 reachable construction/upgrade model
+handlers, all six storage-fill model handlers, and 425 typed objectives from the production
 technology graph, all three authored prefab rotors, the heal-burst prefab's
 authored self-disable lifetime, and the player prefab's three-second damaged-health-bar
 hide contract in content schema 30. The same schema promotes the shipping loader's
@@ -363,7 +366,7 @@ arrow keys select or change values, Enter confirms, and Escape invokes the same
 unsaved-change prompt as Back. The Main Menu's `S` shortcut opens its keyboard
 menu, from which Settings uses the same workflow. The
 stable chat grammar executes the player query, role/station/target selection,
-cosmetic/pet, building/catalog, recruit administration, ruler economy, camera,
+cosmetic, building/catalog, recruit administration, ruler economy, camera,
 governance, moderation, save, and event commands documented by `!help` with
 catalog/prerequisite validation and HUD/Twitch feedback.
 
@@ -380,12 +383,16 @@ imported `.stbevy` file and `STREAM_TOWN_AUTO_LOAD=1`. A retained schema-1
 terrain mesh is validated during conversion and native-save reads, rebuilt as a
 Bevy render mesh and Avian collider on load, and preserved by later native saves.
 
-`!build` starts a Unity-style per-player placement preview at the last successful
+Building type arguments use one no-space PascalCase name (`OreStorage`,
+`ProspectorHut`, and so on). `!build` starts a Unity-style per-player placement preview at the last successful
 position, `!move`/direction aliases and `!rotate` adjust
 the exact grid cell and retained 90-degree rotation, `!confirm`/`!accept` spends
 schema-4 resources and commits valid occupancy, and `!cancel` exits without
-spending. `!level <building> <id> [times]`, `!levelall`, and `!remove` use
-one-based per-building-type IDs. Placed rotation, occupancy, station/target
+spending. Walls use the separate `!beginplace`, orthogonal movement,
+`!endplace`, and `!confirm` line workflow. `!bid <BuildingName>` exposes stable,
+one-based per-type BID numbers; `!upgrade <BuildingName> <BID>`,
+`!rotatebuilding`, `!buildinglight`, and Ruler-only `!remove` consume those same
+numbers. An untouched placement expires after 30 seconds. Placed rotation, occupancy, station/target
 geometry, and last player placement round-trip through native saves; the legacy
 importer retains authored building Y rotation. Confirmed structures spawn the
 converted building GLB with a primitive fallback. New
@@ -408,7 +415,7 @@ persisted technology set: the authored initial technologies expose Lumbermill,
 `STREAM_TOWN_DEBUG_COMMANDS` value can inject the same path
 for repeatable diagnostics.
 
-The registered Unity game-master surface is also live: `!tbuildcosts`,
+The registered Unity game-master surface is also recognized: `!tbuildcosts`,
 `!trolelimits`, `!addresource`, `!kill`, `!grevive`, `!givexp`, `!givexpall`,
 `!levelup`, `!givepet`, `!qevent`, `!stopevent`, `!cobj`, `!randtech`,
 `!techvote`, `!gaction`, `!unlockall`, `!unlockage2`, and `!resetid`. Build-cost
@@ -418,6 +425,9 @@ and stable technology IDs instead of Unity's unrepeatable process-global random
 state. `!resetid` reports the stable-ID state because Bevy
 does not have Unity's pooled per-type counter to repair. `!stdiscord` preserves
 the remaining registered no-character utility command.
+Pets are not implemented in the shipping Bevy runtime yet; `!pets`, `!pet`, and
+`!givepet` return that explicit status without changing state. `!praise` is also
+an explicit no-op until its gameplay reward is implemented.
 The IRC parser also retains Unity's complete `!create`/`!join` typo-alias set,
 returns the source-authored usage for malformed registered commands, and routes
 source-compatible player, global, and silent responses instead of applying one
@@ -486,6 +496,18 @@ add the authored level-scaled capacity; Houses add recruit slots. A capped
 deposit leaves overflow on the actor until spending or new construction creates
 space.
 Node depletion and carried inventories are part of native save/load state.
+The optional Nursery, ProspectorHut, and Greenhouse technology roots have no
+prerequisite technology and deliberately use objectives unrelated to the
+resource they restore. Their completed buildings provide Forester, Prospector,
+and Tender slots. Foresters plant first around recently depleted trees, then
+living trees, then deterministic reachable sites near their Nursery, scaling
+from five minutes to twenty seconds per tree. Prospectors repeatedly survey an
+outward 5–20-cell spiral around their hut, scaling from a 1-in-1,000 to a
+1-in-100 discovery roll per surveyed cell and creating 3–5-node ore deposits.
+Tenders choose open fields at least ten cells from buildings and five from trees,
+scaling from ten to two minutes per berry bush. New resources receive stable
+IDs, deterministic central-half-cell offsets, navigation occupancy, runtime
+visuals, and native-save restoration.
 All seven combat roles—Defender, Necromancer, Paladin, Ranger, Ruler, Soldier,
 and Wizard—acquire a living enemy and path into authored range. Melee roles
 apply deterministic damage directly; Necromancer, Ranger, and Wizard attacks

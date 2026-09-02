@@ -2179,8 +2179,21 @@
                 y: 1962.0,
             ),
         ),
+        "tech:native_nursery": (
+            position: (x: -300.0, y: -18850.0),
+        ),
+        "tech:native_prospector_hut": (
+            position: (x: 200.0, y: -18850.0),
+        ),
+        "tech:native_greenhouse": (
+            position: (x: 700.0, y: -18850.0),
+        ),
     },
     groups: {
+        "tech_group:regeneration": (
+            position: (x: -420.0, y: -19020.0),
+            size: (width: 1600.0, height: 520.0),
+        ),
         "tech_group:barracksandsoldier": (
             position: (
                 x: -237.0,
