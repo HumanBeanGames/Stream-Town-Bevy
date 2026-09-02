@@ -81,7 +81,9 @@ save. Rolling backups and purge archives are never candidates. Pass
 `-Town Tonyville` to choose explicitly, `-SkipBuild` to reuse an already-built
 binary, or `-NoLaunch` to validate selection and compilation without starting
 the game. The resumed process still retains the complete Load Game catalog and
-starts offline; going live remains an explicit operator action. If a game is
+automatically begins Twitch authorization, then starts the prepared broadcast as
+soon as the resumed gameplay passes its real readiness gate. Ordinary game
+launches remain offline until the operator explicitly goes live. If a game is
 already running, the script refuses to replace it so the town can be exited and
 saved normally first. Redeployment also stages the complete native runtime next
 to the executable, so the resulting `target\release\stream_town_game.exe` can be
@@ -359,7 +361,8 @@ in the local operator panel and rebuilds the in-process encoder without
 restarting the game. Save and apply
 restarts only a connection whose client ID or login actually changed; a no-op
 save preserves the live bot connection and broadcast worker. The application
-always starts offline. New/Load Town opens the protected Secrets setup prompt
+starts offline unless the patch redeployment script explicitly requests
+automatic broadcasting. New/Load Town opens the protected Secrets setup prompt
 until the bot is connected and both account authorizations are stored, then
 opens the go-live confirmation. Yes prepares the session and gameplay readiness
 starts it; the operator toggle can subsequently end or restart it.

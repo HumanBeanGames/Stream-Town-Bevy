@@ -740,6 +740,19 @@ pub(crate) struct DirectBroadcastControl {
     stop_disposition: BroadcastStopDisposition,
 }
 
+#[derive(Resource)]
+struct AutomaticBroadcastStart {
+    requested: bool,
+}
+
+impl Default for AutomaticBroadcastStart {
+    fn default() -> Self {
+        Self {
+            requested: std::env::var_os("STREAM_TOWN_AUTO_GO_LIVE").is_some(),
+        }
+    }
+}
+
 impl DirectBroadcastControl {
     pub(crate) fn request_restart(&mut self) {
         self.restart_requested = true;
@@ -784,6 +797,7 @@ impl Plugin for DirectTwitchBroadcastPlugin {
             .add_message::<WindowCloseRequested>()
             .init_resource::<DirectBroadcastRuntime>()
             .init_resource::<DirectBroadcastControl>()
+            .init_resource::<AutomaticBroadcastStart>()
             .init_resource::<NativeGameAudioRouting>()
             .init_resource::<StreamOnlyCaptureState>()
             .init_resource::<OperatorChatRuntime>()
@@ -793,6 +807,7 @@ impl Plugin for DirectTwitchBroadcastPlugin {
                 (
                     start_local_broadcast_diagnostic,
                     operator_window_close_requests_exit,
+                    request_automatic_broadcast_start,
                     apply_direct_broadcast_control,
                     poll_direct_broadcast_authorization,
                     start_prepared_broadcast_when_gameplay_ready,
@@ -814,6 +829,15 @@ impl Plugin for DirectTwitchBroadcastPlugin {
                     .chain(),
             )
             .add_systems(Last, arm_stream_only_readback);
+    }
+}
+
+fn request_automatic_broadcast_start(
+    mut automatic: ResMut<AutomaticBroadcastStart>,
+    mut control: ResMut<DirectBroadcastControl>,
+) {
+    if std::mem::take(&mut automatic.requested) {
+        control.request_restart();
     }
 }
 
@@ -951,9 +975,9 @@ fn configure_direct_broadcast(
         return;
     }
     let twitch = &config.twitch;
-    // Going live is deliberately an operator action. Persisted settings and
-    // legacy `start_on_launch` values configure the encoder, but never start a
-    // public stream while the application is still booting.
+    // Going live is an operator action during ordinary launches. Patch
+    // redeployment makes that action explicit through STREAM_TOWN_AUTO_GO_LIVE;
+    // persisted settings and legacy `start_on_launch` values never do so.
     if !twitch.broadcast.enabled {
         runtime.phase = DirectBroadcastPhase::Disabled;
         return;
@@ -4867,6 +4891,30 @@ mod tests {
             app.world().resource::<DirectBroadcastRuntime>().phase,
             DirectBroadcastPhase::Disabled
         );
+    }
+
+    #[test]
+    fn explicit_automatic_start_uses_the_normal_broadcast_configuration_path_once() {
+        let mut config = stream_town_domain::GameConfig::default();
+        config.twitch.broadcast.enabled = true;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(RuntimeConfig(config))
+            .insert_resource(AutomaticBroadcastStart { requested: true })
+            .init_resource::<SensitiveScreenActive>()
+            .add_plugins(DirectTwitchBroadcastPlugin);
+
+        app.update();
+
+        assert!(matches!(
+            &app.world().resource::<DirectBroadcastRuntime>().phase,
+            DirectBroadcastPhase::Error(error)
+                if error == "direct broadcast requires the Twitch public client ID"
+        ));
+        assert!(!app.world().resource::<AutomaticBroadcastStart>().requested);
+        let control = app.world().resource::<DirectBroadcastControl>();
+        assert!(!control.restart_requested);
+        assert!(!control.stop_requested);
     }
 
     #[test]

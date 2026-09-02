@@ -85,9 +85,14 @@ try {
         'STREAM_TOWN_AUTO_RESUME_PATH',
         [EnvironmentVariableTarget]::Process
     )
+    $previousAutoGoLive = [Environment]::GetEnvironmentVariable(
+        'STREAM_TOWN_AUTO_GO_LIVE',
+        [EnvironmentVariableTarget]::Process
+    )
     $previousProcessPath = $env:PATH
     try {
         $env:STREAM_TOWN_AUTO_RESUME_PATH = $selectedSave.FullName
+        $env:STREAM_TOWN_AUTO_GO_LIVE = '1'
         $env:PATH = "$nativeRuntime;$previousProcessPath"
         $game = Start-Process `
             -FilePath $executable `
@@ -100,6 +105,12 @@ try {
         }
         else {
             $env:STREAM_TOWN_AUTO_RESUME_PATH = $previousResumePath
+        }
+        if ($null -eq $previousAutoGoLive) {
+            Remove-Item Env:\STREAM_TOWN_AUTO_GO_LIVE -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:STREAM_TOWN_AUTO_GO_LIVE = $previousAutoGoLive
         }
         $env:PATH = $previousProcessPath
     }
