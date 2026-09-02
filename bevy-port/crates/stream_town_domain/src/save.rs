@@ -14,6 +14,7 @@ use crate::{CURRENT_SIMULATION_SCHEMA, GridPos, StableId, WorldSimulation};
 
 pub const NATIVE_SAVE_VERSION: u32 = 1;
 pub const CURRENT_WORLD_SNAPSHOT_SCHEMA: u32 = 2;
+pub const NATIVE_SAVE_BACKUP_GENERATIONS: usize = 5;
 const LEGACY_MAGIC: &[u8; 4] = b"STSV";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -233,7 +234,21 @@ impl NativeSaveStore {
 
     #[must_use]
     pub fn backup_path(&self) -> PathBuf {
-        PathBuf::from(format!("{}.bak", self.path.display()))
+        self.backup_path_at(1)
+    }
+
+    #[must_use]
+    pub fn backup_path_at(&self, generation: usize) -> PathBuf {
+        assert!(
+            (1..=NATIVE_SAVE_BACKUP_GENERATIONS).contains(&generation),
+            "native save backup generation must be between 1 and {NATIVE_SAVE_BACKUP_GENERATIONS}"
+        );
+        let suffix = if generation == 1 {
+            ".bak".to_owned()
+        } else {
+            format!(".bak.{generation}")
+        };
+        PathBuf::from(format!("{}{}", self.path.display(), suffix))
     }
 
     pub fn write(&self, snapshot: &WorldSnapshot) -> Result<(), NativeSaveError> {
@@ -247,8 +262,6 @@ impl NativeSaveStore {
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)?;
         let temporary = self.path.with_extension("stbevy.tmp");
-        let backup = self.backup_path();
-
         let mut file = OpenOptions::new()
             .create(true)
             .truncate(true)
@@ -258,12 +271,13 @@ impl NativeSaveStore {
         file.sync_all()?;
         drop(file);
 
-        if self.path.exists() {
-            if backup.exists() {
-                fs::remove_file(&backup)?;
-            }
-            fs::rename(&self.path, &backup)?;
+        if self.path.exists()
+            && let Err(error) = self.rotate_backups()
+        {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
         }
+        let backup = self.backup_path();
         if let Err(error) = fs::rename(&temporary, &self.path) {
             if backup.exists() && !self.path.exists() {
                 let _ = fs::rename(&backup, &self.path);
@@ -277,11 +291,33 @@ impl NativeSaveStore {
     pub fn load(&self) -> Result<WorldSnapshot, NativeSaveError> {
         match load_native(&self.path) {
             Ok(snapshot) => Ok(snapshot),
-            Err(primary_error) if self.backup_path().exists() => {
-                load_native(&self.backup_path()).map_err(|_| primary_error)
+            Err(primary_error) => {
+                for generation in 1..=NATIVE_SAVE_BACKUP_GENERATIONS {
+                    let backup = self.backup_path_at(generation);
+                    if backup.exists()
+                        && let Ok(snapshot) = load_native(&backup)
+                    {
+                        return Ok(snapshot);
+                    }
+                }
+                Err(primary_error)
             }
-            Err(error) => Err(error),
         }
+    }
+
+    fn rotate_backups(&self) -> Result<(), NativeSaveError> {
+        let oldest = self.backup_path_at(NATIVE_SAVE_BACKUP_GENERATIONS);
+        if oldest.exists() {
+            fs::remove_file(oldest)?;
+        }
+        for generation in (2..=NATIVE_SAVE_BACKUP_GENERATIONS).rev() {
+            let source = self.backup_path_at(generation - 1);
+            if source.exists() {
+                fs::rename(source, self.backup_path_at(generation))?;
+            }
+        }
+        fs::rename(&self.path, self.backup_path())?;
+        Ok(())
     }
 }
 
@@ -531,6 +567,25 @@ mod tests {
     }
 
     #[test]
+    fn native_save_keeps_only_the_five_latest_backup_generations() {
+        let directory = tempdir().unwrap();
+        let store = NativeSaveStore::new(directory.path().join("save.stbevy"));
+        for seed in 1..=7 {
+            store.write(&snapshot(seed)).unwrap();
+        }
+        assert_eq!(store.load().unwrap().world_seed, 7);
+        for (generation, expected_seed) in (1..=5).zip((2..=6).rev()) {
+            assert_eq!(
+                load_native(&store.backup_path_at(generation))
+                    .unwrap()
+                    .world_seed,
+                expected_seed
+            );
+        }
+        assert!(!PathBuf::from(format!("{}.bak.6", store.path().display())).exists());
+    }
+
+    #[test]
     fn snapshot_validation_rejects_schema_and_seed_mismatches() {
         let mut invalid = snapshot(7);
         invalid.schema_version = CURRENT_WORLD_SNAPSHOT_SCHEMA + 1;
@@ -656,6 +711,18 @@ mod tests {
         store.write(&snapshot(1)).unwrap();
         store.write(&snapshot(2)).unwrap();
         fs::write(store.path(), "corrupt").unwrap();
+        assert_eq!(store.load().unwrap().world_seed, 1);
+    }
+
+    #[test]
+    fn corruption_recovery_checks_older_backup_generations() {
+        let directory = tempdir().unwrap();
+        let store = NativeSaveStore::new(directory.path().join("save.stbevy"));
+        store.write(&snapshot(1)).unwrap();
+        store.write(&snapshot(2)).unwrap();
+        store.write(&snapshot(3)).unwrap();
+        fs::write(store.path(), "corrupt current").unwrap();
+        fs::write(store.backup_path(), "corrupt newest backup").unwrap();
         assert_eq!(store.load().unwrap().world_seed, 1);
     }
 

@@ -53,7 +53,7 @@ previews using the production deterministic generator. See
 cd bevy-port
 cargo xtask validate
 cargo test --workspace
-cargo run -p stream_town_game
+.\scripts\launch-game.ps1
 cargo run -p stream_town_tools
 cargo run -p stream_town_tools -- --validate-authoring
 cargo run -p stream_town_migrate -- inventory .. --out generated/content-manifest.json
@@ -67,6 +67,11 @@ cargo run -p stream_town_migrate -- import-save StreamTownSave.stsave --out gene
 cargo run -p stream_town_migrate -- export-world-oracle StreamTownSave.stsave --out generated/unity-world-oracle.json
 cargo run -p xtask -- package-windows --output dist
 ```
+
+`scripts\launch-game.ps1` is the normal local game launcher and uses Cargo's
+optimized release profile. Pass `-Debug` only when debugging the runtime. The
+Windows packaging task also always rebuilds both shipped executables with
+`--release`; it never packages `target\debug` binaries.
 
 If the game panics, it writes the panic message, thread, and captured backtrace
 to `.stream-town/crashes/crash-<timestamp>.log` before forwarding to Rust's
@@ -211,10 +216,18 @@ take as a named GLB animation rather than retaining only the active action.
 The first native save is written to `.stream-town/StreamTownSave.stbevy`.
 During migration hardening, gameplay autosaves every minute by default and also
 writes on the transition back to the Main Menu. Both paths use the same
-checksummed atomic replacement and `.bak` recovery file. Checksum-valid native
+checksummed atomic replacement and retain five rolling recovery generations
+(`.bak` through `.bak.5`). Backup generations are recovery-only and do not appear
+as separate towns in the Load Game menu. Checksum-valid native
 saves from older generator revisions regenerate seeded terrain and relocate
 stable-ID state deterministically instead of being rejected solely because the
 current generator fingerprint changed.
+
+For the one-time oversized-enemy-save correction, stop the game and run
+`cargo run -p xtask -- purge-save-enemies --save .stream-town/saves/<Town>.stbevy`.
+The command preserves the unmodified source as a uniquely named
+`.pre-enemy-purge` recovery file, removes enemy actors and stale raid tracking,
+writes through the normal rotating save store, and reload-validates the result.
 Legacy Unity saves are never modified by migration tools. `import-save` is an
 optional one-time compatibility command only. The production generator never
 loads a Unity save: `export-world-oracle` emits sanitized counts and position

@@ -11,8 +11,9 @@ use image::{DynamicImage, RgbImage, imageops::FilterType};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
-    ContentCatalog, DirtyRegion, GameConfig, GridPos, PlayerSettings, PresentationCatalog,
-    SHIPPING_SECONDS_PER_DAY, TechnologyGraphLayout, generate_world_with_content,
+    ActorKind, ContentCatalog, DirtyRegion, GameConfig, GridPos, NativeSaveStore, PlayerSettings,
+    PresentationCatalog, SHIPPING_SECONDS_PER_DAY, TechnologyGraphLayout,
+    generate_world_with_content,
 };
 use walkdir::WalkDir;
 
@@ -51,6 +52,11 @@ enum Command {
         /// Replace the curated references with the supplied, manually reviewed captures.
         #[arg(long)]
         update_baseline: bool,
+    },
+    /// Remove every currently saved enemy while preserving citizens and world progress.
+    PurgeSaveEnemies {
+        #[arg(long)]
+        save: std::path::PathBuf,
     },
 }
 
@@ -114,7 +120,93 @@ fn main() -> Result<()> {
             scenario,
             update_baseline,
         } => visual_acceptance(&capture_dir, &scenario, update_baseline),
+        Command::PurgeSaveEnemies { save } => purge_save_enemies(&save),
     }
+}
+
+fn purge_save_enemies(path: &Path) -> Result<()> {
+    if !path.is_file() {
+        bail!("save does not exist: {}", path.display());
+    }
+    let store = NativeSaveStore::new(path);
+    let mut snapshot = store
+        .load()
+        .with_context(|| format!("failed to validate save {}", path.display()))?;
+    let enemy_ids = snapshot
+        .simulation
+        .actors
+        .iter()
+        .filter(|(_, actor)| actor.role.as_str() == "role:enemy")
+        .map(|(id, _)| id.clone())
+        .chain(
+            snapshot
+                .actors
+                .iter()
+                .filter(|actor| actor.kind == ActorKind::Enemy)
+                .map(|actor| actor.id.clone()),
+        )
+        .collect::<BTreeSet<_>>();
+    let recovery = unique_purge_backup_path(path);
+    fs::copy(path, &recovery).with_context(|| {
+        format!(
+            "failed to create pre-purge recovery copy {}",
+            recovery.display()
+        )
+    })?;
+
+    snapshot
+        .actors
+        .retain(|actor| !enemy_ids.contains(&actor.id));
+    snapshot
+        .simulation
+        .actors
+        .retain(|id, _| !enemy_ids.contains(id));
+    for camp in snapshot.simulation.enemy_camps.values_mut() {
+        camp.spawned_enemies.retain(|id| !enemy_ids.contains(id));
+    }
+    if snapshot.simulation.active_raid.is_some() {
+        snapshot.simulation.finish_raid();
+    }
+    store
+        .write(&snapshot)
+        .with_context(|| format!("failed to write purged save {}", path.display()))?;
+    let verified = store
+        .load()
+        .with_context(|| format!("purged save did not reload: {}", path.display()))?;
+    if verified
+        .simulation
+        .actors
+        .values()
+        .any(|actor| actor.role.as_str() == "role:enemy")
+        || verified
+            .actors
+            .iter()
+            .any(|actor| actor.kind == ActorKind::Enemy)
+    {
+        bail!("purged save still contains enemy actors");
+    }
+    println!(
+        "Purged {} enemies from {}; recovery copy: {}",
+        enemy_ids.len(),
+        path.display(),
+        recovery.display()
+    );
+    Ok(())
+}
+
+fn unique_purge_backup_path(path: &Path) -> std::path::PathBuf {
+    let direct = std::path::PathBuf::from(format!("{}.pre-enemy-purge", path.display()));
+    if !direct.exists() {
+        return direct;
+    }
+    for generation in 2_u32.. {
+        let candidate =
+            std::path::PathBuf::from(format!("{}.pre-enemy-purge.{generation}", path.display()));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("the pre-purge backup suffix range is unbounded")
 }
 
 fn validate() -> Result<()> {

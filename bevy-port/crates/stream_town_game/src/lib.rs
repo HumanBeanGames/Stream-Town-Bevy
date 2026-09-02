@@ -2596,6 +2596,12 @@ struct RulerVoteAnnouncementRuntime {
     ruler_before_vote: Option<StableId>,
 }
 
+#[derive(Resource, Default)]
+struct CitizenDeathAnnouncementRuntime {
+    initialized: bool,
+    dead: BTreeSet<StableId>,
+}
+
 #[derive(Component, Default)]
 struct AgentLocomotion {
     previous_position: Vec3,
@@ -3727,6 +3733,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<StationTargetRuntime>()
             .init_resource::<RegenerationRoleRuntime>()
             .init_resource::<RulerVoteAnnouncementRuntime>()
+            .init_resource::<CitizenDeathAnnouncementRuntime>()
             .init_resource::<InjectedCommands>()
             .init_resource::<CommandFeedback>()
             .init_resource::<CommandAcknowledgementRuntime>()
@@ -4007,6 +4014,9 @@ impl Plugin for StreamTownGamePlugin {
                     emit_chimney_smoke.after(sync_chimney_smoke_emitters),
                     animate_chimney_smoke_particles.after(emit_chimney_smoke),
                     update_enemy_encounters.after(move_combat_projectiles),
+                    announce_citizen_deaths
+                        .after(move_agents)
+                        .after(move_combat_projectiles),
                     restart_world_after_town_hall_falls.after(move_agents),
                     sync_pooled_night_lights
                         .after(move_combat_projectiles)
@@ -16362,12 +16372,9 @@ fn generate_and_spawn_world(
             *camera = transform;
             controller.set_home(transform);
         }
-        let town_hall_region = building_region(
-            town_hall_placement,
-            town_hall_definition.footprint,
-            generated,
-        )
-        .expect("the configured Town Hall footprint fits the generated world");
+        let town_hall_region =
+            building_navigation_region(town_hall_placement, town_hall_definition, 0, generated)
+                .expect("the configured Town Hall footprint fits the generated world");
         generated
             .navigation
             .set_blocked(town_hall_region, true)
@@ -17106,8 +17113,12 @@ fn generate_and_spawn_world(
                 .unwrap_or(i32::MAX),
             complete: true,
         };
-        let footprint = rotated_footprint(definition.footprint, state.rotation_quarter_turns);
-        if let Some(region) = building_region(position, footprint, &generated) {
+        if let Some(region) = building_navigation_region(
+            position,
+            definition,
+            state.rotation_quarter_turns,
+            &generated,
+        ) {
             generated
                 .navigation
                 .set_blocked(region, true)
@@ -19388,6 +19399,66 @@ fn town_hall_wait_target(
         .unwrap_or(current)
 }
 
+fn nearest_reachable_building_to_town_hall(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    current: GridPos,
+) -> Option<(StableId, GridPos)> {
+    let town_hall = StableId::new("building:townhall").expect("static building ID");
+    let town_hall_position = simulation
+        .buildings
+        .get(&town_hall)
+        .map_or(current, |building| building_visual_grid(content, building));
+    let mut candidates = simulation
+        .buildings
+        .values()
+        .filter(|building| building.health > 0)
+        .filter_map(|building| {
+            let definition = building_def_for_archetype(content, &building.archetype)?;
+            let approach = reachable_building_approach(
+                world,
+                building.position,
+                rotated_footprint(definition.footprint, building.rotation_quarter_turns),
+                current,
+            )?;
+            Some((
+                grid_distance_squared(building_visual_grid(content, building), town_hall_position),
+                building.id.clone(),
+                approach,
+            ))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(town_hall_distance, id, _)| (*town_hall_distance, id.clone()));
+    candidates
+        .into_iter()
+        .next()
+        .map(|(_, id, approach)| (id, approach))
+}
+
+fn enemy_navigation_can_reach(world: &GeneratedWorld, current: GridPos, goal: GridPos) -> bool {
+    let exceptions = if world.navigation.is_walkable(current) {
+        HashSet::new()
+    } else {
+        HashSet::from([current])
+    };
+    world
+        .navigation
+        .find_path_with_exceptions(current, goal, &exceptions)
+        .is_ok()
+}
+
+fn reachable_building_approach(
+    world: &GeneratedWorld,
+    position: GridPos,
+    footprint: [u16; 2],
+    current: GridPos,
+) -> Option<GridPos> {
+    building_approaches(world, position, footprint, current)
+        .into_iter()
+        .find(|approach| enemy_navigation_can_reach(world, current, *approach))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn next_agent_goal_with_station_runtime(
     simulation: &WorldSimulation,
@@ -19429,6 +19500,10 @@ fn next_agent_goal_with_station_runtime(
                         || (target.health < target.max_health
                             && enemy_targets_kind(content, actor, "target:injured_player"))
                 })
+                .filter(|target| {
+                    within_actor_attack_range(content, simulation, actor, target, current)
+                        || enemy_navigation_can_reach(world, current, target.position)
+                })
             {
                 return (
                     AgentGoal::Attack(target.id.clone()),
@@ -19452,12 +19527,15 @@ fn next_agent_goal_with_station_runtime(
                             && enemy_targets_kind(content, actor, "target:damaged_building"))
                 })
                 && let Some(definition) = building_def_for_archetype(content, &building.archetype)
-                && let Some(approach) = building_approach(
+                && let Some(approach) = reachable_building_approach(
                     world,
                     building.position,
                     rotated_footprint(definition.footprint, building.rotation_quarter_turns),
                     current,
                 )
+                && (within_enemy_building_attack_range(
+                    content, simulation, actor, building, current,
+                ) || world.navigation.find_path(current, approach).is_ok())
             {
                 return (
                     AgentGoal::AttackBuilding(building.id.clone()),
@@ -19609,6 +19687,10 @@ fn next_agent_goal_with_station_runtime(
                     .filter(|target| {
                         within_enemy_target_search(content, actor, current, target.position)
                     })
+                    .filter(|target| {
+                        within_actor_attack_range(content, simulation, actor, target, current)
+                            || enemy_navigation_can_reach(world, current, target.position)
+                    })
                     .map(|target| {
                         (
                             grid_distance_squared(target.position, current),
@@ -19635,7 +19717,7 @@ fn next_agent_goal_with_station_runtime(
                     })
                     .filter_map(|building| {
                         let definition = building_def_for_archetype(content, &building.archetype)?;
-                        let approach = building_approach(
+                        let approach = reachable_building_approach(
                             world,
                             building.position,
                             rotated_footprint(
@@ -19693,27 +19775,16 @@ fn next_agent_goal_with_station_runtime(
             }
             (None, None) => {}
         }
-        // Unity's STSM_Idle_Enemy does not wander around its camp when the
-        // local TargetSensor is empty. It advances on the active Town Hall,
-        // continuously checking for nearer players/buildings along the route.
-        // Selecting the Town Hall attack goal directly produces the same path
-        // and target handoff once the enemy reaches authored sensor range.
         if enemy_targets_buildings(content, actor) {
-            let town_hall = StableId::new("building:townhall").expect("static building ID");
-            if let Some(building) = simulation
-                .buildings
-                .get(&town_hall)
-                .filter(|building| building.health > 0)
-                && let Some(definition) = building_def_for_archetype(content, &building.archetype)
-                && let Some(approach) = building_approach(
-                    world,
-                    building.position,
-                    rotated_footprint(definition.footprint, building.rotation_quarter_turns),
-                    current,
-                )
+            // Advance on the Town Hall when it is reachable. If fortifications
+            // seal it off, attack the reachable building closest to it instead
+            // of repeatedly requesting an impossible A* path and idling.
+            if let Some((building_id, approach)) =
+                nearest_reachable_building_to_town_hall(content, simulation, world, current)
             {
+                let building = &simulation.buildings[&building_id];
                 return (
-                    AgentGoal::AttackBuilding(town_hall),
+                    AgentGoal::AttackBuilding(building_id),
                     if within_enemy_building_attack_range(
                         content, simulation, actor, building, current,
                     ) {
@@ -20762,15 +20833,19 @@ fn complete_agent_goal_with_regeneration(
             }
             let building_position = building_visual_grid(content, building);
             let building_origin = building.position;
-            let building_footprint =
-                building_def_for_archetype(content, &building.archetype).map(|definition| {
-                    rotated_footprint(definition.footprint, building.rotation_quarter_turns)
-                });
+            let building_rotation = building.rotation_quarter_turns;
+            let building_definition =
+                building_def_for_archetype(content, &building.archetype).cloned();
             match simulation.damage_building(building_id, action_amount) {
                 Ok(remaining) if action_amount > 0 => {
                     if remaining == 0 {
-                        if let Some(footprint) = building_footprint
-                            && let Some(region) = building_region(building_origin, footprint, world)
+                        if let Some(definition) = building_definition.as_ref()
+                            && let Some(region) = building_navigation_region(
+                                building_origin,
+                                definition,
+                                building_rotation,
+                                world,
+                            )
                         {
                             let _ = world.navigation.set_blocked(region, false);
                         }
@@ -22229,8 +22304,15 @@ fn update_enemy_encounters(
                 )
                 .expect("raid camp index fits usize");
                 let (camp, spawner, footprint) = &camps[camp_index];
-                let position =
-                    enemy_spawn_position(&world.generated, camp, spawner, *footprint, serial);
+                let position = enemy_spawn_position(
+                    &world.generated,
+                    &content.0,
+                    &simulation.0,
+                    camp,
+                    spawner,
+                    *footprint,
+                    serial,
+                );
                 if let Some(enemy) = spawn_runtime_enemy(
                     &mut commands,
                     &config.0,
@@ -22308,7 +22390,15 @@ fn update_enemy_encounters(
         .expect("night-wave camp index fits usize");
         let (camp_id, camp, spawner, footprint) = &camps[camp_index];
         let archetype = weighted_enemy_archetype(spawner, simulation.0.world_seed, serial);
-        let position = enemy_spawn_position(&world.generated, camp, spawner, *footprint, serial);
+        let position = enemy_spawn_position(
+            &world.generated,
+            &content.0,
+            &simulation.0,
+            camp,
+            spawner,
+            *footprint,
+            serial,
+        );
         if let Some(enemy) = spawn_runtime_enemy(
             &mut commands,
             &config.0,
@@ -22352,7 +22442,7 @@ fn simulation_player_count(simulation: &WorldSimulation) -> usize {
 }
 
 fn raid_enemies_per_wave(player_count: usize) -> u16 {
-    u16::try_from(player_count.saturating_mul(2).clamp(3, 50)).unwrap_or(50)
+    u16::try_from(player_count.clamp(2, 25)).unwrap_or(25)
 }
 
 fn restart_world_after_town_hall_falls(
@@ -30287,14 +30377,16 @@ fn placement_at_cell(placement: &BuildingPlacement, cell: GridPos) -> BuildingPl
 }
 
 fn building_placement_is_available(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
     world: &GeneratedWorld,
     placement: &BuildingPlacement,
     definition: &BuildingDef,
 ) -> bool {
     let footprint = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
-    placement_visual_cells(placement)
-        .into_iter()
-        .all(|cell| building_site_is_available(world, cell, footprint))
+    placement_visual_cells(placement).into_iter().all(|cell| {
+        building_site_is_available_for_simulation(content, simulation, world, cell, footprint)
+    })
 }
 
 fn scaled_building_cost(
@@ -30347,20 +30439,23 @@ fn sync_building_placers(
             continue;
         }
         let cell_placement = placement_at_cell(placement, visual.cell);
+        let available = building_placement_is_available(
+            &content.0,
+            &simulation.0,
+            &world.generated,
+            placement,
+            definition,
+        );
         update_placer_visual(
             &config.0,
             &world.generated,
             &render,
             &cell_placement,
             definition,
+            available,
             &mut transform,
             &mut material,
         );
-        material.0 = if building_placement_is_available(&world.generated, placement, definition) {
-            render.placement_valid.clone()
-        } else {
-            render.placement_invalid.clone()
-        };
         active_visuals.insert((visual.owner.clone(), visual.cell));
     }
     for (owner, placement) in &placers.0 {
@@ -30374,21 +30469,23 @@ fn sync_building_placers(
             let cell_placement = placement_at_cell(placement, cell);
             let mut transform = Transform::default();
             let mut material = MeshMaterial3d(render.placement_valid.clone());
+            let available = building_placement_is_available(
+                &content.0,
+                &simulation.0,
+                &world.generated,
+                placement,
+                definition,
+            );
             update_placer_visual(
                 &config.0,
                 &world.generated,
                 &render,
                 &cell_placement,
                 definition,
+                available,
                 &mut transform,
                 &mut material,
             );
-            material.0 = if building_placement_is_available(&world.generated, placement, definition)
-            {
-                render.placement_valid.clone()
-            } else {
-                render.placement_invalid.clone()
-            };
             commands.spawn((
                 WorldEntity,
                 BuildingPlacementVisual {
@@ -30491,6 +30588,7 @@ fn sync_building_placers(
 fn apply_building_placement_ghosts(
     mut commands: Commands,
     content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
     world: Res<WorldRuntime>,
     placers: Res<BuildingPlacers>,
     render: Res<RenderAssets>,
@@ -30532,8 +30630,14 @@ fn apply_building_placement_ghosts(
         let Some(owner) = owner else {
             continue;
         };
-        let material =
-            placement_ghost_material(&content.0, &world.generated, &placers.0, &render, &owner);
+        let material = placement_ghost_material(
+            &content.0,
+            &simulation.0,
+            &world.generated,
+            &placers.0,
+            &render,
+            &owner,
+        );
         commands
             .entity(entity)
             .remove::<MeshMaterial3d<StandardMaterial>>()
@@ -30545,6 +30649,7 @@ fn apply_building_placement_ghosts(
     for (mesh, mut material) in &mut ghost_materials {
         material.0 = placement_ghost_material(
             &content.0,
+            &simulation.0,
             &world.generated,
             &placers.0,
             &render,
@@ -30577,6 +30682,7 @@ fn apply_building_placement_ghosts(
 
 fn placement_ghost_material(
     content: &ContentCatalog,
+    simulation: &WorldSimulation,
     world: &GeneratedWorld,
     placers: &BTreeMap<StableId, BuildingPlacement>,
     render: &RenderAssets,
@@ -30586,7 +30692,9 @@ fn placement_ghost_material(
         content
             .buildings
             .get(&placement.building)
-            .is_some_and(|definition| building_placement_is_available(world, placement, definition))
+            .is_some_and(|definition| {
+                building_placement_is_available(content, simulation, world, placement, definition)
+            })
     });
     if available {
         render.placement_valid.clone()
@@ -30749,6 +30857,7 @@ fn update_placer_visual(
     render: &RenderAssets,
     placement: &BuildingPlacement,
     definition: &BuildingDef,
+    available: bool,
     transform: &mut Transform,
     material: &mut MeshMaterial3d<BoundsMaterial>,
 ) {
@@ -30766,7 +30875,7 @@ fn update_placer_visual(
         grid_to_world_on_surface(centre, config, world) + Vec3::Y * size.y * 0.5;
     transform.scale = size;
     transform.rotation = quarter_turn_rotation(placement.rotation_quarter_turns);
-    material.0 = if building_site_is_available(world, placement.position, effective) {
+    material.0 = if available {
         render.placement_valid.clone()
     } else {
         render.placement_invalid.clone()
@@ -30867,9 +30976,13 @@ fn remove_selected_building(
         .ok_or_else(|| format!("building instance {runtime_id} does not exist"))?;
     let definition = building_def_for_archetype(content, &removed.archetype)
         .ok_or_else(|| format!("unknown building archetype {}", removed.archetype))?;
-    let footprint = rotated_footprint(definition.footprint, removed.rotation_quarter_turns);
-    let region = building_region(removed.position, footprint, world)
-        .ok_or_else(|| "removed building lies outside the world".to_owned())?;
+    let region = building_navigation_region(
+        removed.position,
+        definition,
+        removed.rotation_quarter_turns,
+        world,
+    )
+    .ok_or_else(|| "removed building lies outside the world".to_owned())?;
     world
         .navigation
         .set_blocked(region, false)
@@ -31323,6 +31436,43 @@ fn announce_ruler_vote_result(
         runtime.active_kind = active_kind;
         runtime.ruler_before_vote = active_kind.and(simulation.0.current_ruler.clone());
     }
+}
+
+fn citizen_death_announcement(actor: &stream_town_domain::ActorState) -> String {
+    let label = actor
+        .display_name
+        .as_deref()
+        .or(actor.login_name.as_deref())
+        .unwrap_or(actor.id.as_str());
+    format!("{label} has died! They will respawn at the Town Hall in 10 minutes.")
+}
+
+fn announce_citizen_deaths(
+    simulation: Res<SimulationRuntime>,
+    connection: Res<TwitchConnection>,
+    mut runtime: ResMut<CitizenDeathAnnouncementRuntime>,
+) {
+    let currently_dead = simulation
+        .0
+        .actors
+        .values()
+        .filter(|actor| !actor.alive && actor.role.as_str() != "role:enemy")
+        .map(|actor| actor.id.clone())
+        .collect::<BTreeSet<_>>();
+    if !runtime.initialized {
+        runtime.initialized = true;
+        runtime.dead = currently_dead;
+        return;
+    }
+    for actor_id in currently_dead.difference(&runtime.dead) {
+        let Some(actor) = simulation.0.actors.get(actor_id) else {
+            continue;
+        };
+        let message = citizen_death_announcement(actor);
+        info!(actor = %actor.id, announcement = %message, "citizen death announced");
+        send_command_feedback(&connection, message);
+    }
+    runtime.dead = currently_dead;
 }
 
 #[cfg(test)]
@@ -32549,8 +32699,12 @@ fn load_input(
             );
             return;
         }
-        let footprint = rotated_footprint(building.footprint, saved.rotation_quarter_turns);
-        let Some(region) = building_region(saved.position, footprint, &restored_world) else {
+        let Some(region) = building_navigation_region(
+            saved.position,
+            building,
+            saved.rotation_quarter_turns,
+            &restored_world,
+        ) else {
             runtime_console.last_result =
                 format!("Load failed: building {} lies outside the world", saved.id);
             error!(building = %saved.id, "native save building lies outside the world");
@@ -32586,7 +32740,8 @@ fn load_input(
             error!(camp = %camp.id, archetype = %camp.archetype, "native save references an unknown enemy camp");
             return;
         };
-        let Some(region) = building_region(camp.position, archetype.footprint, &restored_world)
+        let Some(region) =
+            enemy_camp_navigation_region(camp.position, archetype.footprint, &restored_world)
         else {
             runtime_console.last_result =
                 format!("Load failed: enemy camp {} lies outside the world", camp.id);
@@ -33866,6 +34021,69 @@ fn rotated_footprint(footprint: [u16; 2], rotation_quarter_turns: i32) -> [u16; 
     }
 }
 
+fn building_uses_full_navigation_footprint(definition: &BuildingDef) -> bool {
+    definition.projectile_shooter.is_some()
+        || definition
+            .role_slots
+            .iter()
+            .any(|slot| is_combat_role(&slot.role) || is_healer_role(&slot.role))
+        || matches!(
+            definition.archetype.as_str(),
+            "archetype:building:wall" | "archetype:building:gate"
+        )
+}
+
+fn inset_navigation_footprint(visual: [u16; 2]) -> ([u16; 2], [u16; 2]) {
+    let footprint = [
+        visual[0].saturating_sub(2).max(1),
+        visual[1].saturating_sub(2).max(1),
+    ];
+    let offset = [
+        visual[0].saturating_sub(footprint[0]) / 2,
+        visual[1].saturating_sub(footprint[1]) / 2,
+    ];
+    (offset, footprint)
+}
+
+fn building_navigation_region(
+    position: GridPos,
+    definition: &BuildingDef,
+    rotation_quarter_turns: i32,
+    world: &GeneratedWorld,
+) -> Option<stream_town_domain::DirtyRegion> {
+    let visual = rotated_footprint(definition.footprint, rotation_quarter_turns);
+    let (offset, footprint) = if building_uses_full_navigation_footprint(definition) {
+        ([0, 0], visual)
+    } else {
+        inset_navigation_footprint(visual)
+    };
+    let origin = GridPos {
+        x: position.x.checked_add(offset[0])?,
+        z: position.z.checked_add(offset[1])?,
+    };
+    building_region(origin, footprint, world)
+}
+
+fn enemy_camp_navigation_region(
+    position: GridPos,
+    visual: [u16; 2],
+    world: &GeneratedWorld,
+) -> Option<stream_town_domain::DirtyRegion> {
+    let footprint = [visual[0].min(3), visual[1].min(3)];
+    let offset = [
+        visual[0].saturating_sub(footprint[0]) / 2,
+        visual[1].saturating_sub(footprint[1]) / 2,
+    ];
+    building_region(
+        GridPos {
+            x: position.x.checked_add(offset[0])?,
+            z: position.z.checked_add(offset[1])?,
+        },
+        footprint,
+        world,
+    )
+}
+
 fn foliage_clearance_regions(
     content: &ContentCatalog,
     simulation: &WorldSimulation,
@@ -33956,6 +34174,50 @@ fn building_site_is_available(
             && (region.min.x..=region.max.x).contains(&resource.position.x)
             && (region.min.z..=region.max.z).contains(&resource.position.z)
     })
+}
+
+fn regions_overlap(
+    left: stream_town_domain::DirtyRegion,
+    right: stream_town_domain::DirtyRegion,
+) -> bool {
+    left.min.x <= right.max.x
+        && left.max.x >= right.min.x
+        && left.min.z <= right.max.z
+        && left.max.z >= right.min.z
+}
+
+fn building_site_is_available_for_simulation(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    position: GridPos,
+    footprint: [u16; 2],
+) -> bool {
+    if !building_site_is_available(world, position, footprint) {
+        return false;
+    }
+    let Some(candidate) = building_region(position, footprint, world) else {
+        return false;
+    };
+    let overlaps_building = simulation.buildings.values().any(|building| {
+        let Some(definition) = building_def_for_archetype(content, &building.archetype) else {
+            return false;
+        };
+        building_region(
+            building.position,
+            rotated_footprint(definition.footprint, building.rotation_quarter_turns),
+            world,
+        )
+        .is_some_and(|occupied| regions_overlap(candidate, occupied))
+    });
+    let overlaps_camp = simulation.enemy_camps.values().any(|camp| {
+        content
+            .archetypes
+            .get(&camp.archetype)
+            .and_then(|archetype| building_region(camp.position, archetype.footprint, world))
+            .is_some_and(|occupied| regions_overlap(candidate, occupied))
+    });
+    !overlaps_building && !overlaps_camp
 }
 
 fn find_building_site(
@@ -34177,7 +34439,9 @@ fn seed_generated_enemy_camps(
             let placement = (0..ENEMY_CAMP_PLACEMENT_ATTEMPTS).find_map(|attempt| {
                 let (origin, centre) =
                     enemy_camp_candidate(config, layer, archetype.footprint, camp_index, attempt)?;
-                let region = building_region(origin, archetype.footprint, world)?;
+                let visual_region = building_region(origin, archetype.footprint, world)?;
+                let navigation_region =
+                    enemy_camp_navigation_region(origin, archetype.footprint, world)?;
                 let centre_distance = grid_distance_squared(
                     centre,
                     GridPos {
@@ -34194,14 +34458,14 @@ fn seed_generated_enemy_camps(
                         let minimum = u128::from(layer.minimum_distance_between_camps_milli_cells);
                         distance < minimum.saturating_mul(minimum)
                     })
-                    || !enemy_camp_region_is_clear(world, region, &excluded)
-                    || !enemy_camp_has_town_route(world, region, &town_reachable)
+                    || !enemy_camp_region_is_clear(world, visual_region, &excluded)
+                    || !enemy_camp_has_town_route(world, navigation_region, &town_reachable)
                 {
                     return None;
                 }
-                Some((origin, centre, region))
+                Some((origin, centre, navigation_region, visual_region))
             });
-            let Some((origin, centre, region)) = placement else {
+            let Some((origin, centre, navigation_region, visual_region)) = placement else {
                 warn!(
                     layer = %layer.id,
                     camp_index,
@@ -34230,11 +34494,11 @@ fn seed_generated_enemy_camps(
             );
             world
                 .navigation
-                .set_blocked(region, true)
+                .set_blocked(navigation_region, true)
                 .expect("validated enemy camp region updates navigation");
             town_reachable = enemy_camp_town_reachable_cells(world, town_hall_approach);
             centres.push(centre);
-            excluded.push(region);
+            excluded.push(visual_region);
             spawned += 1;
         }
     }
@@ -34296,6 +34560,8 @@ fn spawn_enemy_camp(
 
 fn enemy_spawn_position(
     world: &GeneratedWorld,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
     camp: &EnemyCampState,
     spawner: &stream_town_domain::EnemySpawnerDef,
     footprint: [u16; 2],
@@ -34320,6 +34586,32 @@ fn enemy_spawn_position(
         x: u16::try_from(x.clamp(0, i64::from(world.navigation.width() - 1))).unwrap_or(0),
         z: u16::try_from(z.clamp(0, i64::from(world.navigation.height() - 1))).unwrap_or(0),
     };
+    let limit = world.navigation.width().max(world.navigation.height());
+    for radius in 0..limit {
+        for z in desired.z.saturating_sub(radius)
+            ..=desired
+                .z
+                .saturating_add(radius)
+                .min(world.navigation.height() - 1)
+        {
+            for x in desired.x.saturating_sub(radius)
+                ..=desired
+                    .x
+                    .saturating_add(radius)
+                    .min(world.navigation.width() - 1)
+            {
+                let candidate = GridPos { x, z };
+                if world.navigation.is_walkable(candidate)
+                    && nearest_reachable_building_to_town_hall(
+                        content, simulation, world, candidate,
+                    )
+                    .is_some()
+                {
+                    return candidate;
+                }
+            }
+        }
+    }
     nearest_walkable(world, desired)
         .unwrap_or_else(|| nearest_walkable(world, camp.position).unwrap_or(camp.position))
 }
@@ -36025,13 +36317,17 @@ fn process_injected_commands(
                             .saturating_add(rotation_delta);
                     }
                     let definition = &content.0.buildings[&placement.building];
-                    let validity =
-                        if building_placement_is_available(&world.generated, placement, definition)
-                        {
-                            "valid"
-                        } else {
-                            "blocked"
-                        };
+                    let validity = if building_placement_is_available(
+                        &content.0,
+                        &simulation.0,
+                        &world.generated,
+                        placement,
+                        definition,
+                    ) {
+                        "valid"
+                    } else {
+                        "blocked"
+                    };
                     Ok(format!(
                         "{} placer moved to {},{} at {} degrees ({validity})",
                         definition.display_name,
@@ -36106,10 +36402,15 @@ fn process_injected_commands(
                     };
                     let footprint =
                         rotated_footprint(building.footprint, placement.rotation_quarter_turns);
-                    if cells
-                        .iter()
-                        .any(|cell| !building_site_is_available(&world.generated, *cell, footprint))
-                    {
+                    if cells.iter().any(|cell| {
+                        !building_site_is_available_for_simulation(
+                            &content.0,
+                            &simulation.0,
+                            &world.generated,
+                            *cell,
+                            footprint,
+                        )
+                    }) {
                         return Err("building placement is blocked or outside the world".to_owned());
                     }
                     let unit_cost = if simulation.0.building_costs_enabled {
@@ -36131,9 +36432,14 @@ fn process_injected_commands(
                     let regions = cells
                         .iter()
                         .map(|cell| {
-                            building_region(*cell, footprint, &world.generated)
-                                .map(|region| (*cell, region))
-                                .ok_or_else(|| "building placement is outside the world".to_owned())
+                            building_navigation_region(
+                                *cell,
+                                building,
+                                placement.rotation_quarter_turns,
+                                &world.generated,
+                            )
+                            .map(|region| (*cell, region))
+                            .ok_or_else(|| "building placement is outside the world".to_owned())
                         })
                         .collect::<Result<Vec<_>, String>>()?;
                     let mut first = true;
@@ -38370,6 +38676,7 @@ fn cleanup_world(
     entities: Query<Entity, With<WorldEntity>>,
     mut station_targets: ResMut<StationTargetRuntime>,
     mut ruler_announcements: ResMut<RulerVoteAnnouncementRuntime>,
+    mut death_announcements: ResMut<CitizenDeathAnnouncementRuntime>,
     mut night_waves: ResMut<NightEnemyWaveRuntime>,
 ) {
     for entity in &entities {
@@ -38383,6 +38690,7 @@ fn cleanup_world(
     commands.insert_resource(BuildingCommandQueue::default());
     *station_targets = StationTargetRuntime::default();
     *ruler_announcements = RulerVoteAnnouncementRuntime::default();
+    *death_announcements = CitizenDeathAnnouncementRuntime::default();
     *night_waves = NightEnemyWaveRuntime::default();
 }
 
@@ -40675,6 +40983,24 @@ mod tests {
     }
 
     #[test]
+    fn rotating_save_backups_are_not_listed_as_independent_towns() {
+        let directory = tempfile::tempdir().unwrap();
+        let current = directory.path().join("Bean Bay.stbevy");
+        std::fs::write(&current, b"current").unwrap();
+        std::fs::write(directory.path().join("Bean Bay.stbevy.bak"), b"backup 1").unwrap();
+        std::fs::write(directory.path().join("Bean Bay.stbevy.bak.2"), b"backup 2").unwrap();
+        let catalog = TownSaveCatalogRuntime {
+            directory: directory.path().to_path_buf(),
+            legacy_path: directory.path().join("legacy.stbevy"),
+            fixed_path: None,
+            active_town: None,
+        };
+        let entries = catalog.entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, current);
+    }
+
+    #[test]
     fn new_town_dialog_selects_an_independent_save_and_seed_before_consent() {
         let directory = tempfile::tempdir().unwrap();
         let initial = directory.path().join("legacy.stbevy");
@@ -40731,9 +41057,11 @@ mod tests {
         assert_eq!(runtime.wave_index, 2);
         assert!(night_enemy_wave_due(&mut runtime, 2, 0.0));
         assert_eq!(runtime.wave_index, 1);
-        assert_eq!(raid_enemies_per_wave(1), 3);
-        assert_eq!(raid_enemies_per_wave(2), 4);
-        assert_eq!(raid_enemies_per_wave(25), 50);
+        assert_eq!(raid_enemies_per_wave(1), 2);
+        assert_eq!(raid_enemies_per_wave(2), 2);
+        assert_eq!(raid_enemies_per_wave(18), 18);
+        assert_eq!(raid_enemies_per_wave(25), 25);
+        assert_eq!(raid_enemies_per_wave(100), 25);
     }
 
     #[test]
@@ -45300,6 +45628,11 @@ mod tests {
         );
         assert!(!simulation.actors[&citizen].alive);
         assert_eq!(simulation.actors[&citizen].health, 0);
+        simulation.actors.get_mut(&citizen).unwrap().display_name = Some("Ada".to_owned());
+        assert_eq!(
+            citizen_death_announcement(&simulation.actors[&citizen]),
+            "Ada has died! They will respawn at the Town Hall in 10 minutes."
+        );
     }
 
     #[test]
@@ -45371,9 +45704,10 @@ mod tests {
         first_world
             .navigation
             .set_blocked(
-                building_region(
+                building_navigation_region(
                     town_hall.position,
-                    town_hall_definition.footprint,
+                    town_hall_definition,
+                    town_hall.rotation_quarter_turns,
                     &first_world,
                 )
                 .unwrap(),
@@ -45392,9 +45726,29 @@ mod tests {
         let mut centres = Vec::new();
         for camp in first.enemy_camps.values() {
             let archetype = &content.archetypes[&camp.archetype];
-            let region = building_region(camp.position, archetype.footprint, &first_world).unwrap();
+            let region =
+                enemy_camp_navigation_region(camp.position, archetype.footprint, &first_world)
+                    .unwrap();
             assert!(camp.spawn_remaining_seconds.abs() <= f64::EPSILON);
             assert!(!first_world.navigation.is_walkable(region.min));
+            let camp_spawner = archetype.enemy_spawner.as_ref().unwrap();
+            for serial in 0..camp_spawner.spawn_offsets_milli_cells.len() as u64 {
+                let spawn = enemy_spawn_position(
+                    &first_world,
+                    &content,
+                    &first,
+                    camp,
+                    camp_spawner,
+                    archetype.footprint,
+                    serial,
+                );
+                assert!(first_world.navigation.is_walkable(spawn));
+                assert!(!region_contains_grid_position(region, spawn));
+                let (_, approach) =
+                    nearest_reachable_building_to_town_hall(&content, &first, &first_world, spawn)
+                        .expect("camp spawn can reach a town building");
+                assert!(first_world.navigation.find_path(spawn, approach).is_ok());
+            }
             let centre = GridPos {
                 x: camp.position.x + archetype.footprint[0] / 2,
                 z: camp.position.z + archetype.footprint[1] / 2,
@@ -45418,9 +45772,10 @@ mod tests {
         second_world
             .navigation
             .set_blocked(
-                building_region(
+                building_navigation_region(
                     second.buildings[&StableId::new("building:townhall").unwrap()].position,
-                    town_hall_definition.footprint,
+                    town_hall_definition,
+                    0,
                     &second_world,
                 )
                 .unwrap(),
@@ -45440,15 +45795,27 @@ mod tests {
         ensure_town_hall_state(&content, &config, &mut simulation);
         let town_hall = StableId::new("building:townhall").unwrap();
         let hall_position = building_visual_grid(&content, &simulation.buildings[&town_hall]);
-        let enemy_position = nearest_walkable(
-            &world,
-            GridPos {
-                x: hall_position.x.saturating_add(10),
-                z: hall_position.z,
-            },
-        )
-        .unwrap();
         let defender_position = nearest_walkable(&world, hall_position).unwrap();
+        let hall_state = &simulation.buildings[&town_hall];
+        let hall_definition = building_def_for_archetype(&content, &hall_state.archetype).unwrap();
+        let enemy_position = (0..world.navigation.height())
+            .flat_map(|z| (0..world.navigation.width()).map(move |x| GridPos { x, z }))
+            .find(|position| {
+                world.navigation.is_walkable(*position)
+                    && grid_distance_squared(*position, hall_position) >= 100
+                    && within_player_target_search_region(*position, defender_position)
+                    && reachable_building_approach(
+                        &world,
+                        hall_state.position,
+                        rotated_footprint(
+                            hall_definition.footprint,
+                            hall_state.rotation_quarter_turns,
+                        ),
+                        *position,
+                    )
+                    .is_some()
+            })
+            .expect("test enemy can reach the Town Hall from outside attack range");
         let enemy_id = StableId::new("actor:town_assault_test").unwrap();
         let defender_id = StableId::new("npc:town_defender_test").unwrap();
         let goblin =
@@ -45494,6 +45861,118 @@ mod tests {
     }
 
     #[test]
+    fn sealed_town_hall_redirects_enemies_to_the_nearest_reachable_defense() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = GeneratedWorld {
+            seed: 42,
+            generator_version: 1,
+            navigation: stream_town_domain::NavGrid::new(
+                32,
+                9,
+                vec![false; 32 * 9],
+                vec![100; 32 * 9],
+            )
+            .unwrap(),
+            resources: Vec::new(),
+            foliage: Vec::new(),
+            deterministic_hash: String::new(),
+        };
+        world
+            .navigation
+            .set_blocked(
+                stream_town_domain::DirtyRegion {
+                    min: GridPos { x: 20, z: 0 },
+                    max: GridPos { x: 20, z: 8 },
+                },
+                true,
+            )
+            .unwrap();
+        let town_hall_definition = &content.buildings[&StableId::new("building:townhall").unwrap()];
+        let wall_definition = &content.buildings[&StableId::new("building:wall").unwrap()];
+        let town_hall = StableId::new("building:townhall").unwrap();
+        let wall = StableId::new("building:wall_barrier").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        simulation.buildings.insert(
+            town_hall.clone(),
+            BuildingState {
+                id: town_hall,
+                archetype: town_hall_definition.archetype.clone(),
+                position: GridPos { x: 24, z: 3 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: 1_000,
+                complete: true,
+            },
+        );
+        simulation.buildings.insert(
+            wall.clone(),
+            BuildingState {
+                id: wall.clone(),
+                archetype: wall_definition.archetype.clone(),
+                position: GridPos { x: 20, z: 4 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: 1_000,
+                complete: true,
+            },
+        );
+        let enemy = StableId::new("actor:sealed_town_attacker").unwrap();
+        let goblin =
+            archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_Goblin.prefab").unwrap();
+        assert!(simulation.spawn_enemy(enemy.clone(), goblin, GridPos { x: 2, z: 4 }, 100));
+
+        let (goal, approach) = next_agent_goal(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &enemy,
+            GridPos { x: 2, z: 4 },
+        );
+        assert_eq!(goal, AgentGoal::AttackBuilding(wall));
+        assert!(
+            world
+                .navigation
+                .find_path(GridPos { x: 2, z: 4 }, approach)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn civilian_navigation_footprints_leave_space_while_military_footprints_remain_full() {
+        let content = embedded_content();
+        let world = GeneratedWorld {
+            seed: 1,
+            generator_version: 1,
+            navigation: stream_town_domain::NavGrid::new(
+                24,
+                24,
+                vec![false; 24 * 24],
+                vec![100; 24 * 24],
+            )
+            .unwrap(),
+            resources: Vec::new(),
+            foliage: Vec::new(),
+            deterministic_hash: String::new(),
+        };
+        let origin = GridPos { x: 8, z: 8 };
+        let marketplace = &content.buildings[&StableId::new("building:marketplace").unwrap()];
+        let civilian = building_navigation_region(origin, marketplace, 0, &world).unwrap();
+        assert_eq!(civilian.min, GridPos { x: 9, z: 9 });
+        assert_eq!(civilian.max, GridPos { x: 10, z: 10 });
+
+        let barracks = &content.buildings[&StableId::new("building:barracks").unwrap()];
+        let military = building_navigation_region(origin, barracks, 0, &world).unwrap();
+        assert_eq!(military.min, origin);
+        assert_eq!(military.max, GridPos { x: 10, z: 10 });
+
+        let camp = enemy_camp_navigation_region(origin, [7, 6], &world).unwrap();
+        assert_eq!(camp.min, GridPos { x: 10, z: 9 });
+        assert_eq!(camp.max, GridPos { x: 12, z: 11 });
+    }
+
+    #[test]
     fn sustained_camp_encounter_reaches_combat_and_is_deterministic() {
         fn run_encounter() -> (u32, i32, i32, i32, u32, u32, bool, bool) {
             let config = GameConfig::default();
@@ -45508,8 +45987,13 @@ mod tests {
             world
                 .navigation
                 .set_blocked(
-                    building_region(hall_state.position, hall_definition.footprint, &world)
-                        .unwrap(),
+                    building_navigation_region(
+                        hall_state.position,
+                        hall_definition,
+                        hall_state.rotation_quarter_turns,
+                        &world,
+                    )
+                    .unwrap(),
                     true,
                 )
                 .unwrap();
@@ -45521,8 +46005,15 @@ mod tests {
             let enemy_archetype =
                 archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_Goblin.prefab")
                     .unwrap();
-            let enemy_position =
-                enemy_spawn_position(&world, &camp, spawner, camp_archetype.footprint, 0);
+            let enemy_position = enemy_spawn_position(
+                &world,
+                &content,
+                &simulation,
+                &camp,
+                spawner,
+                camp_archetype.footprint,
+                0,
+            );
             let enemy_id = StableId::new("actor:sustained_enemy").unwrap();
             let enemy_health = content.archetypes[&enemy_archetype]
                 .health
@@ -45879,8 +46370,19 @@ mod tests {
 
         let enemy_id = StableId::new("actor:sensor_goblin").unwrap();
         let attacker_id = StableId::new("npc:sensor_attacker").unwrap();
-        let enemy_position = GridPos { x: 20, z: 20 };
-        let attacker_position = GridPos { x: 25, z: 20 };
+        let enemy_position = (0..world.navigation.height())
+            .flat_map(|z| (0..world.navigation.width()).map(move |x| GridPos { x, z }))
+            .find(|position| world.navigation.is_walkable(*position))
+            .expect("generated world has a walkable enemy position");
+        let attacker_position = (0..world.navigation.height())
+            .flat_map(|z| (0..world.navigation.width()).map(move |x| GridPos { x, z }))
+            .find(|position| {
+                world.navigation.is_walkable(*position)
+                    && grid_distance_squared(*position, enemy_position) > 16
+                    && grid_distance_squared(*position, enemy_position) <= 36
+                    && enemy_navigation_can_reach(&world, enemy_position, *position)
+            })
+            .expect("generated world has a connected retaliation target outside sensor range");
         let mut simulation = WorldSimulation::new(world.seed);
         assert!(simulation.spawn_enemy(enemy_id.clone(), goblin_archetype, enemy_position, 10,));
         assert!(simulation.join_player(attacker_id.clone(), attacker_position));
@@ -48368,6 +48870,7 @@ mod tests {
             &render,
             &placement,
             definition,
+            true,
             &mut transform,
             &mut material,
         );
@@ -48384,6 +48887,7 @@ mod tests {
             &render,
             &placement,
             definition,
+            false,
             &mut transform,
             &mut material,
         );
@@ -48437,9 +48941,11 @@ mod tests {
             placement_invalid: invalid,
             ..default()
         };
+        let simulation = WorldSimulation::new(world.seed);
         let placers = BTreeMap::from([(owner.clone(), placement)]);
         assert_eq!(
-            placement_ghost_material(&content, &world, &placers, &render, &owner).id(),
+            placement_ghost_material(&content, &simulation, &world, &placers, &render, &owner,)
+                .id(),
             valid.id()
         );
     }

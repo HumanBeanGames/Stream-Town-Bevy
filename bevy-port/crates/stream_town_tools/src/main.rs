@@ -8510,7 +8510,7 @@ fn launch_runtime_game(state: &mut ToolState) -> anyhow::Result<()> {
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut command = Command::new("cargo");
     command
-        .args(["run", "-p", "stream_town_game"])
+        .args(["run", "--release", "-p", "stream_town_game"])
         .current_dir(workspace)
         .env(
             "STREAM_TOWN_RUNTIME_CONSOLE_DIR",
