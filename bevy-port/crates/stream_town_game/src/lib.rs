@@ -3786,6 +3786,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<RoleActionAudioCache>()
             .init_resource::<WorldAudioRuntime>()
             .init_resource::<tidal_music::TidalMusicRuntime>()
+            .init_resource::<tidal_music::IntensitySongInput>()
             .init_resource::<NativeAnimationCache>()
             .init_resource::<ConvertedAnimationCache>()
             .init_resource::<GateAnimationCache>()
@@ -4197,7 +4198,10 @@ impl Plugin for StreamTownGamePlugin {
                 Update,
                 (
                     drive_world_audio.after(update_environment_presentation),
-                    tidal_music::drive_tidal_music.after(drive_world_audio),
+                    tidal_music::update_enemy_music_intensity.after(move_agents),
+                    tidal_music::drive_tidal_music
+                        .after(drive_world_audio)
+                        .after(tidal_music::update_enemy_music_intensity),
                     drive_seagull_flight.after(tidal_music::drive_tidal_music),
                 )
                     .in_set(GameplaySimulationSet)

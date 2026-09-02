@@ -950,13 +950,17 @@ but correctly has zero pose influence. The ten converted `PlayRoleActionAudio`
 events dispatch once per animation cycle from Bevy's monotonic clip clock and play
 short deterministic procedural cues; their no-sample provenance is documented in
 [`assets/audio/PROVENANCE.md`](assets/audio/PROVENANCE.md). The same provenance
-record also covers the synthesized ambience. Seasonal music now comes directly
-from the revision-pinned public native Rust
+record also covers the synthesized ambience. Music now comes directly from the
+revision-pinned public native Rust
 [`bevy_tidal`](https://github.com/HumanBeanGames/bevy-tidal) library and the
-eight authored expressions in
-[`assets/music/patterns`](assets/music/patterns); the renderer runs in-process
-without TidalCycles, SuperCollider, or a sidecar and applies the player's
-master/music gain to the active season/day-night pattern. The reachable town
+downstream-owned intensity score in `tidal_music.rs`; the renderer runs
+in-process without TidalCycles, SuperCollider, or a sidecar. Living enemies
+inside the town camera's viewport feed a frame-rate-independent 15-second
+exponential average into the score's externally driven intensity field, which
+raises its tempo, rhythmic density, harmonic tension, brightness, and gain up
+to the authored 12-enemy saturation point. Native score updates are rate-limited
+to prevent continuously restarting its pattern while the average changes, and
+the player's master/music gain remains a live routing control. The reachable town
 seagull now uses its converted GLB, exact 32-second cross-town flight contract,
 three generated calls on the source's random 1–5 second cadence, and authored
 ambience rolloff. Its converted +X nose axis receives the handedness-corrected
