@@ -71,6 +71,7 @@ cargo run -p xtask -- package-windows --output dist
 
 `scripts\launch-game.ps1` is the normal local game launcher and uses Cargo's
 optimized release profile. Pass `-Debug` only when debugging the runtime. The
+launcher supplies the repository-managed FFmpeg runtime to the game. The
 Windows packaging task also always rebuilds both shipped executables with
 `--release`; it never packages `target\debug` binaries.
 
@@ -82,7 +83,9 @@ binary, or `-NoLaunch` to validate selection and compilation without starting
 the game. The resumed process still retains the complete Load Game catalog and
 starts offline; going live remains an explicit operator action. If a game is
 already running, the script refuses to replace it so the town can be exited and
-saved normally first.
+saved normally first. Redeployment also stages the complete native runtime next
+to the executable, so the resulting `target\release\stream_town_game.exe` can be
+started directly without missing FFmpeg DLL errors.
 
 If the game panics, it writes the panic message, thread, and captured backtrace
 to `.stream-town/crashes/crash-<timestamp>.log` before forwarding to Rust's

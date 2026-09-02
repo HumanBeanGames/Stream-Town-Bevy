@@ -64,7 +64,19 @@ try {
         throw "The linked FFmpeg runtime is missing from: $nativeRuntime"
     }
 
-    Write-Host "Redeploy ready: $($selectedSave.BaseName) ($profile)"
+    $nativeLibraries = @(Get-ChildItem -LiteralPath $nativeRuntime -File -Filter '*.dll')
+    if ($nativeLibraries.Count -eq 0) {
+        throw "No native runtime libraries were found in: $nativeRuntime"
+    }
+    $executableDirectory = Split-Path -Parent $executable
+    foreach ($library in $nativeLibraries) {
+        Copy-Item `
+            -LiteralPath $library.FullName `
+            -Destination (Join-Path $executableDirectory $library.Name) `
+            -Force
+    }
+
+    Write-Host "Redeploy ready: $($selectedSave.BaseName) ($profile); staged $($nativeLibraries.Count) native runtime libraries."
     if ($NoLaunch) {
         return
     }
