@@ -57,6 +57,12 @@ try {
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
         throw "The $profile game executable does not exist: $executable"
     }
+    $nativeRuntime = Join-Path $workspaceRoot 'vcpkg_installed\x64-windows\bin'
+    $ffmpegRuntimePresent = (Test-Path -LiteralPath $nativeRuntime -PathType Container) -and
+        (@(Get-ChildItem -LiteralPath $nativeRuntime -File -Filter 'avcodec-*.dll').Count -gt 0)
+    if (-not $ffmpegRuntimePresent) {
+        throw "The linked FFmpeg runtime is missing from: $nativeRuntime"
+    }
 
     Write-Host "Redeploy ready: $($selectedSave.BaseName) ($profile)"
     if ($NoLaunch) {
@@ -67,8 +73,10 @@ try {
         'STREAM_TOWN_AUTO_RESUME_PATH',
         [EnvironmentVariableTarget]::Process
     )
+    $previousProcessPath = $env:PATH
     try {
         $env:STREAM_TOWN_AUTO_RESUME_PATH = $selectedSave.FullName
+        $env:PATH = "$nativeRuntime;$previousProcessPath"
         $game = Start-Process `
             -FilePath $executable `
             -WorkingDirectory $workspaceRoot `
@@ -81,6 +89,7 @@ try {
         else {
             $env:STREAM_TOWN_AUTO_RESUME_PATH = $previousResumePath
         }
+        $env:PATH = $previousProcessPath
     }
 
     Write-Host "Started $($selectedSave.BaseName) with process ID $($game.Id)."
