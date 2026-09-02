@@ -82,6 +82,7 @@ const OPERATOR_WINDOW_HEIGHT: u32 = 680;
 const NATIVE_GAME_AUDIO_QUEUE_CAPACITY: usize = 64;
 const OFFLINE_FRAME_HOLD: Duration = Duration::from_secs(1);
 const BROADCAST_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
+const BROADCAST_IO_TIMEOUT_MICROSECONDS: &str = "3000000";
 const MAX_STREAM_READBACKS_IN_FLIGHT: usize = 4;
 const MAX_STREAM_COMPLETED_READBACKS: usize = MAX_STREAM_READBACKS_IN_FLIGHT;
 const STREAM_READBACK_TIMEOUT: Duration = Duration::from_secs(2);
@@ -432,6 +433,8 @@ pub struct DirectBroadcastSnapshot {
     pub maximum_capture_ms: f64,
     pub average_encode_ms: f64,
     pub maximum_encode_ms: f64,
+    pub average_mux_write_ms: f64,
+    pub maximum_mux_write_ms: f64,
 }
 
 #[derive(Resource)]
@@ -690,6 +693,11 @@ impl DirectBroadcastRuntime {
                 metrics.encoded_video,
             ),
             maximum_encode_ms: micros_to_milliseconds(metrics.maximum_video_encode_micros),
+            average_mux_write_ms: average_milliseconds(
+                metrics.mux_write_micros,
+                metrics.mux_write_samples,
+            ),
+            maximum_mux_write_ms: micros_to_milliseconds(metrics.maximum_mux_write_micros),
         }
     }
 
@@ -1171,7 +1179,7 @@ fn poll_direct_broadcast_worker(
                 append_direct_broadcast_diagnostic(
                     "WARN",
                     &format!(
-                        "event=session_reconnecting cause={error:?} captured_video={} encoded_video={} video_drops={} capture_replacements={} cadence_skips={} encoded_audio={} audio_drops={} audio_queue={} maximum_capture_ms={:.2} maximum_encode_ms={:.2}",
+                        "event=session_reconnecting cause={error:?} captured_video={} encoded_video={} video_drops={} capture_replacements={} cadence_skips={} encoded_audio={} audio_drops={} audio_queue={} maximum_capture_ms={:.2} maximum_encode_ms={:.2} maximum_mux_write_ms={:.2}",
                         metrics.captured_video,
                         metrics.encoded_video,
                         metrics.dropped_video,
@@ -1182,6 +1190,7 @@ fn poll_direct_broadcast_worker(
                         metrics.queued_audio,
                         micros_to_milliseconds(metrics.maximum_capture_micros),
                         micros_to_milliseconds(metrics.maximum_video_encode_micros),
+                        micros_to_milliseconds(metrics.maximum_mux_write_micros),
                     ),
                 );
             }
@@ -1380,6 +1389,14 @@ fn report_stream_health(
             .encoded_video
             .saturating_sub(runtime.health_reported_metrics.encoded_video),
     );
+    let average_mux_write_ms = average_milliseconds(
+        metrics
+            .mux_write_micros
+            .saturating_sub(runtime.health_reported_metrics.mux_write_micros),
+        metrics
+            .mux_write_samples
+            .saturating_sub(runtime.health_reported_metrics.mux_write_samples),
+    );
     runtime.rolling_captured_video_fps = captured_fps;
     runtime.rolling_encoded_video_fps = encoded_fps;
     let minimum_healthy_fps = f64::from(target_fps) * 0.9;
@@ -1391,9 +1408,10 @@ fn report_stream_health(
     append_direct_broadcast_diagnostic(
         if unhealthy { "WARN" } else { "INFO" },
         &format!(
-            "event=health target_fps={target_fps} captured_fps={captured_fps:.2} encoded_fps={encoded_fps:.2} audio_fps={audio_fps:.2} video_drops={new_video_drops} capture_replacements={new_video_replacements} cadence_skips={new_video_skips} audio_drops={new_audio_drops} audio_queue={} readbacks_in_flight={readbacks_in_flight} readbacks_completed={readbacks_completed} average_encode_ms={average_encode_ms:.2} maximum_encode_ms={:.2}",
+            "event=health target_fps={target_fps} captured_fps={captured_fps:.2} encoded_fps={encoded_fps:.2} audio_fps={audio_fps:.2} video_drops={new_video_drops} capture_replacements={new_video_replacements} cadence_skips={new_video_skips} audio_drops={new_audio_drops} audio_queue={} readbacks_in_flight={readbacks_in_flight} readbacks_completed={readbacks_completed} average_encode_ms={average_encode_ms:.2} maximum_encode_ms={:.2} average_mux_write_ms={average_mux_write_ms:.2} maximum_mux_write_ms={:.2}",
             metrics.queued_audio,
             micros_to_milliseconds(metrics.maximum_video_encode_micros),
+            micros_to_milliseconds(metrics.maximum_mux_write_micros),
         ),
     );
     if unhealthy {
@@ -1411,6 +1429,8 @@ fn report_stream_health(
             readbacks_completed,
             average_encode_ms,
             maximum_encode_ms = micros_to_milliseconds(metrics.maximum_video_encode_micros),
+            average_mux_write_ms,
+            maximum_mux_write_ms = micros_to_milliseconds(metrics.maximum_mux_write_micros),
             "direct Twitch broadcast health is below target"
         );
     } else {
@@ -1427,6 +1447,7 @@ fn report_stream_health(
             readbacks_in_flight,
             readbacks_completed,
             average_encode_ms,
+            average_mux_write_ms,
             "direct Twitch broadcast health"
         );
     }
@@ -2384,7 +2405,7 @@ fn update_stream_operator_info(
         .unwrap_or("No Twitch public-status check is active");
     let enemy_status = stream_operator_enemy_status(&config.0, simulation.as_deref());
     **text = format!(
-        "Status: {:?}\nTwitch check: {}\nEncoder: {}\n{}\nStream motion: {:.1} FPS\nOutput cadence: {:.1} FPS\nRecent capture replacements: {} · Output cadence skips: {}\nRejected video frames: {} · Audio drops: {}\nEncode latency: {:.2} ms average / {:.2} ms maximum\n{}\nDrop log: {}",
+        "Status: {:?}\nTwitch check: {}\nEncoder: {}\n{}\nStream motion: {:.1} FPS\nOutput cadence: {:.1} FPS\nRecent capture replacements: {} · Output cadence skips: {}\nRejected video frames: {} · Audio drops: {}\nEncode latency: {:.2} ms average / {:.2} ms maximum\nNetwork/mux write: {:.2} ms average / {:.2} ms maximum\n{}\nDrop log: {}",
         snapshot.phase,
         twitch_status,
         snapshot.encoder.as_deref().unwrap_or("starting"),
@@ -2397,6 +2418,8 @@ fn update_stream_operator_info(
         snapshot.dropped_audio_frames,
         snapshot.average_encode_ms,
         snapshot.maximum_encode_ms,
+        snapshot.average_mux_write_ms,
+        snapshot.maximum_mux_write_ms,
         enemy_status,
         DIRECT_BROADCAST_LOG_PATH,
     );
@@ -3359,6 +3382,9 @@ struct BroadcastMetrics {
     maximum_capture_micros: AtomicU64,
     video_encode_micros: AtomicU64,
     maximum_video_encode_micros: AtomicU64,
+    mux_write_samples: AtomicU64,
+    mux_write_micros: AtomicU64,
+    maximum_mux_write_micros: AtomicU64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -3377,6 +3403,9 @@ struct BroadcastMetricsSnapshot {
     maximum_capture_micros: u64,
     video_encode_micros: u64,
     maximum_video_encode_micros: u64,
+    mux_write_samples: u64,
+    mux_write_micros: u64,
+    maximum_mux_write_micros: u64,
 }
 
 impl BroadcastMetrics {
@@ -3396,6 +3425,9 @@ impl BroadcastMetrics {
             maximum_capture_micros: self.maximum_capture_micros.load(Ordering::Relaxed),
             video_encode_micros: self.video_encode_micros.load(Ordering::Relaxed),
             maximum_video_encode_micros: self.maximum_video_encode_micros.load(Ordering::Relaxed),
+            mux_write_samples: self.mux_write_samples.load(Ordering::Relaxed),
+            mux_write_micros: self.mux_write_micros.load(Ordering::Relaxed),
+            maximum_mux_write_micros: self.maximum_mux_write_micros.load(Ordering::Relaxed),
         }
     }
 
@@ -3412,6 +3444,14 @@ impl BroadcastMetrics {
         self.video_encode_micros
             .fetch_add(micros, Ordering::Relaxed);
         self.maximum_video_encode_micros
+            .fetch_max(micros, Ordering::Relaxed);
+    }
+
+    fn observe_mux_write_latency(&self, duration: Duration) {
+        let micros = duration_as_micros(duration);
+        self.mux_write_samples.fetch_add(1, Ordering::Relaxed);
+        self.mux_write_micros.fetch_add(micros, Ordering::Relaxed);
+        self.maximum_mux_write_micros
             .fetch_max(micros, Ordering::Relaxed);
     }
 }
@@ -4116,9 +4156,13 @@ fn encode_broadcast_session(
     ffmpeg::init().context("could not initialize the linked FFmpeg libraries")?;
     ffmpeg::log::set_level(ffmpeg::log::Level::Quiet);
     let (mut encoder, encoder_selection) = BroadcastEncoder::open(target, config)?;
+    let live_network_output =
+        target.url.starts_with("rtmp://") || target.url.starts_with("rtmps://");
     video_consumer_ready.store(true, Ordering::Relaxed);
     if discard_pending_audio(receiver, metrics) {
-        encoder.finish()?;
+        if !live_network_output {
+            encoder.finish(metrics)?;
+        }
         return Ok(SessionEnd::Stopped);
     }
     let mut encoder_selection = Some(encoder_selection);
@@ -4130,13 +4174,17 @@ fn encode_broadcast_session(
     }
     loop {
         if stop.load(Ordering::Relaxed) {
-            encoder.finish()?;
+            if !live_network_output {
+                encoder.finish(metrics)?;
+            }
             return Ok(SessionEnd::Stopped);
         }
         if graceful_stop.load(Ordering::Acquire) && graceful_deadline.is_none() {
             latest_video = take_latest_video(video_mailbox).or(latest_video);
             if latest_video.is_none() {
-                encoder.finish()?;
+                if !live_network_output {
+                    encoder.finish(metrics)?;
+                }
                 return Ok(SessionEnd::Stopped);
             }
             cadence.start(Instant::now());
@@ -4158,7 +4206,7 @@ fn encode_broadcast_session(
                     .fetch_add(tick.skipped, Ordering::Relaxed);
             }
             let encode_started = Instant::now();
-            let published_packets = encoder.encode_video(video, tick.pts)?;
+            let published_packets = encoder.encode_video(video, tick.pts, metrics)?;
             metrics.observe_video_encode_latency(encode_started.elapsed());
             metrics.encoded_video.fetch_add(1, Ordering::Relaxed);
             if published_packets > 0
@@ -4173,7 +4221,13 @@ fn encode_broadcast_session(
             continue;
         }
         if graceful_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            encoder.finish()?;
+            // A live FLV stream has no useful seekable trailer. The offline
+            // card has already been muxed for a full second, so abandoning the
+            // RTMP output here avoids several serial network flushes on a dead
+            // ingest. File diagnostics still need their trailer.
+            if !live_network_output {
+                encoder.finish(metrics)?;
+            }
             return Ok(SessionEnd::Stopped);
         }
         match receiver.recv_timeout(cadence.receive_timeout(Instant::now())) {
@@ -4184,17 +4238,23 @@ fn encode_broadcast_session(
                 // is still pending, then keeps audio continuous while the
                 // cadence worker repeats the latest image through game stalls.
                 if latest_video.is_some() {
-                    encoder.encode_audio(audio)?;
+                    encoder.encode_audio(audio, metrics)?;
                     metrics.encoded_audio.fetch_add(1, Ordering::Relaxed);
                 }
             }
             Ok(AudioInput::Stop) => {
-                encoder.finish()?;
-                return Ok(SessionEnd::Stopped);
+                if graceful_deadline.is_none() {
+                    if !live_network_output {
+                        encoder.finish(metrics)?;
+                    }
+                    return Ok(SessionEnd::Stopped);
+                }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                encoder.finish()?;
+                if !live_network_output {
+                    encoder.finish(metrics)?;
+                }
                 return Ok(SessionEnd::InputClosed);
             }
         }
@@ -4227,7 +4287,7 @@ impl BroadcastEncoder {
         let mut output_options = Dictionary::new();
         // FFmpeg protocol timeout is in microseconds. Keep a dead ingest from
         // pinning the encoder worker indefinitely; reconnect owns the retry.
-        output_options.set("rw_timeout", "15000000");
+        output_options.set("rw_timeout", BROADCAST_IO_TIMEOUT_MICROSECONDS);
         if target.url.starts_with("rtmp://") || target.url.starts_with("rtmps://") {
             // Publish as a live source and flush packets promptly. The default
             // protocol buffering is useful for playback clients, but it adds
@@ -4305,7 +4365,12 @@ impl BroadcastEncoder {
         ))
     }
 
-    fn encode_video(&mut self, video: &VideoFrame, pts: i64) -> Result<u64> {
+    fn encode_video(
+        &mut self,
+        video: &VideoFrame,
+        pts: i64,
+        metrics: &BroadcastMetrics,
+    ) -> Result<u64> {
         let source_format = video.pixel_format.ffmpeg();
         let mut source = frame::Video::new(source_format, video.width, video.height);
         copy_packed_video_frame(video, &mut source)?;
@@ -4317,7 +4382,7 @@ impl BroadcastEncoder {
             self.video
                 .send_frame(&source)
                 .context("H.264 encoder rejected a packed frame")?;
-            return self.drain_video();
+            return self.drain_video(metrics);
         }
         if self
             .scaler
@@ -4349,10 +4414,10 @@ impl BroadcastEncoder {
         self.video
             .send_frame(&converted)
             .context("H.264 encoder rejected a frame")?;
-        self.drain_video()
+        self.drain_video(metrics)
     }
 
-    fn encode_audio(&mut self, audio: AudioFrame) -> Result<()> {
+    fn encode_audio(&mut self, audio: AudioFrame, metrics: &BroadcastMetrics) -> Result<()> {
         if audio.samples.len() != AUDIO_FRAME_SAMPLES * AUDIO_CHANNELS {
             bail!("WASAPI returned an incomplete audio frame");
         }
@@ -4380,10 +4445,10 @@ impl BroadcastEncoder {
         self.audio
             .send_frame(&converted)
             .context("AAC encoder rejected an audio frame")?;
-        self.drain_audio()
+        self.drain_audio(metrics)
     }
 
-    fn drain_video(&mut self) -> Result<u64> {
+    fn drain_video(&mut self, metrics: &BroadcastMetrics) -> Result<u64> {
         let mut packet = Packet::empty();
         let mut published = 0_u64;
         while self.video.receive_packet(&mut packet).is_ok() {
@@ -4392,9 +4457,10 @@ impl BroadcastEncoder {
             let pts = packet.pts();
             let dts = packet.dts();
             let duration = packet.duration();
-            packet
-                .write_interleaved(&mut self.output)
-                .with_context(|| {
+            let publish_started = Instant::now();
+            let publish_result = packet.write_interleaved(&mut self.output);
+            metrics.observe_mux_write_latency(publish_started.elapsed());
+            publish_result.with_context(|| {
                     format!(
                         "could not publish an H.264 packet to Twitch (pts={pts:?}, dts={dts:?}, duration={duration})"
                     )
@@ -4404,26 +4470,28 @@ impl BroadcastEncoder {
         Ok(published)
     }
 
-    fn drain_audio(&mut self) -> Result<()> {
+    fn drain_audio(&mut self, metrics: &BroadcastMetrics) -> Result<()> {
         let mut packet = Packet::empty();
         while self.audio.receive_packet(&mut packet).is_ok() {
             packet.set_stream(self.audio_stream);
             packet.rescale_ts(self.audio.time_base(), self.audio_time_base);
-            packet
-                .write_interleaved(&mut self.output)
-                .context("could not publish an AAC packet to Twitch")?;
+            let publish_started = Instant::now();
+            let publish_result = packet.write_interleaved(&mut self.output);
+            metrics.observe_mux_write_latency(publish_started.elapsed());
+            publish_result.context("could not publish an AAC packet to Twitch")?;
         }
         Ok(())
     }
 
-    fn finish(&mut self) -> Result<()> {
+    fn finish(&mut self, metrics: &BroadcastMetrics) -> Result<()> {
         self.video.send_eof().ok();
-        self.drain_video()?;
+        self.drain_video(metrics)?;
         self.audio.send_eof().ok();
-        self.drain_audio()?;
-        self.output
-            .write_trailer()
-            .context("could not finish the Twitch FLV stream")
+        self.drain_audio(metrics)?;
+        let publish_started = Instant::now();
+        let finished = self.output.write_trailer();
+        metrics.observe_mux_write_latency(publish_started.elapsed());
+        finished.context("could not finish the Twitch FLV stream")
     }
 }
 
@@ -4661,6 +4729,7 @@ pub fn inspect_broadcast_prerequisites(config: &BroadcastConfig) -> Result<Broad
     };
     let (mut encoder, selected_encoder) = BroadcastEncoder::open(&target, config)
         .context("the configured H.264/AAC encoder could not open for a local FLV test")?;
+    let metrics = BroadcastMetrics::default();
     let rgba = vec![
         0_u8;
         usize::from(config.width)
@@ -4676,14 +4745,18 @@ pub fn inspect_broadcast_prerequisites(config: &BroadcastConfig) -> Result<Broad
                 pixels: rgba.clone(),
             },
             pts,
+            &metrics,
         )?;
-        encoder.encode_audio(AudioFrame {
-            pts: pts * i64::try_from(AUDIO_FRAME_SAMPLES).unwrap_or(i64::MAX),
-            samples: vec![0.0; AUDIO_FRAME_SAMPLES * AUDIO_CHANNELS],
-        })?;
+        encoder.encode_audio(
+            AudioFrame {
+                pts: pts * i64::try_from(AUDIO_FRAME_SAMPLES).unwrap_or(i64::MAX),
+                samples: vec![0.0; AUDIO_FRAME_SAMPLES * AUDIO_CHANNELS],
+            },
+            &metrics,
+        )?;
     }
     encoder
-        .finish()
+        .finish(&metrics)
         .context("the configured encoder could not finish a local FLV test")?;
     let encoded_bytes = std::fs::metadata(&output)
         .with_context(|| format!("local encoder test did not create {}", output.display()))?
@@ -5561,11 +5634,14 @@ mod tests {
             ],
         };
         let frame_count = 120_u32;
+        let metrics = BroadcastMetrics::default();
         let started = Instant::now();
         for pts in 0..frame_count {
-            encoder.encode_video(&frame, i64::from(pts)).unwrap();
+            encoder
+                .encode_video(&frame, i64::from(pts), &metrics)
+                .unwrap();
         }
-        encoder.finish().unwrap();
+        encoder.finish(&metrics).unwrap();
         if selected.name == "h264_amf" {
             let encoded_bytes = std::fs::metadata(&output).unwrap().len();
             let expected_bytes =
@@ -5632,6 +5708,7 @@ mod tests {
             .collect::<Vec<_>>();
         let mut audio_pts = 0_i64;
         let mut published_video_packets = 0_u64;
+        let metrics = BroadcastMetrics::default();
         for video_pts in 0..15_i64 {
             published_video_packets = published_video_packets.saturating_add(
                 encoder
@@ -5643,15 +5720,19 @@ mod tests {
                             pixels: rgba.clone(),
                         },
                         video_pts,
+                        &metrics,
                     )
                     .unwrap(),
             );
             let samples = vec![0.0; AUDIO_FRAME_SAMPLES * AUDIO_CHANNELS];
             encoder
-                .encode_audio(AudioFrame {
-                    pts: audio_pts,
-                    samples,
-                })
+                .encode_audio(
+                    AudioFrame {
+                        pts: audio_pts,
+                        samples,
+                    },
+                    &metrics,
+                )
                 .unwrap();
             audio_pts += i64::try_from(AUDIO_FRAME_SAMPLES).unwrap();
         }
@@ -5659,7 +5740,7 @@ mod tests {
             published_video_packets > 0,
             "the live handshake requires a video packet before verification begins"
         );
-        encoder.finish().unwrap();
+        encoder.finish(&metrics).unwrap();
         assert!(std::fs::metadata(output).unwrap().len() > 1_024);
     }
 }

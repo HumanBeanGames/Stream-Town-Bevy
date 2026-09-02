@@ -329,7 +329,12 @@ compatible Radeon GPU, falls back to forced-hardware Windows Media Foundation,
 and uses OpenH264 only as the software fallback. AMF uses CBR, zero B-frames,
 and its low-latency path; RTMP uses live, no-delay, immediate-flush output so a
 delayed packet cannot periodically stall the ingest connection. A mux failure
-records the failed packet timestamps in the redacted diagnostics log. The
+records the failed packet timestamps in the redacted diagnostics log. Packet
+writes have independent average/maximum latency telemetry and a three-second
+network timeout, separating an ingest stall from hardware encoding cost. Ending
+a live stream publishes the offline card for one second and then closes RTMP
+without attempting a seekable FLV trailer; local diagnostic files retain normal
+trailer finalization. The
 independently stored broadcaster token and fetched stream key are always redacted.
 The encoder worker owns the constant-rate video clock and repeats the latest
 completed GPU frame if the game thread stalls. Audio starts against the first
@@ -576,7 +581,13 @@ coordinates are read to generate them.
 
 The clock retains Unity's shipping 3,600-second day, 66.6% daylight boundary,
 and 100-second dusk/dawn transitions; its 10/5 day/night light values drive sun,
-ambient, sky, and building emission. Normal enemies therefore first appear at
+ambient, sky, and building emission. Night point lights use a fixed reusable
+pool rather than growing with the town or battle: the camera-nearest 32 living
+citizens, 20 completed non-wall buildings, and 12 projectiles may illuminate at
+once. Wall/gate runs and off-camera candidates retain gameplay state without
+creating overlapping whole-map light work. Each source's stable identity also
+assigns a deterministic 0–10 second dusk/dawn delay, spreading activation and
+deactivation without save-state randomness. Normal enemies therefore first appear at
 night, roughly 39 minutes 58 seconds into an unaccelerated first day. Every camp
 begins with Unity's already-full spawn timer, then applies the authored
 three-second cadence, day/player population cap, weighted
@@ -700,7 +711,11 @@ and foliage presentation derives a second deterministic offset from the world
 seed, stable generated identity, source location, and source sub-cell position.
 Each axis is constrained to the central 50% of its navigation cell, so the
 result is visibly distributed without drifting into neighboring gameplay cells,
-using entity IDs, or reading legacy-save coordinates. The converted
+using entity IDs, or reading legacy-save coordinates. Presentation suppresses
+land foliage below the deliberately raised visible water surface and grounds
+each loaded GLB's transformed bounds to the unchanged generated terrain height.
+This corrects underwater grass and imported off-ground pivots without modifying
+Unity-parity generation records. The converted
 grass, flower, seaweed, and coral primitives use Bevy's native mesh/material
 instancing: the 16,581 shipping records collapse to 12 maximum GPU mesh batches
 and 281 deterministic 32-cell spatial audit groups without duplicating geometry.
@@ -964,9 +979,10 @@ in-process without TidalCycles, SuperCollider, or a sidecar. Living enemies
 inside the town camera's viewport feed a frame-rate-independent 15-second
 exponential average into the score's externally driven intensity field, which
 raises its tempo, rhythmic density, harmonic tension, brightness, and gain up
-to the authored 12-enemy saturation point. Native score updates are rate-limited
-to prevent continuously restarting its pattern while the average changes, and
-the player's master/music gain remains a live routing control. The reachable town
+to the authored 12-enemy saturation point. Native score updates are applied only
+at the end of the currently playing Tidal cycle, so the 15-second average cannot
+rewrite a pattern in the middle of a cycle. The player's master/music gain
+remains a live routing control. The reachable town
 seagull now uses its converted GLB, exact 32-second cross-town flight contract,
 three generated calls on the source's random 1–5 second cadence, and authored
 ambience rolloff. Its converted +X nose axis receives the handedness-corrected

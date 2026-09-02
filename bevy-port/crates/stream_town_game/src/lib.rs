@@ -93,7 +93,7 @@ use stream_town_domain::{
     CURRENT_RUNTIME_CONSOLE_SCHEMA, CURRENT_WORLD_SNAPSHOT_SCHEMA, CameraAction, CameraDirection,
     ChatCommand, ChimneySmokeDef, ContentCatalog, CustomizationKind, DAYS_PER_SEASON, DisplayMode,
     EnemyCampGenerationDef, EnemyCampState, EnemyModelSetDef, EnemyRunAnimation, FireworksVfxDef,
-    GameConfig, GeneratedFoliage, GeneratedWorld, GridPos, HealingBurstVfxDef,
+    FoliageHabitat, GameConfig, GeneratedFoliage, GeneratedWorld, GridPos, HealingBurstVfxDef,
     HealingChannelVfxDef, LegacyMigrationMetadata, MainMenuSceneReference,
     MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode, NativeSaveStore,
     ObjectiveEvent, ObjectiveKind, PetDef, PetModelDef, PlayerSettings, PlayerSettingsStore,
@@ -108,7 +108,13 @@ use stream_town_domain::{
 
 const MAX_TOWN_GOALS: usize = 2;
 const AUTOMATIC_PLAYER_RESPAWN_SECONDS: f64 = 10.0 * 60.0;
-const PREWARMED_PROJECTILE_NIGHT_LIGHTS: usize = 32;
+const MAX_ACTIVE_CITIZEN_NIGHT_LIGHTS: usize = 32;
+const MAX_ACTIVE_BUILDING_NIGHT_LIGHTS: usize = 20;
+const MAX_ACTIVE_PROJECTILE_NIGHT_LIGHTS: usize = 12;
+const NIGHT_LIGHT_POOL_CAPACITY: usize = MAX_ACTIVE_CITIZEN_NIGHT_LIGHTS
+    + MAX_ACTIVE_BUILDING_NIGHT_LIGHTS
+    + MAX_ACTIVE_PROJECTILE_NIGHT_LIGHTS;
+const NIGHT_LIGHT_TRANSITION_SECONDS: f32 = 10.0;
 const PROJECTILE_MAX_LIFETIME_SECONDS: f32 = 12.0;
 const UNITY_AUTHORED_GRID_CELL_SIZE: f32 = 2.0;
 const TWITCH_COMMAND_HELP_URL: &str = "https://github.com/HumanBeanGames/Stream-Town-Bevy/blob/codex/bevy-migration/TWITCH_COMMANDS.md";
@@ -2681,6 +2687,11 @@ struct ResourceVisual {
 struct FoliageVisual(StableId);
 
 #[derive(Component)]
+struct PendingFoliageGrounding {
+    surface_height: f32,
+}
+
+#[derive(Component)]
 struct FoliageRenderBatch(FoliageBatchKey);
 
 #[derive(Component)]
@@ -4308,6 +4319,7 @@ impl Plugin for StreamTownGamePlugin {
                     apply_player_settings.run_if(resource_changed::<RuntimePlayerSettings>),
                 ),
             )
+            .add_systems(Update, ground_loaded_foliage_visuals)
             .add_systems(
                 Update,
                 sync_authored_post_processing
@@ -9622,6 +9634,9 @@ fn spawn_main_menu_baked_foliage(
     else {
         return;
     };
+    if layer.habitat == FoliageHabitat::Land && position.y <= bake.water_height {
+        return;
+    }
     let variant_index =
         foliage_visual_variant(position.x, position.z, &layer.id, layer.variants.len());
     let Some(variant) = layer.variants.get(variant_index) else {
@@ -9651,6 +9666,9 @@ fn spawn_main_menu_baked_foliage(
         StateEntity,
         Name::new(format!("Baked menu foliage: {}", foliage.id)),
         Mesh3d(mesh),
+        PendingFoliageGrounding {
+            surface_height: position.y,
+        },
         Transform::from_translation(position)
             .with_rotation(
                 Quat::from_rotation_y(
@@ -17673,6 +17691,11 @@ fn resolve_foliage_visual(
         .from_asset(variant.asset_path.clone()),
     );
     let centre = grid_to_world_on_surface(foliage.position, config, world);
+    let visible_water_height =
+        f32::from(config.world.water_level_centimetres) * 0.01 + WATER_SURFACE_LIFT_METRES;
+    if foliage.habitat == FoliageHabitat::Land && centre.y <= visible_water_height {
+        return None;
+    }
     let horizontal_offset = locational_visual_offset(
         world.seed,
         &foliage.id,
@@ -17778,6 +17801,9 @@ fn spawn_foliage_visual(
         FoliageRenderBatch(batch),
         GridLocation(visual.position),
         Mesh3d(visual.source_mesh),
+        PendingFoliageGrounding {
+            surface_height: visual.transform.translation.y,
+        },
         visual.transform,
         Visibility::Inherited,
         bevy::camera::visibility::VisibilityRange {
@@ -17790,6 +17816,44 @@ fn spawn_foliage_visual(
     if visual.suppress_self_shadows {
         entity.insert(bevy::light::NotShadowReceiver);
     }
+}
+
+fn ground_loaded_foliage_visuals(
+    mut commands: Commands,
+    mut foliage: Query<(Entity, &PendingFoliageGrounding, &Aabb, &mut Transform)>,
+) {
+    for (entity, pending, bounds, mut transform) in &mut foliage {
+        let minimum_y = transformed_bounds_minimum_y(
+            Vec3::from(bounds.center),
+            Vec3::from(bounds.half_extents),
+            transform.rotation,
+            transform.scale,
+        );
+        if minimum_y.is_finite() {
+            transform.translation.y = pending.surface_height - minimum_y;
+            commands
+                .entity(entity)
+                .try_remove::<PendingFoliageGrounding>();
+        }
+    }
+}
+
+fn transformed_bounds_minimum_y(
+    center: Vec3,
+    half_extents: Vec3,
+    rotation: Quat,
+    scale: Vec3,
+) -> f32 {
+    let mut minimum_y = f32::INFINITY;
+    for x in [-1.0, 1.0] {
+        for y in [-1.0, 1.0] {
+            for z in [-1.0, 1.0] {
+                let corner = center + half_extents * Vec3::new(x, y, z);
+                minimum_y = minimum_y.min((rotation * (corner * scale)).y);
+            }
+        }
+    }
+    minimum_y
 }
 
 fn foliage_visibility_distance(scale: Vec3) -> f32 {
@@ -25324,6 +25388,38 @@ struct NightLightSpec {
     color: Color,
     intensity: f32,
     range: f32,
+    transition_delay_seconds: f32,
+}
+
+fn night_light_transition_delay(hash: u64) -> f32 {
+    let fraction = u16::try_from(hash % 10_001).expect("night-light hash is bounded");
+    f32::from(fraction) / 10_000.0 * NIGHT_LIGHT_TRANSITION_SECONDS
+}
+
+fn night_light_is_active(
+    config: &stream_town_domain::TimeCycleConfig,
+    elapsed_seconds: f64,
+    delay_seconds: f32,
+) -> bool {
+    let cycle_seconds = f64::from(config.seconds_per_day.max(1));
+    let phase_seconds =
+        Duration::from_secs_f64(elapsed_seconds.max(0.0).rem_euclid(cycle_seconds)).as_secs_f32();
+    let day_seconds = Duration::from_secs(u64::from(config.seconds_per_day.max(1))).as_secs_f32();
+    let night_start_seconds = day_seconds * f32::from(config.daylight_per_thousand) / 1_000.0;
+    if config.sample(elapsed_seconds).is_daytime {
+        phase_seconds < delay_seconds
+    } else {
+        phase_seconds - night_start_seconds >= delay_seconds
+    }
+}
+
+fn append_nearest_night_lights(
+    sources: &mut Vec<NightLightSpec>,
+    candidates: &mut [(f32, NightLightSpec)],
+    maximum: usize,
+) {
+    candidates.sort_by(|left, right| left.0.total_cmp(&right.0));
+    sources.extend(candidates.iter().take(maximum).map(|(_, spec)| *spec));
 }
 
 fn sync_pooled_night_lights(
@@ -25333,66 +25429,126 @@ fn sync_pooled_night_lights(
     agents: Query<(&Agent, &GlobalTransform)>,
     buildings: Query<(&RuntimeBuilding, &GlobalTransform)>,
     projectiles: Query<(&CombatProjectile, &GlobalTransform)>,
+    cameras: Query<&GlobalTransform, With<TownCamera>>,
     mut slots: Query<
         (Entity, &mut Transform, &mut PointLight, &mut Visibility),
         With<NightPointLightPoolSlot>,
     >,
 ) {
     let cell_size = config.0.world.cell_size;
+    let camera_position = cameras
+        .iter()
+        .next()
+        .map_or(Vec3::ZERO, GlobalTransform::translation);
     let mut sources = Vec::new();
+    let mut citizen_sources = Vec::new();
     for (agent, transform) in &agents {
         if agent.kind == ActorKind::Player {
             let actor = simulation.0.actors.get(&agent.id);
+            if actor.is_some_and(|actor| !actor.alive) {
+                continue;
+            }
             let color = perceptually_normalized_light_color(
                 actor
                     .and_then(|actor| actor.customization.night_light_color)
                     .unwrap_or([255, 209, 143]),
             );
             let level_multiplier = actor.map_or(1.0, player_night_light_level_multiplier);
-            sources.push(NightLightSpec {
+            let spec = NightLightSpec {
                 position: transform.translation() + Vec3::Y * cell_size * 0.9,
                 color,
                 intensity: 115_000.0 * level_multiplier,
                 range: cell_size * 5.0,
-            });
+                transition_delay_seconds: night_light_transition_delay(stable_id_hash(&agent.id)),
+            };
+            citizen_sources.push((
+                spec.position.xz().distance_squared(camera_position.xz()),
+                spec,
+            ));
         }
     }
+    append_nearest_night_lights(
+        &mut sources,
+        &mut citizen_sources,
+        MAX_ACTIVE_CITIZEN_NIGHT_LIGHTS,
+    );
+    let mut building_sources = Vec::new();
     for (building, transform) in &buildings {
+        let Some(state) = simulation.0.buildings.get(&building.id) else {
+            continue;
+        };
+        if !state.complete
+            || matches!(
+                state.archetype.as_str(),
+                "archetype:building:wall" | "archetype:building:gate"
+            )
+        {
+            continue;
+        }
         let color = simulation
             .0
             .building_night_light_colors
             .get(&building.id)
             .copied()
             .map_or(Color::srgb(1.0, 0.66, 0.30), color_from_rgb8);
-        sources.push(NightLightSpec {
+        let spec = NightLightSpec {
             position: transform.translation() + Vec3::Y * cell_size * 1.5,
             color,
             intensity: 220_000.0,
             range: cell_size * 8.0,
-        });
+            transition_delay_seconds: night_light_transition_delay(stable_id_hash(&building.id)),
+        };
+        building_sources.push((
+            spec.position.xz().distance_squared(camera_position.xz()),
+            spec,
+        ));
     }
-    let persistent_source_count = sources.len();
+    append_nearest_night_lights(
+        &mut sources,
+        &mut building_sources,
+        MAX_ACTIVE_BUILDING_NIGHT_LIGHTS,
+    );
+    let mut projectile_sources = Vec::new();
     for (projectile, transform) in &projectiles {
         let color = match projectile.visual {
             CombatVisualKind::Fireball => Color::srgb(1.0, 0.24, 0.04),
             CombatVisualKind::Necrotic => Color::srgb(0.48, 0.16, 0.92),
             CombatVisualKind::Arrow | CombatVisualKind::Physical => Color::srgb(1.0, 0.78, 0.38),
         };
-        sources.push(NightLightSpec {
+        let spec = NightLightSpec {
             position: transform.translation(),
             color,
             intensity: 90_000.0,
             range: cell_size * 3.0,
-        });
+            transition_delay_seconds: night_light_transition_delay(
+                stable_id_hash(&projectile.target)
+                    ^ match &projectile.source {
+                        ProjectileSource::Actor(id) | ProjectileSource::Building(id) => {
+                            stable_id_hash(id).rotate_left(17)
+                        }
+                    },
+            ),
+        };
+        projectile_sources.push((
+            spec.position.xz().distance_squared(camera_position.xz()),
+            spec,
+        ));
     }
-    let night = !config
-        .0
-        .time
-        .sample(simulation.0.elapsed_seconds)
-        .is_daytime;
+    append_nearest_night_lights(
+        &mut sources,
+        &mut projectile_sources,
+        MAX_ACTIVE_PROJECTILE_NIGHT_LIGHTS,
+    );
     let mut slot_count = 0_usize;
     for (_, mut transform, mut light, mut visibility) in &mut slots {
-        if night && let Some(spec) = sources.get(slot_count).copied() {
+        let active = sources.get(slot_count).copied().filter(|spec| {
+            night_light_is_active(
+                &config.0.time,
+                simulation.0.elapsed_seconds,
+                spec.transition_delay_seconds,
+            )
+        });
+        if let Some(spec) = active {
             transform.translation = spec.position;
             light.color = spec.color;
             light.intensity = spec.intensity;
@@ -25404,15 +25560,20 @@ fn sync_pooled_night_lights(
         }
         slot_count += 1;
     }
-    let desired_capacity = persistent_source_count
-        .saturating_add(PREWARMED_PROJECTILE_NIGHT_LIGHTS.max(projectiles.iter().count()));
-    while slot_count < desired_capacity {
-        let active = night.then(|| sources.get(slot_count)).flatten().copied();
+    while slot_count < NIGHT_LIGHT_POOL_CAPACITY {
+        let active = sources.get(slot_count).copied().filter(|spec| {
+            night_light_is_active(
+                &config.0.time,
+                simulation.0.elapsed_seconds,
+                spec.transition_delay_seconds,
+            )
+        });
         let spec = active.unwrap_or(NightLightSpec {
             position: Vec3::ZERO,
             color: Color::WHITE,
             intensity: 0.0,
             range: cell_size * 3.0,
+            transition_delay_seconds: 0.0,
         });
         commands.spawn((
             WorldEntity,
@@ -41158,6 +41319,19 @@ mod tests {
         simulation.elapsed_seconds = f64::from(config.time.seconds_per_day) * 0.8;
         let player = StableId::new("twitch:light_test").unwrap();
         assert!(simulation.join_player(player.clone(), GridPos { x: 2, z: 2 }));
+        let building_id = StableId::new("building:test").unwrap();
+        simulation.buildings.insert(
+            building_id.clone(),
+            BuildingState {
+                id: building_id.clone(),
+                archetype: StableId::new("archetype:building:test").unwrap(),
+                position: GridPos { x: 3, z: 3 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: BUILDING_MAX_HEALTH,
+                complete: true,
+            },
+        );
         let mut app = App::new();
         app.insert_resource(RuntimeConfig(config.clone()))
             .insert_resource(SimulationRuntime(simulation))
@@ -41184,13 +41358,13 @@ mod tests {
         ));
         app.world_mut().spawn((
             RuntimeBuilding {
-                id: StableId::new("building:test").unwrap(),
+                id: building_id.clone(),
             },
             GlobalTransform::from_translation(Vec3::new(3.0, 0.0, 3.0)),
         ));
         app.world_mut().spawn((
             CombatProjectile {
-                source: ProjectileSource::Building(StableId::new("building:test").unwrap()),
+                source: ProjectileSource::Building(building_id),
                 target: StableId::new("actor:enemy_test").unwrap(),
                 damage: 1,
                 speed_cells_per_second: 1.0,
@@ -41214,13 +41388,13 @@ mod tests {
             .iter(app.world())
             .filter(|visibility| **visibility == Visibility::Visible)
             .count();
-        assert_eq!(slot_count, 2 + PREWARMED_PROJECTILE_NIGHT_LIGHTS);
+        assert_eq!(slot_count, NIGHT_LIGHT_POOL_CAPACITY);
         assert_eq!(visible_at_night, 3);
 
         app.world_mut()
             .resource_mut::<SimulationRuntime>()
             .0
-            .elapsed_seconds = 0.0;
+            .elapsed_seconds = f64::from(NIGHT_LIGHT_TRANSITION_SECONDS) + 1.0;
         app.update();
         let slot_count_after_day = app
             .world_mut()
@@ -41235,6 +41409,51 @@ mod tests {
             .count();
         assert_eq!(slot_count_after_day, slot_count);
         assert_eq!(visible_during_day, 0);
+    }
+
+    #[test]
+    fn night_light_budget_keeps_the_nearest_sources() {
+        let spec = |distance: f32| NightLightSpec {
+            position: Vec3::new(distance, 0.0, 0.0),
+            color: Color::WHITE,
+            intensity: 1.0,
+            range: 1.0,
+            transition_delay_seconds: 0.0,
+        };
+        let mut candidates = vec![(9.0, spec(3.0)), (1.0, spec(1.0)), (4.0, spec(2.0))];
+        let mut selected = Vec::new();
+        append_nearest_night_lights(&mut selected, &mut candidates, 2);
+        assert_eq!(selected.len(), 2);
+        assert!((selected[0].position.x - 1.0).abs() < f32::EPSILON);
+        assert!((selected[1].position.x - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn night_lights_stagger_activation_and_deactivation_over_ten_seconds() {
+        let config = GameConfig::default().time;
+        let night_start =
+            f64::from(config.seconds_per_day) * f64::from(config.daylight_per_thousand) / 1_000.0;
+        assert!(!night_light_is_active(&config, night_start + 4.9, 5.0));
+        assert!(night_light_is_active(&config, night_start + 5.0, 5.0));
+        assert!(night_light_is_active(&config, 4.9, 5.0));
+        assert!(!night_light_is_active(&config, 5.0, 5.0));
+        assert!(night_light_transition_delay(0) >= 0.0);
+        assert!(night_light_transition_delay(u64::MAX) <= NIGHT_LIGHT_TRANSITION_SECONDS);
+    }
+
+    #[test]
+    fn foliage_grounding_places_the_rotated_bounds_on_the_surface() {
+        let rotation = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+        let minimum = transformed_bounds_minimum_y(
+            Vec3::new(0.0, 2.0, 0.0),
+            Vec3::new(0.5, 2.0, 0.25),
+            rotation,
+            Vec3::splat(2.0),
+        );
+        assert!((minimum + 0.5).abs() < 0.0001);
+        let surface = 7.0;
+        let translation_y = surface - minimum;
+        assert!((translation_y + minimum - surface).abs() < 0.0001);
     }
 
     #[test]
@@ -41526,6 +41745,8 @@ mod tests {
             maximum_capture_ms: 12.0,
             average_encode_ms: 2.0,
             maximum_encode_ms: 4.0,
+            average_mux_write_ms: 0.5,
+            maximum_mux_write_ms: 1.0,
         };
         let (status, tone) = broadcast_connection_status(
             &config,
