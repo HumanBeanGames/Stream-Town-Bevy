@@ -54,6 +54,7 @@ cd bevy-port
 cargo xtask validate
 cargo test --workspace
 .\scripts\launch-game.ps1
+.\scripts\redeploy-last-town.ps1
 cargo run -p stream_town_tools
 cargo run -p stream_town_tools -- --validate-authoring
 cargo run -p stream_town_migrate -- inventory .. --out generated/content-manifest.json
@@ -72,6 +73,16 @@ cargo run -p xtask -- package-windows --output dist
 optimized release profile. Pass `-Debug` only when debugging the runtime. The
 Windows packaging task also always rebuilds both shipped executables with
 `--release`; it never packages `target\debug` binaries.
+
+After applying a patch, `scripts\redeploy-last-town.ps1` rebuilds the release
+game and starts directly from the most recently written current `.stbevy` town
+save. Rolling backups and purge archives are never candidates. Pass
+`-Town Tonyville` to choose explicitly, `-SkipBuild` to reuse an already-built
+binary, or `-NoLaunch` to validate selection and compilation without starting
+the game. The resumed process still retains the complete Load Game catalog and
+starts offline; going live remains an explicit operator action. If a game is
+already running, the script refuses to replace it so the town can be exited and
+saved normally first.
 
 If the game panics, it writes the panic message, thread, and captured backtrace
 to `.stream-town/crashes/crash-<timestamp>.log` before forwarding to Rust's

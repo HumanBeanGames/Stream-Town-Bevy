@@ -493,14 +493,34 @@ struct TownSaveCatalogRuntime {
     active_town: Option<String>,
 }
 
+fn automatic_resume_save_path() -> Option<PathBuf> {
+    std::env::var_os("STREAM_TOWN_AUTO_RESUME_PATH").map(PathBuf::from)
+}
+
+fn startup_save_path(resume_path: Option<PathBuf>, fixed_path: Option<PathBuf>) -> PathBuf {
+    resume_path
+        .or(fixed_path)
+        .unwrap_or_else(|| PathBuf::from(".stream-town").join("StreamTownSave.stbevy"))
+}
+
 impl TownSaveCatalogRuntime {
     fn from_environment() -> Self {
         let fixed_path = std::env::var_os("STREAM_TOWN_SAVE_PATH").map(PathBuf::from);
+        let resume_path = automatic_resume_save_path();
+        Self::from_startup_paths(fixed_path, resume_path)
+    }
+
+    fn from_startup_paths(fixed_path: Option<PathBuf>, resume_path: Option<PathBuf>) -> Self {
+        let active_town = resume_path.as_deref().and_then(|path| {
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(str::to_owned)
+        });
         Self {
             directory: PathBuf::from(".stream-town").join("saves"),
             legacy_path: PathBuf::from(".stream-town").join("StreamTownSave.stbevy"),
             fixed_path,
-            active_town: None,
+            active_town,
         }
     }
 
@@ -3776,9 +3796,9 @@ impl Plugin for StreamTownGamePlugin {
             })
             .insert_resource(TownSaveCatalogRuntime::from_environment())
             .insert_resource(SaveRuntime {
-                store: NativeSaveStore::new(std::env::var_os("STREAM_TOWN_SAVE_PATH").map_or_else(
-                    || PathBuf::from(".stream-town").join("StreamTownSave.stbevy"),
-                    PathBuf::from,
+                store: NativeSaveStore::new(startup_save_path(
+                    automatic_resume_save_path(),
+                    std::env::var_os("STREAM_TOWN_SAVE_PATH").map(PathBuf::from),
                 )),
             })
             .add_systems(
@@ -7023,6 +7043,16 @@ fn presentation_texture_handle(
     Some(asset_server?.load(asset_path))
 }
 
+fn startup_destination(credits: bool, autostart: bool, resume: bool) -> BootDestination {
+    if credits {
+        BootDestination::Credits
+    } else if autostart || resume {
+        BootDestination::WorldLoading
+    } else {
+        BootDestination::MainMenu
+    }
+}
+
 fn begin_menu_loading(
     mut commands: Commands,
     content: Res<RuntimeContent>,
@@ -7030,13 +7060,11 @@ fn begin_menu_loading(
     asset_root: Res<RuntimeAssetRoot>,
     asset_server: Option<Res<AssetServer>>,
 ) {
-    let destination = if std::env::var_os("STREAM_TOWN_AUTOSTART_CREDITS").is_some() {
-        BootDestination::Credits
-    } else if std::env::var_os("STREAM_TOWN_AUTOSTART").is_some() {
-        BootDestination::WorldLoading
-    } else {
-        BootDestination::MainMenu
-    };
+    let destination = startup_destination(
+        std::env::var_os("STREAM_TOWN_AUTOSTART_CREDITS").is_some(),
+        std::env::var_os("STREAM_TOWN_AUTOSTART").is_some(),
+        automatic_resume_save_path().is_some(),
+    );
     commands.insert_resource(menu_loading_runtime(
         destination,
         &content.0,
@@ -32527,6 +32555,10 @@ fn save_on_gameplay_exit(
     }
 }
 
+fn automatic_load_requested(automatic_complete: bool, legacy: bool, resume: bool) -> bool {
+    !automatic_complete && (legacy || resume)
+}
+
 fn load_input(
     mut ecs: Commands,
     mut io: ResMut<MenuIoRequest>,
@@ -32543,7 +32575,11 @@ fn load_input(
     mut automatic_complete: Local<bool>,
     mut runtime_console: ResMut<RuntimeConsoleRuntime>,
 ) {
-    let automatic = !*automatic_complete && std::env::var_os("STREAM_TOWN_AUTO_LOAD").is_some();
+    let automatic = automatic_load_requested(
+        *automatic_complete,
+        std::env::var_os("STREAM_TOWN_AUTO_LOAD").is_some(),
+        automatic_resume_save_path().is_some(),
+    );
     let requested = std::mem::take(&mut io.load);
     let requested_source = io.load_source.take();
     if !automatic && !requested {
@@ -40967,6 +41003,23 @@ mod tests {
         assert_eq!(town_name_seed("Bobville"), 14_812_036_045_316_836_008);
         assert_eq!(safe_town_filename("Bean: Bay?"), "Bean_ Bay_");
         assert_eq!(safe_town_filename("CON"), "Town_CON");
+    }
+
+    #[test]
+    fn patch_resume_path_overrides_fixed_smoke_path_without_hiding_the_town_catalog() {
+        let resume = PathBuf::from(".stream-town/saves/Tonyville.stbevy");
+        let fixed = PathBuf::from("generated/smoke.stbevy");
+        assert_eq!(startup_save_path(Some(resume.clone()), Some(fixed)), resume);
+
+        let catalog = TownSaveCatalogRuntime::from_startup_paths(None, Some(resume));
+        assert_eq!(catalog.active_town.as_deref(), Some("Tonyville"));
+        assert!(catalog.fixed_path.is_none());
+        assert_eq!(
+            startup_destination(false, false, true),
+            BootDestination::WorldLoading
+        );
+        assert!(automatic_load_requested(false, false, true));
+        assert!(!automatic_load_requested(true, false, true));
     }
 
     #[test]
