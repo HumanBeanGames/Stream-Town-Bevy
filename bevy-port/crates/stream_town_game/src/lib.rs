@@ -1225,6 +1225,8 @@ struct RegenerationWorkerState {
     initialized: bool,
     next_ready_seconds: f64,
     prospector_step: u32,
+    planting_sequence: u32,
+    planting_target: Option<GridPos>,
 }
 
 #[derive(Resource, Default)]
@@ -20997,6 +20999,8 @@ fn tender_planting_cell(
     simulation: &WorldSimulation,
     world: &GeneratedWorld,
     actor: &StableId,
+    sequence: u32,
+    reserved: &BTreeSet<GridPos>,
     hut: GridPos,
     from: GridPos,
 ) -> Option<(GridPos, GridPos)> {
@@ -21007,6 +21011,7 @@ fn tender_planting_cell(
         .filter(|candidate| valid_regeneration_cell(content, simulation, world, *candidate))
         .filter(|candidate| cell_is_clear_of_buildings(content, simulation, world, *candidate, 10))
         .filter(|candidate| cell_is_clear_of_trees(world, *candidate, 5))
+        .filter(|candidate| !reserved.contains(candidate))
         .collect::<Vec<_>>();
     fields.sort_by_key(|candidate| {
         let nearest_resource = world
@@ -21016,11 +21021,15 @@ fn tender_planting_cell(
             .map(|resource| grid_distance_squared(resource.position, *candidate))
             .min()
             .unwrap_or(u64::MAX);
+        let coordinate = u64::from(candidate.x) | (u64::from(candidate.z) << 16);
         (
-            std::cmp::Reverse(nearest_resource),
+            // Once a cell has ten tiles of open field around it, actor-specific
+            // variation is more valuable than sending every tender to the same
+            // globally-farthest point.
+            std::cmp::Reverse(nearest_resource.min(100)),
             seagull_hash(
                 world.seed ^ stable_id_hash(actor),
-                u64::from(candidate.x) | (u64::from(candidate.z) << 16),
+                coordinate ^ (u64::from(sequence) << 32),
                 0x5445_4E44_4552,
             ),
         )
@@ -21092,13 +21101,41 @@ fn regeneration_agent_goal(
             return None;
         }
     }
+    let reserved_planting_cells = runtime
+        .workers
+        .iter()
+        .filter(|(worker_id, _)| *worker_id != actor_id)
+        .filter_map(|(_, worker)| worker.planting_target)
+        .collect::<BTreeSet<_>>();
     match actor.role.as_str() {
         "role:forester" => {
             forester_planting_cell(content, simulation, world, runtime, actor_id, hut, current)
                 .map(|(plant, approach)| (AgentGoal::PlantTree(plant), approach))
         }
-        "role:tender" => tender_planting_cell(content, simulation, world, actor_id, hut, current)
-            .map(|(plant, approach)| (AgentGoal::PlantBush(plant), approach)),
+        "role:tender" => {
+            let sequence = runtime
+                .workers
+                .get(actor_id)
+                .map_or(0, |worker| worker.planting_sequence);
+            let selected = tender_planting_cell(
+                content,
+                simulation,
+                world,
+                actor_id,
+                sequence,
+                &reserved_planting_cells,
+                hut,
+                current,
+            );
+            if let Some((plant, approach)) = selected {
+                let worker = runtime.workers.entry(actor_id.clone()).or_default();
+                worker.planting_sequence = worker.planting_sequence.wrapping_add(1);
+                worker.planting_target = Some(plant);
+                Some((AgentGoal::PlantBush(plant), approach))
+            } else {
+                None
+            }
+        }
         "role:prospector" => {
             let cells = prospector_spiral_cells(world, hut);
             if cells.is_empty() {
@@ -21245,11 +21282,9 @@ fn complete_regeneration_goal(
                 *position,
             );
             if let Some(interval) = regeneration_role_interval_seconds(&actor.role, level) {
-                runtime
-                    .workers
-                    .entry(actor_id.clone())
-                    .or_default()
-                    .next_ready_seconds = runtime.elapsed_seconds + interval;
+                let worker = runtime.workers.entry(actor_id.clone()).or_default();
+                worker.next_ready_seconds = runtime.elapsed_seconds + interval;
+                worker.planting_target = None;
             }
             planted
         }
@@ -25626,8 +25661,12 @@ fn tiled_neighbor_value(
                     i32::from(other.position.x) - i32::from(state.position.x),
                     i32::from(other.position.z) - i32::from(state.position.z),
                 ) {
-                    (1, 0) => 2,
-                    (-1, 0) => 8,
+                    // The Blender conversion mirrors the authored FBX local X
+                    // basis. Feed the Unity tiler its reflected east/west bits
+                    // so corner and T-junction geometry still faces its actual
+                    // Bevy-world neighbours.
+                    (1, 0) => 8,
+                    (-1, 0) => 2,
                     (0, 1) => 16,
                     (0, -1) => 4,
                     _ => 0,
@@ -34877,47 +34916,20 @@ fn rotated_footprint(footprint: [u16; 2], rotation_quarter_turns: i32) -> [u16; 
     }
 }
 
-fn building_uses_full_navigation_footprint(definition: &BuildingDef) -> bool {
-    definition.projectile_shooter.is_some()
-        || definition
-            .role_slots
-            .iter()
-            .any(|slot| is_combat_role(&slot.role) || is_healer_role(&slot.role))
-        || matches!(
-            definition.archetype.as_str(),
-            "archetype:building:wall" | "archetype:building:gate"
-        )
-}
-
-fn inset_navigation_footprint(visual: [u16; 2]) -> ([u16; 2], [u16; 2]) {
-    let footprint = [
-        visual[0].saturating_sub(2).max(1),
-        visual[1].saturating_sub(2).max(1),
-    ];
-    let offset = [
-        visual[0].saturating_sub(footprint[0]) / 2,
-        visual[1].saturating_sub(footprint[1]) / 2,
-    ];
-    (offset, footprint)
-}
-
 fn building_navigation_region(
     position: GridPos,
     definition: &BuildingDef,
     rotation_quarter_turns: i32,
     world: &GeneratedWorld,
 ) -> Option<stream_town_domain::DirtyRegion> {
-    let visual = rotated_footprint(definition.footprint, rotation_quarter_turns);
-    let (offset, footprint) = if building_uses_full_navigation_footprint(definition) {
-        ([0, 0], visual)
-    } else {
-        inset_navigation_footprint(visual)
-    };
-    let origin = GridPos {
-        x: position.x.checked_add(offset[0])?,
-        z: position.z.checked_add(offset[1])?,
-    };
-    building_region(origin, footprint, world)
+    // Unity updates A* from a BoxCollider whose X/Z dimensions exactly match
+    // the authored footprint. The surrounding cells are the intended walkway;
+    // insetting the blocked region let actors cross the models themselves.
+    building_region(
+        position,
+        rotated_footprint(definition.footprint, rotation_quarter_turns),
+        world,
+    )
 }
 
 fn enemy_camp_navigation_region(
@@ -46881,7 +46893,7 @@ mod tests {
     }
 
     #[test]
-    fn civilian_navigation_footprints_leave_space_while_military_footprints_remain_full() {
+    fn building_navigation_uses_the_authored_unity_collider_footprints() {
         let content = embedded_content();
         let world = GeneratedWorld {
             seed: 1,
@@ -46900,8 +46912,13 @@ mod tests {
         let origin = GridPos { x: 8, z: 8 };
         let marketplace = &content.buildings[&StableId::new("building:marketplace").unwrap()];
         let civilian = building_navigation_region(origin, marketplace, 0, &world).unwrap();
-        assert_eq!(civilian.min, GridPos { x: 9, z: 9 });
-        assert_eq!(civilian.max, GridPos { x: 10, z: 10 });
+        assert_eq!(civilian.min, origin);
+        assert_eq!(civilian.max, GridPos { x: 11, z: 11 });
+
+        let stonemason = &content.buildings[&StableId::new("building:stonemason").unwrap()];
+        let drop_off = building_navigation_region(origin, stonemason, 0, &world).unwrap();
+        assert_eq!(drop_off.min, origin);
+        assert_eq!(drop_off.max, GridPos { x: 9, z: 9 });
 
         let barracks = &content.buildings[&StableId::new("building:barracks").unwrap()];
         let military = building_navigation_region(origin, barracks, 0, &world).unwrap();
@@ -48470,6 +48487,61 @@ mod tests {
         )
         .unwrap();
         assert!(corner.source_model.ends_with("Age01_Wall_Corner.fbx"));
+        let converted_mask = tiled_neighbor_value(&content, &simulation, &state);
+        assert_eq!(converted_mask, 24);
+        assert_eq!(
+            wall_tiling(converted_mask),
+            (1, 3),
+            "the reflected GLB corner rotates toward +X/+Z neighbours"
+        );
+    }
+
+    #[test]
+    fn converted_wall_corners_face_all_four_world_quadrants() {
+        let content = embedded_content();
+        let definition = &content.buildings[&StableId::new("building:wall").unwrap()];
+        let centre_id = StableId::new("building:wall_centre").unwrap();
+        let centre = BuildingState {
+            id: centre_id.clone(),
+            archetype: definition.archetype.clone(),
+            position: GridPos { x: 10, z: 10 },
+            rotation_quarter_turns: 0,
+            level: 1,
+            health: BUILDING_MAX_HEALTH,
+            complete: true,
+        };
+        for (suffix, offsets, expected_mask, expected_turns) in [
+            ("east_north", [(1, 0), (0, 1)], 24, 3),
+            ("east_south", [(1, 0), (0, -1)], 12, 2),
+            ("west_south", [(-1, 0), (0, -1)], 6, 1),
+            ("west_north", [(-1, 0), (0, 1)], 18, 0),
+        ] {
+            let mut simulation = WorldSimulation::new(42);
+            simulation
+                .buildings
+                .insert(centre_id.clone(), centre.clone());
+            for (index, (x, z)) in offsets.into_iter().enumerate() {
+                let id = StableId::new(format!("building:wall_{suffix}_{index}")).unwrap();
+                simulation.buildings.insert(
+                    id.clone(),
+                    BuildingState {
+                        id,
+                        position: GridPos {
+                            x: u16::try_from(10 + x).unwrap(),
+                            z: u16::try_from(10 + z).unwrap(),
+                        },
+                        ..centre.clone()
+                    },
+                );
+            }
+            let mask = tiled_neighbor_value(&content, &simulation, &centre);
+            assert_eq!(mask, expected_mask, "wrong converted mask for {suffix}");
+            assert_eq!(
+                wall_tiling(mask),
+                (1, expected_turns),
+                "wrong corner rotation for {suffix}"
+            );
+        }
     }
 
     #[test]
@@ -51394,6 +51466,7 @@ mod tests {
                 initialized: true,
                 next_ready_seconds: 0.0,
                 prospector_step: 0,
+                ..default()
             },
         );
         (config, content, world, simulation, runtime, actor, hut)
@@ -51509,7 +51582,7 @@ mod tests {
             - ore_before;
         assert!((3..=5).contains(&ore_added));
 
-        let (_, content, mut world, simulation, mut runtime, actor, _) =
+        let (_, content, mut world, mut simulation, mut runtime, actor, _) =
             regeneration_role_fixture("tender", "greenhouse");
         let cleared = world
             .resources
@@ -51539,6 +51612,48 @@ mod tests {
         let AgentGoal::PlantBush(field) = goal else {
             panic!("tender did not receive a bush planting goal");
         };
+        let second_actor = StableId::new("twitch:test_tender_second").unwrap();
+        let tender_role = StableId::new("role:tender").unwrap();
+        assert!(simulation.join_player(second_actor.clone(), from));
+        simulation
+            .assign_role(&second_actor, tender_role.clone())
+            .unwrap();
+        simulation
+            .actors
+            .get_mut(&second_actor)
+            .unwrap()
+            .role_progression
+            .insert(
+                tender_role,
+                stream_town_domain::RoleProgress {
+                    level: 100,
+                    experience: 0,
+                },
+            );
+        runtime.workers.insert(
+            second_actor.clone(),
+            RegenerationWorkerState {
+                initialized: true,
+                next_ready_seconds: 0.0,
+                ..default()
+            },
+        );
+        let (second_goal, _) = regeneration_agent_goal(
+            &content,
+            &simulation,
+            &world,
+            &mut runtime,
+            &second_actor,
+            from,
+        )
+        .expect("a second ready tender chooses a field planting task");
+        let AgentGoal::PlantBush(second_field) = second_goal else {
+            panic!("second tender did not receive a bush planting goal");
+        };
+        assert_ne!(
+            second_field, field,
+            "simultaneous tenders reserve distinct planting destinations"
+        );
         assert!(cell_is_clear_of_buildings(
             &content,
             &simulation,
