@@ -48,7 +48,7 @@ use bevy::{
         FocusCause, InputFocus, InputFocusVisible,
         tab_navigation::{TabGroup, TabIndex, TabNavigationPlugin},
     },
-    light::DirectionalLightShadowMap,
+    light::{DirectionalLightShadowMap, NotShadowCaster},
     math::Affine2,
     mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes},
     mesh::{Indices, VertexAttributeValues},
@@ -155,6 +155,9 @@ const TRAVERSAL_WEAR_DECAY_INTERVAL_SECONDS: f32 = 1.0;
 /// generation, resource generation, and gameplay ranges remain in town cells.
 const NAVIGATION_SUBDIVISIONS: u16 = 3;
 const NAVIGATION_TERRAIN_MIN_HEIGHT_CENTIMETRES: i16 = 45;
+const WORLD_DIAGNOSTIC_VIEW_SECONDS: f32 = 10.0;
+const WORLD_DIAGNOSTIC_OVERLAY_LIFT: f32 = 0.06;
+const WORLD_DIAGNOSTIC_TILE_SCALE: f32 = 0.94;
 const TERRAIN_HIGH_DETAIL_RADIUS: f32 = 220.0;
 const TERRAIN_MEDIUM_DETAIL_RADIUS: f32 = 440.0;
 const TERRAIN_LOD_HYSTERESIS: f32 = 36.0;
@@ -500,6 +503,26 @@ struct WorldRuntime {
 struct FineNavigationRuntime {
     grid: Option<stream_town_domain::NavGrid>,
     applied_signature: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WorldDiagnosticMode {
+    Pathfinding,
+    Floorplan,
+}
+
+#[derive(Resource, Default)]
+struct WorldDiagnosticRuntime {
+    mode: Option<WorldDiagnosticMode>,
+    remaining_seconds: f32,
+    black_material: Option<Handle<StandardMaterial>>,
+}
+
+impl WorldDiagnosticRuntime {
+    fn activate(&mut self, mode: WorldDiagnosticMode) {
+        self.mode = Some(mode);
+        self.remaining_seconds = WORLD_DIAGNOSTIC_VIEW_SECONDS;
+    }
 }
 
 /// Sparse traffic history. A point is added only when a citizen completes a
@@ -1486,6 +1509,14 @@ struct CommandResponseRuntime<'w> {
 struct CommandSaveRuntime<'w> {
     save: Res<'w, SaveRuntime>,
     traversal_wear: Res<'w, TraversalWearRuntime>,
+}
+
+#[derive(SystemParam)]
+struct CommandWorldViewRuntime<'w, 's> {
+    selected: Res<'w, SelectedCell>,
+    cameras: Query<'w, 's, &'static TownCameraControllerRuntime, With<TownCamera>>,
+    fine_navigation: Res<'w, FineNavigationRuntime>,
+    diagnostic: ResMut<'w, WorldDiagnosticRuntime>,
 }
 
 #[derive(Clone, Debug)]
@@ -3094,6 +3125,14 @@ struct MainMenuCloudPrism {
 #[derive(Component)]
 struct TerrainSurface;
 
+#[derive(Component)]
+struct WorldDiagnosticOverlay {
+    mode: WorldDiagnosticMode,
+}
+
+#[derive(Component, Clone, Copy)]
+struct WorldDiagnosticVisibilityBackup(Visibility);
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum TerrainLodLevel {
     #[default]
@@ -4331,6 +4370,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<TraversalWearRuntime>()
             .init_resource::<PathSurfaceRuntime>()
             .init_resource::<FineNavigationRuntime>()
+            .init_resource::<WorldDiagnosticRuntime>()
             .init_resource::<CrowdSeparationRuntime>()
             .init_resource::<StationTargetRuntime>()
             .init_resource::<EnemyNavigationRuntime>()
@@ -4890,6 +4930,11 @@ impl Plugin for StreamTownGamePlugin {
                         .after(load_input)
                         .after(decay_traversal_wear)
                         .after(ground_loaded_foliage_visuals),
+                    sync_world_diagnostic_view
+                        .after(process_injected_commands)
+                        .after(sync_fine_navigation)
+                        .after(sync_resource_nodes)
+                        .after(sync_building_presentation),
                 )
                     .in_set(GameplaySimulationSet)
                     .run_if(in_state(GameState::InGame)),
@@ -36361,6 +36406,297 @@ fn sync_fine_navigation(
     }
 }
 
+fn floorplan_diagnostic_cells(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+) -> BTreeSet<GridPos> {
+    let mut cells = world
+        .resources
+        .iter()
+        .filter(|resource| resource.amount > 0)
+        .map(|resource| resource.position)
+        .collect::<BTreeSet<_>>();
+    let mut add_region = |region: Option<stream_town_domain::DirtyRegion>| {
+        if let Some(region) = region {
+            cells.extend(
+                (region.min.z..=region.max.z)
+                    .flat_map(|z| (region.min.x..=region.max.x).map(move |x| GridPos { x, z })),
+            );
+        }
+    };
+    for building in simulation.buildings.values() {
+        let Some(definition) = building_def_for_archetype(content, &building.archetype) else {
+            continue;
+        };
+        add_region(building_region(
+            building.position,
+            rotated_footprint(definition.footprint, building.rotation_quarter_turns),
+            world,
+        ));
+    }
+    for camp in simulation.enemy_camps.values() {
+        let Some(archetype) = content.archetypes.get(&camp.archetype) else {
+            continue;
+        };
+        add_region(building_region(camp.position, archetype.footprint, world));
+    }
+    cells
+}
+
+fn append_world_diagnostic_quad(
+    centre: Vec3,
+    size: f32,
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    uvs: &mut Vec<[f32; 2]>,
+    indices: &mut Vec<u32>,
+) {
+    let half = size * 0.5;
+    let base = u32::try_from(positions.len()).expect("diagnostic overlay vertex count fits u32");
+    positions.extend_from_slice(&[
+        [centre.x - half, centre.y, centre.z - half],
+        [centre.x + half, centre.y, centre.z - half],
+        [centre.x + half, centre.y, centre.z + half],
+        [centre.x - half, centre.y, centre.z + half],
+    ]);
+    normals.extend_from_slice(&[[0.0, 1.0, 0.0]; 4]);
+    uvs.extend_from_slice(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+    indices.extend_from_slice(&[base, base + 3, base + 1, base + 1, base + 3, base + 2]);
+}
+
+fn world_diagnostic_overlay_mesh(
+    mode: WorldDiagnosticMode,
+    config: &GameConfig,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    fine_navigation: &stream_town_domain::NavGrid,
+) -> Option<Mesh> {
+    let water_height = f32::from(config.world.water_level_centimetres) * 0.01;
+    if mode == WorldDiagnosticMode::Pathfinding {
+        return pathfinding_diagnostic_overlay_mesh(config, world, fine_navigation, water_height);
+    }
+    let estimated_cells = world.resources.len() + simulation.buildings.len() * 4;
+    let mut positions = Vec::with_capacity(estimated_cells.saturating_mul(4));
+    let mut normals = Vec::with_capacity(positions.capacity());
+    let mut uvs = Vec::with_capacity(positions.capacity());
+    let mut indices = Vec::with_capacity(estimated_cells.saturating_mul(6));
+    let tile_size = config.world.cell_size * WORLD_DIAGNOSTIC_TILE_SCALE;
+    for cell in floorplan_diagnostic_cells(content, simulation, world) {
+        let mut centre = grid_to_world_on_surface(cell, config, world);
+        centre.y = centre.y.max(water_height) + WORLD_DIAGNOSTIC_OVERLAY_LIFT;
+        append_world_diagnostic_quad(
+            centre,
+            tile_size,
+            &mut positions,
+            &mut normals,
+            &mut uvs,
+            &mut indices,
+        );
+    }
+    if positions.is_empty() {
+        return None;
+    }
+    Some(
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(Indices::U32(indices)),
+    )
+}
+
+fn pathfinding_diagnostic_overlay_mesh(
+    config: &GameConfig,
+    world: &GeneratedWorld,
+    navigation: &stream_town_domain::NavGrid,
+    water_height: f32,
+) -> Option<Mesh> {
+    let width = navigation.width();
+    let height = navigation.height();
+    let vertex_width = usize::from(width) + 1;
+    let vertex_height = usize::from(height) + 1;
+    let vertex_count = vertex_width.saturating_mul(vertex_height);
+    let mut positions = Vec::with_capacity(vertex_count);
+    let mut normals = Vec::with_capacity(vertex_count);
+    let mut uvs = Vec::with_capacity(vertex_count);
+    let subdivision = f32::from(NAVIGATION_SUBDIVISIONS);
+    let fine_half_offset = subdivision * 0.5;
+    let coarse_half_x = f32::from(config.world.width.saturating_sub(1)) * 0.5;
+    let coarse_half_z = f32::from(config.world.height.saturating_sub(1)) * 0.5;
+    let terrain_limit_x = coarse_half_x * config.world.cell_size;
+    let terrain_limit_z = coarse_half_z * config.world.cell_size;
+    for z in 0..=height {
+        for x in 0..=width {
+            let logical_x = (f32::from(x) - fine_half_offset) / subdivision;
+            let logical_z = (f32::from(z) - fine_half_offset) / subdivision;
+            let world_x = (logical_x - coarse_half_x) * config.world.cell_size;
+            let world_z = (logical_z - coarse_half_z) * config.world.cell_size;
+            let surface = terrain_surface_height_at_world(
+                world,
+                config,
+                world_x.clamp(-terrain_limit_x, terrain_limit_x),
+                world_z.clamp(-terrain_limit_z, terrain_limit_z),
+            )
+            .unwrap_or(water_height);
+            positions.push([
+                world_x,
+                surface.max(water_height) + WORLD_DIAGNOSTIC_OVERLAY_LIFT,
+                world_z,
+            ]);
+            normals.push([0.0, 1.0, 0.0]);
+            uvs.push([
+                f32::from(x) / f32::from(width.max(1)),
+                f32::from(z) / f32::from(height.max(1)),
+            ]);
+        }
+    }
+    let mut indices = Vec::new();
+    for z in 0..height {
+        for x in 0..width {
+            if navigation.is_walkable(GridPos { x, z }) {
+                continue;
+            }
+            let top_left = u32::try_from(usize::from(z) * vertex_width + usize::from(x))
+                .expect("diagnostic overlay vertex count fits u32");
+            let bottom_left = top_left
+                .checked_add(u32::try_from(vertex_width).expect("diagnostic row width fits u32"))
+                .expect("diagnostic overlay vertex count fits u32");
+            indices.extend_from_slice(&[
+                top_left,
+                bottom_left,
+                top_left + 1,
+                top_left + 1,
+                bottom_left,
+                bottom_left + 1,
+            ]);
+        }
+    }
+    if indices.is_empty() {
+        return None;
+    }
+    Some(
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(Indices::U32(indices)),
+    )
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn sync_world_diagnostic_view(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    world: Res<WorldRuntime>,
+    fine_navigation: Res<FineNavigationRuntime>,
+    mut runtime: ResMut<WorldDiagnosticRuntime>,
+    mut meshes: Option<ResMut<Assets<Mesh>>>,
+    mut materials: Option<ResMut<Assets<StandardMaterial>>>,
+    mut visual_roots: Query<
+        (
+            Entity,
+            &mut Visibility,
+            Option<&WorldDiagnosticVisibilityBackup>,
+        ),
+        Or<(
+            With<RuntimeBuilding>,
+            With<ResourceNode>,
+            With<EnemyCamp>,
+            With<BuildingPlacementGhost>,
+            With<BuildingHealthOverlay>,
+        )>,
+    >,
+    overlays: Query<(Entity, &WorldDiagnosticOverlay)>,
+) {
+    if runtime.mode.is_some() {
+        runtime.remaining_seconds = (runtime.remaining_seconds - time.delta_secs()).max(0.0);
+        if runtime.remaining_seconds <= f32::EPSILON {
+            runtime.mode = None;
+        }
+    }
+
+    let Some(mode) = runtime.mode else {
+        for (entity, mut visibility, backup) in &mut visual_roots {
+            let Some(backup) = backup else {
+                continue;
+            };
+            *visibility = backup.0;
+            commands
+                .entity(entity)
+                .remove::<WorldDiagnosticVisibilityBackup>();
+        }
+        for (entity, _) in &overlays {
+            commands.entity(entity).try_despawn();
+        }
+        return;
+    };
+
+    for (entity, mut visibility, backup) in &mut visual_roots {
+        if backup.is_none() {
+            commands
+                .entity(entity)
+                .insert(WorldDiagnosticVisibilityBackup(*visibility));
+        }
+        *visibility = Visibility::Hidden;
+    }
+    if overlays.iter().any(|(_, overlay)| overlay.mode == mode) {
+        return;
+    }
+    for (entity, _) in &overlays {
+        commands.entity(entity).try_despawn();
+    }
+    let (Some(meshes), Some(materials), Some(fine_navigation)) = (
+        meshes.as_deref_mut(),
+        materials.as_deref_mut(),
+        fine_navigation.grid.as_ref(),
+    ) else {
+        return;
+    };
+    let Some(mesh) = world_diagnostic_overlay_mesh(
+        mode,
+        &config.0,
+        &content.0,
+        &simulation.0,
+        &world.generated,
+        fine_navigation,
+    ) else {
+        return;
+    };
+    let material = runtime.black_material.clone().unwrap_or_else(|| {
+        let material = materials.add(StandardMaterial {
+            base_color: Color::BLACK,
+            unlit: true,
+            depth_bias: SELECTION_OUTLINE_DEPTH_BIAS,
+            ..default()
+        });
+        runtime.black_material = Some(material.clone());
+        material
+    });
+    commands.spawn((
+        WorldEntity,
+        WorldDiagnosticOverlay { mode },
+        Name::new(match mode {
+            WorldDiagnosticMode::Pathfinding => "Pathfinding Accessibility Overlay",
+            WorldDiagnosticMode::Floorplan => "Placement Footprint Overlay",
+        }),
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(material),
+        NotShadowCaster,
+        NoFrustumCulling,
+    ));
+}
+
 fn enemy_camp_navigation_region(
     position: GridPos,
     visual: [u16; 2],
@@ -38605,8 +38941,7 @@ fn process_injected_commands(
     asset_server: Option<Res<AssetServer>>,
     asset_root: Res<RuntimeAssetRoot>,
     command_save: CommandSaveRuntime,
-    selected: Res<SelectedCell>,
-    cameras: Query<&TownCameraControllerRuntime, With<TownCamera>>,
+    mut view: CommandWorldViewRuntime,
     mut response: CommandResponseRuntime,
     mut world: ResMut<WorldRuntime>,
     mut stats: ResMut<SessionStats>,
@@ -38841,7 +39176,7 @@ fn process_injected_commands(
                         let rotation = actor.building_rotation_quarter_turns;
                         let near = actor
                             .last_building_position
-                            .or(selected.0)
+                            .or(view.selected.0)
                             .unwrap_or(actor.position);
                         let line_building = is_line_building(&building_id);
                         queues.placers.0.insert(
@@ -39637,7 +39972,8 @@ fn process_injected_commands(
                     Ok("camera reset queued".to_owned())
                 }
                 ChatCommand::Follow(requested) => {
-                    let controller = cameras
+                    let controller = view
+                        .cameras
                         .single()
                         .map_err(|_| "the town camera is unavailable".to_owned())?;
                     if !auto_camera_is_managed(controller) {
@@ -39665,7 +40001,8 @@ fn process_injected_commands(
                     Ok(format!("automatic camera is now following {name}"))
                 }
                 ChatCommand::FocusBuilding { building, index } => {
-                    let controller = cameras
+                    let controller = view
+                        .cameras
                         .single()
                         .map_err(|_| "the town camera is unavailable".to_owned())?;
                     if !auto_camera_is_managed(controller)
@@ -39688,6 +40025,19 @@ fn process_injected_commands(
                     Ok(format!(
                         "camera focused on {name} BID {index} for 15 seconds"
                     ))
+                }
+                ChatCommand::PathfindingView => {
+                    require_ruler_or_staff(&simulation.0, &pending)?;
+                    if view.fine_navigation.grid.is_none() {
+                        return Err("the live pathfinding grid is not ready yet".to_owned());
+                    }
+                    view.diagnostic.activate(WorldDiagnosticMode::Pathfinding);
+                    Ok("pathfinding accessibility view enabled for 10 seconds".to_owned())
+                }
+                ChatCommand::FloorplanView => {
+                    require_ruler_or_staff(&simulation.0, &pending)?;
+                    view.diagnostic.activate(WorldDiagnosticMode::Floorplan);
+                    Ok("placement footprint view enabled for 10 seconds".to_owned())
                 }
                 ChatCommand::ModRole { player, role } => {
                     require_staff(&pending)?;
@@ -40195,7 +40545,7 @@ fn process_injected_commands(
             .then(|| {
                 command_refreshes_building_focus(&command)
                     .then(|| {
-                        cameras.single().ok().and_then(|controller| {
+                        view.cameras.single().ok().and_then(|controller| {
                             controller.temporary_focus.as_ref().and_then(|focus| {
                                 let CameraFocusTarget::Building(building) = &focus.target else {
                                     return None;
@@ -41364,6 +41714,7 @@ fn clear_loading_runtime(commands: &mut Commands) {
 fn cleanup_world(
     mut commands: Commands,
     entities: Query<Entity, With<WorldEntity>>,
+    mut diagnostic_view: ResMut<WorldDiagnosticRuntime>,
     mut station_targets: ResMut<StationTargetRuntime>,
     mut ruler_announcements: ResMut<RulerVoteAnnouncementRuntime>,
     mut death_announcements: ResMut<CitizenDeathAnnouncementRuntime>,
@@ -41374,6 +41725,7 @@ fn cleanup_world(
     }
     commands.remove_resource::<WorldRuntime>();
     commands.insert_resource(FineNavigationRuntime::default());
+    *diagnostic_view = WorldDiagnosticRuntime::default();
     commands.remove_resource::<SimulationRuntime>();
     commands.remove_resource::<WorldRevealRuntime>();
     commands.remove_resource::<GameplayReady>();
@@ -49452,6 +49804,157 @@ mod tests {
         );
         assert!(wall_a.contains(&GridPos { x: 47, z: 16 }));
         assert!(wall_b.contains(&GridPos { x: 48, z: 16 }));
+    }
+
+    #[test]
+    fn diagnostic_views_use_live_navigation_and_authored_placement_footprints() {
+        let mut config = GameConfig::default();
+        config.world.width = 10;
+        config.world.height = 10;
+        let content = embedded_content();
+        let resource_position = GridPos { x: 1, z: 1 };
+        let world = GeneratedWorld {
+            seed: 17,
+            generator_version: 1,
+            navigation: stream_town_domain::NavGrid::new(10, 10, vec![false; 100], vec![100; 100])
+                .unwrap(),
+            resources: vec![stream_town_domain::GeneratedResource {
+                id: StableId::new("resource:diagnostic-tree").unwrap(),
+                kind: StableId::new("resource:wood").unwrap(),
+                target_kind: StableId::new("target:tree").unwrap(),
+                position: resource_position,
+                offset_milli_cells: [0, 0],
+                generation_occupancy: [0, 0],
+                amount: 100,
+            }],
+            foliage: Vec::new(),
+            deterministic_hash: String::new(),
+        };
+        let house_id = StableId::new("building:house").unwrap();
+        let house = &content.buildings[&house_id];
+        let runtime_id = StableId::new("building:diagnostic-house").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        simulation.buildings.insert(
+            runtime_id.clone(),
+            BuildingState {
+                id: runtime_id,
+                archetype: house.archetype.clone(),
+                position: GridPos { x: 2, z: 3 },
+                rotation_quarter_turns: 1,
+                level: 1,
+                health: 100,
+                complete: true,
+            },
+        );
+
+        let footprint_cells = floorplan_diagnostic_cells(&content, &simulation, &world);
+        assert_eq!(footprint_cells.len(), 7);
+        assert!(footprint_cells.contains(&resource_position));
+        for z in 3..=4 {
+            for x in 2..=4 {
+                assert!(footprint_cells.contains(&GridPos { x, z }));
+            }
+        }
+
+        let navigation = build_fine_navigation(&config, &content, &simulation, &world).unwrap();
+        let blocked = (0..navigation.height())
+            .flat_map(|z| (0..navigation.width()).map(move |x| GridPos { x, z }))
+            .filter(|cell| !navigation.is_walkable(*cell))
+            .count();
+        let pathfinding_mesh = world_diagnostic_overlay_mesh(
+            WorldDiagnosticMode::Pathfinding,
+            &config,
+            &content,
+            &simulation,
+            &world,
+            &navigation,
+        )
+        .unwrap();
+        let floorplan_mesh = world_diagnostic_overlay_mesh(
+            WorldDiagnosticMode::Floorplan,
+            &config,
+            &content,
+            &simulation,
+            &world,
+            &navigation,
+        )
+        .unwrap();
+        assert_eq!(
+            pathfinding_mesh
+                .attribute(Mesh::ATTRIBUTE_POSITION)
+                .unwrap()
+                .len(),
+            (usize::from(navigation.width()) + 1) * (usize::from(navigation.height()) + 1)
+        );
+        assert_eq!(pathfinding_mesh.indices().unwrap().len(), blocked * 6);
+        assert_eq!(
+            floorplan_mesh
+                .attribute(Mesh::ATTRIBUTE_POSITION)
+                .unwrap()
+                .len(),
+            footprint_cells.len() * 4
+        );
+
+        let mut runtime = WorldDiagnosticRuntime::default();
+        runtime.activate(WorldDiagnosticMode::Floorplan);
+        assert_eq!(runtime.mode, Some(WorldDiagnosticMode::Floorplan));
+        assert!((runtime.remaining_seconds - WORLD_DIAGNOSTIC_VIEW_SECONDS).abs() <= f32::EPSILON);
+
+        let mut app = App::new();
+        app.insert_resource(RuntimeConfig(config))
+            .insert_resource(RuntimeContent(content))
+            .insert_resource(SimulationRuntime(simulation))
+            .insert_resource(WorldRuntime {
+                generated: world,
+                legacy_terrain_mesh: None,
+                legacy_migration: None,
+            })
+            .insert_resource(FineNavigationRuntime {
+                grid: Some(navigation),
+                applied_signature: 0,
+            })
+            .insert_resource(runtime)
+            .init_resource::<Time>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, sync_world_diagnostic_view);
+        let building_entity = app
+            .world_mut()
+            .spawn((
+                RuntimeBuilding {
+                    id: StableId::new("building:visibility-test").unwrap(),
+                },
+                Visibility::Inherited,
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(building_entity),
+            Some(&Visibility::Hidden)
+        );
+        assert!(
+            app.world()
+                .get::<WorldDiagnosticVisibilityBackup>(building_entity)
+                .is_some()
+        );
+        let mut overlay_query = app.world_mut().query::<&WorldDiagnosticOverlay>();
+        assert_eq!(overlay_query.iter(app.world()).count(), 1);
+
+        app.world_mut()
+            .resource_mut::<WorldDiagnosticRuntime>()
+            .mode = None;
+        app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(building_entity),
+            Some(&Visibility::Inherited)
+        );
+        assert!(
+            app.world()
+                .get::<WorldDiagnosticVisibilityBackup>(building_entity)
+                .is_none()
+        );
+        let mut overlay_query = app.world_mut().query::<&WorldDiagnosticOverlay>();
+        assert_eq!(overlay_query.iter(app.world()).count(), 0);
     }
 
     #[test]

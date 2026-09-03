@@ -145,6 +145,19 @@ building closest to the TownHall for 15 seconds, with a five-second redirect coo
 simultaneous fights from making the camera strobe between targets. Any other ordinary command during
 an automatic shot returns it home and restarts that timer.
 
+## Town planning and diagnostics
+
+These commands are restricted to the Ruler, broadcaster, moderators, and configured game masters
+because they temporarily change the view for everyone watching the stream.
+
+| Command | Purpose |
+|---|---|
+| `!pathfinding` | For 10 seconds, hide buildings and resource models and paint every inaccessible third-cell of the live movement grid black. Accessible terrain remains normally rendered. |
+| `!floorplan` | For 10 seconds, hide buildings and resource models and paint the complete authored placement/exclusion footprint of every building, enemy camp, and active resource black. |
+
+Issuing either command again restarts its ten-second timer. Issuing the other switches directly to
+that view. Both modes are visual only: they do not modify navigation, placement, saves, or gameplay.
+
 ## Voting, technology, and rulership
 
 | Command | Purpose |

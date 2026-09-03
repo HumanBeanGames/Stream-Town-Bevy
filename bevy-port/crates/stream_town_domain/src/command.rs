@@ -83,6 +83,8 @@ pub fn unity_command_usage(input: &str) -> Option<&'static str> {
         "stdiscord" => "!stdiscord",
         "townstats" => "!townstats",
         "population" => "!population",
+        "pathfinding" => "!pathfinding",
+        "floorplan" => "!floorplan",
         // These source commands use the validator's `!{command}` fallback.
         "health" => "!health",
         "confirm" => "!confirm",
@@ -190,6 +192,8 @@ pub enum ChatCommand {
     Roles,
     TownStats,
     Population,
+    PathfindingView,
+    FloorplanView,
     Info {
         item: StableId,
         instance: Option<u16>,
@@ -649,6 +653,8 @@ impl FromStr for ChatCommand {
                     "roles" => no_argument(argument, Self::Roles),
                     "townstats" => no_argument(argument, Self::TownStats),
                     "population" => no_argument(argument, Self::Population),
+                    "pathfinding" => no_argument(argument, Self::PathfindingView),
+                    "floorplan" => no_argument(argument, Self::FloorplanView),
                     "stdiscord" => no_argument(argument, Self::Discord),
                     "buildings" => no_argument(argument, Self::Buildings),
                     "rid" => no_argument(argument, Self::RecruitIds),
@@ -1112,6 +1118,8 @@ mod tests {
             ]))
         );
         assert_eq!("!cam home".parse(), Ok(ChatCommand::ResetCamera));
+        assert_eq!("!pathfinding".parse(), Ok(ChatCommand::PathfindingView));
+        assert_eq!("!floorplan".parse(), Ok(ChatCommand::FloorplanView));
         assert_eq!("!follow me".parse(), Ok(ChatCommand::Follow(None)));
         assert_eq!(
             "!follow @Some_Viewer".parse(),
