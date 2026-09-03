@@ -595,7 +595,18 @@ Goblin/Blargul/Goblin Boss selection, and four camp-relative spawn offsets.
 Enemies use their converted models and controllers, acquire the nearest target
 inside the serialized sensor radius, retaliate against valid attackers, and
 otherwise advance on the active Town Hall while continuously retargeting.
-Moving targets are repathed on the authored one-second interval. Player combat
+Long-range enemy movement shares a reverse navigation field per connected
+walkable component instead of running a whole-map A* search for every enemy.
+Each component routes toward the attackable building closest to the Town Hall,
+so a sealed centre naturally directs an exterior wave to the nearest reachable
+fortification. Navigation or building-topology changes rebuild that field on
+Bevy's background compute pool while the last complete field remains active.
+Nearby retaliation and opportunistic targets use an 8x8-sector hierarchical
+route followed by a local corridor refinement, with ordinary A* retained only
+as a correctness fallback. Wave members are instantiated deterministically
+across ten seconds and their one-second repath phases are identity-staggered,
+preventing a horde from synchronizing scene creation or route work on one
+frame. Moving targets retain the authored one-second response interval. Player combat
 roles intercept enemies within Unity's 100-world-unit sensor region; attacks,
 projectiles, health, death, 60-second player revival, player-attributed kill
 objectives, and exact enemy gold rewards share the normal authoritative save

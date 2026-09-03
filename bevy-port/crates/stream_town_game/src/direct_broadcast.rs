@@ -816,6 +816,8 @@ impl Plugin for DirectTwitchBroadcastPlugin {
                     start_local_broadcast_diagnostic,
                     operator_window_close_requests_exit,
                     request_automatic_broadcast_start,
+                    stream_operator_live_button,
+                    stream_operator_restart_button,
                     apply_direct_broadcast_control,
                     poll_direct_broadcast_authorization,
                     start_prepared_broadcast_when_gameplay_ready,
@@ -825,8 +827,6 @@ impl Plugin for DirectTwitchBroadcastPlugin {
                     return_to_main_menu_after_broadcast_stops,
                     sync_stream_only_capture,
                     cleanup_completed_stream_only_readbacks,
-                    stream_operator_live_button,
-                    stream_operator_restart_button,
                     update_stream_operator_info,
                     stream_operator_chat_controls,
                     update_stream_operator_chat,
@@ -5165,6 +5165,36 @@ mod tests {
         let control = app.world().resource::<DirectBroadcastControl>();
         assert!(!control.restart_requested);
         assert!(!control.stop_requested);
+    }
+
+    #[test]
+    fn operator_live_button_applies_stop_in_the_pressed_frame() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(RuntimeConfig(stream_town_domain::GameConfig::default()))
+            .init_resource::<SensitiveScreenActive>()
+            .add_plugins(DirectTwitchBroadcastPlugin);
+        app.world_mut()
+            .resource_mut::<DirectBroadcastRuntime>()
+            .phase = DirectBroadcastPhase::Connecting;
+        app.world_mut().spawn((
+            StreamOperatorLiveButton,
+            Interaction::Pressed,
+            BackgroundColor(Color::NONE),
+            BorderColor::all(Color::NONE),
+        ));
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<DirectBroadcastRuntime>().phase,
+            DirectBroadcastPhase::Stopped
+        );
+        assert!(
+            !app.world()
+                .resource::<DirectBroadcastControl>()
+                .stop_requested
+        );
     }
 
     #[test]

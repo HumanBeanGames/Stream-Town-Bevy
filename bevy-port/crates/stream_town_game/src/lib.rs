@@ -4,7 +4,8 @@ mod tidal_music;
 pub mod twitch;
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, VecDeque},
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
@@ -141,6 +142,7 @@ const MAIN_MENU_SCENE_PATH: &str = "Assets/Scenes/Menu/Main_Menu_02.unity";
 const CREDITS_SCENE_PATH: &str = "Assets/Scenes/Menu/Credits.unity";
 const PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR: u128 = 1_000_000_000_000;
 const NIGHT_ENEMY_WAVE_INTERVAL_SECONDS: f64 = 120.0;
+const ENEMY_WAVE_SPAWN_SPREAD_SECONDS: f64 = 10.0;
 const CHIMNEY_ALPHA_STEPS: usize = 8;
 const TERRAIN_CHUNK_CELLS: u16 = 16;
 const OCEAN_PADDING_CELLS: u16 = 128;
@@ -629,6 +631,262 @@ struct NightEnemyWaveRuntime {
     night_day: Option<u32>,
     remaining_seconds: f64,
     wave_index: u32,
+    pending_spawns: VecDeque<PendingEnemySpawn>,
+    spawn_interval_seconds: f64,
+    spawn_remaining_seconds: f64,
+}
+
+#[derive(Clone, Debug)]
+struct PendingEnemySpawn {
+    camp: StableId,
+    archetype: StableId,
+    serial: u64,
+    final_raid_wave: bool,
+}
+
+#[derive(Clone, Debug)]
+struct EnemyRouteBuilding {
+    id: StableId,
+    town_hall_distance: u64,
+    approaches: Vec<GridPos>,
+}
+
+#[derive(Clone, Debug)]
+struct EnemyNavigationField {
+    signature: u64,
+    width: u16,
+    component_by_cell: Vec<u32>,
+    target_by_component: Vec<Option<StableId>>,
+    next_by_cell: Vec<Option<GridPos>>,
+    goal_by_cell: Vec<Option<GridPos>>,
+    cluster_edges: BTreeMap<EnemyClusterNode, Vec<EnemyClusterNode>>,
+}
+
+const ENEMY_NAVIGATION_CLUSTER_SIZE: u16 = 8;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct EnemyClusterNode {
+    x: u16,
+    z: u16,
+    component: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct EnemyPathOpenNode {
+    position: GridPos,
+    estimated_total: u32,
+    cost: u32,
+}
+
+impl Ord for EnemyPathOpenNode {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .estimated_total
+            .cmp(&self.estimated_total)
+            .then_with(|| other.cost.cmp(&self.cost))
+            .then_with(|| self.position.cmp(&other.position))
+    }
+}
+
+impl PartialOrd for EnemyPathOpenNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl EnemyNavigationField {
+    fn index(&self, position: GridPos) -> Option<usize> {
+        (position.x < self.width)
+            .then(|| usize::from(position.z) * usize::from(self.width) + usize::from(position.x))
+            .filter(|index| *index < self.component_by_cell.len())
+    }
+
+    fn destination(&self, start: GridPos) -> Option<(&StableId, GridPos)> {
+        let index = self.index(start)?;
+        let component = *self.component_by_cell.get(index)?;
+        let component = usize::try_from(component).ok()?;
+        Some((
+            self.target_by_component.get(component)?.as_ref()?,
+            self.goal_by_cell.get(index).copied().flatten()?,
+        ))
+    }
+
+    fn component_at(&self, position: GridPos) -> Option<u32> {
+        let component = *self.component_by_cell.get(self.index(position)?)?;
+        (component != u32::MAX).then_some(component)
+    }
+
+    fn cluster_node(&self, position: GridPos) -> Option<EnemyClusterNode> {
+        Some(EnemyClusterNode {
+            x: position.x / ENEMY_NAVIGATION_CLUSTER_SIZE,
+            z: position.z / ENEMY_NAVIGATION_CLUSTER_SIZE,
+            component: self.component_at(position)?,
+        })
+    }
+
+    fn cluster_path(&self, start: GridPos, goal: GridPos) -> Option<Vec<EnemyClusterNode>> {
+        let start = self.cluster_node(start)?;
+        let goal = self.cluster_node(goal)?;
+        if start.component != goal.component {
+            return None;
+        }
+        if start == goal {
+            return Some(vec![start]);
+        }
+        let mut frontier = VecDeque::from([start]);
+        let mut previous = BTreeMap::<EnemyClusterNode, EnemyClusterNode>::new();
+        let mut visited = BTreeSet::from([start]);
+        while let Some(current) = frontier.pop_front() {
+            for neighbour in self.cluster_edges.get(&current).into_iter().flatten() {
+                if !visited.insert(*neighbour) {
+                    continue;
+                }
+                previous.insert(*neighbour, current);
+                if *neighbour == goal {
+                    let mut route = vec![goal];
+                    let mut cursor = goal;
+                    while cursor != start {
+                        cursor = previous[&cursor];
+                        route.push(cursor);
+                    }
+                    route.reverse();
+                    return Some(route);
+                }
+                frontier.push_back(*neighbour);
+            }
+        }
+        None
+    }
+
+    fn hierarchical_path(
+        &self,
+        navigation: &stream_town_domain::NavGrid,
+        start: GridPos,
+        goal: GridPos,
+    ) -> Option<Vec<GridPos>> {
+        let cluster_route = self.cluster_path(start, goal)?;
+        let component = self.component_at(start)?;
+        let cluster_width = self.width.div_ceil(ENEMY_NAVIGATION_CLUSTER_SIZE);
+        let height = u16::try_from(self.component_by_cell.len() / usize::from(self.width)).ok()?;
+        let cluster_height = height.div_ceil(ENEMY_NAVIGATION_CLUSTER_SIZE);
+        let mut corridor = BTreeSet::new();
+        for cluster in cluster_route {
+            for dz in -1_i32..=1 {
+                for dx in -1_i32..=1 {
+                    let x = i32::from(cluster.x) + dx;
+                    let z = i32::from(cluster.z) + dz;
+                    if x >= 0
+                        && z >= 0
+                        && x < i32::from(cluster_width)
+                        && z < i32::from(cluster_height)
+                    {
+                        corridor.insert((u16::try_from(x).ok()?, u16::try_from(z).ok()?));
+                    }
+                }
+            }
+        }
+        self.path_within_cluster_corridor(navigation, start, goal, component, &corridor)
+    }
+
+    fn path_within_cluster_corridor(
+        &self,
+        navigation: &stream_town_domain::NavGrid,
+        start: GridPos,
+        goal: GridPos,
+        component: u32,
+        corridor: &BTreeSet<(u16, u16)>,
+    ) -> Option<Vec<GridPos>> {
+        if start == goal {
+            return Some(vec![start]);
+        }
+        let allowed = |position: GridPos| {
+            self.component_at(position) == Some(component)
+                && corridor.contains(&(
+                    position.x / ENEMY_NAVIGATION_CLUSTER_SIZE,
+                    position.z / ENEMY_NAVIGATION_CLUSTER_SIZE,
+                ))
+        };
+        if !allowed(start) || !allowed(goal) {
+            return None;
+        }
+        let mut open = BinaryHeap::from([EnemyPathOpenNode {
+            position: start,
+            estimated_total: grid_manhattan_distance(start, goal).saturating_mul(10),
+            cost: 0,
+        }]);
+        let mut previous = HashMap::<GridPos, GridPos>::new();
+        let mut costs = HashMap::<GridPos, u32>::from([(start, 0)]);
+        while let Some(current) = open.pop() {
+            if current.position == goal {
+                let mut route = vec![goal];
+                let mut cursor = goal;
+                while cursor != start {
+                    cursor = previous[&cursor];
+                    route.push(cursor);
+                }
+                route.reverse();
+                return Some(route);
+            }
+            if current.cost > costs[&current.position] {
+                continue;
+            }
+            for neighbour in
+                navigation_neighbours(current.position, navigation.width(), navigation.height())
+                    .into_iter()
+                    .flatten()
+                    .filter(|position| allowed(*position))
+            {
+                let height_delta = (i32::from(navigation.height_at(neighbour)?)
+                    - i32::from(navigation.height_at(current.position)?))
+                .unsigned_abs();
+                let next_cost = current.cost.saturating_add(10 + height_delta / 100);
+                if next_cost < *costs.get(&neighbour).unwrap_or(&u32::MAX) {
+                    costs.insert(neighbour, next_cost);
+                    previous.insert(neighbour, current.position);
+                    open.push(EnemyPathOpenNode {
+                        position: neighbour,
+                        estimated_total: next_cost.saturating_add(
+                            grid_manhattan_distance(neighbour, goal).saturating_mul(10),
+                        ),
+                        cost: next_cost,
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    fn path_to(&self, start: GridPos, building: &StableId, goal: GridPos) -> Option<Vec<GridPos>> {
+        let (field_building, field_goal) = self.destination(start)?;
+        if field_building != building || field_goal != goal {
+            return None;
+        }
+        let mut path = vec![start];
+        let mut current = start;
+        for _ in 0..self.component_by_cell.len() {
+            if current == goal {
+                return Some(path);
+            }
+            let next = self.next_by_cell.get(self.index(current)?)?.as_ref()?;
+            if *next == current {
+                return None;
+            }
+            current = *next;
+            path.push(current);
+        }
+        None
+    }
+}
+
+struct EnemyNavigationTask {
+    signature: u64,
+    task: Task<EnemyNavigationField>,
+}
+
+#[derive(Resource, Default)]
+struct EnemyNavigationRuntime {
+    field: Option<EnemyNavigationField>,
+    task: Option<EnemyNavigationTask>,
 }
 
 #[derive(Resource, Default)]
@@ -3762,6 +4020,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<WorldRenderStats>()
             .init_resource::<CrowdSeparationRuntime>()
             .init_resource::<StationTargetRuntime>()
+            .init_resource::<EnemyNavigationRuntime>()
             .init_resource::<RegenerationRoleRuntime>()
             .init_resource::<RulerVoteAnnouncementRuntime>()
             .init_resource::<CitizenDeathAnnouncementRuntime>()
@@ -4071,6 +4330,7 @@ impl Plugin for StreamTownGamePlugin {
                     (
                         reset_crowd_separation,
                         refresh_station_target_runtime,
+                        refresh_enemy_navigation,
                         move_agents.after(correct_player_rig_axis),
                         apply_crowd_separation,
                         update_agent_locomotion,
@@ -19426,6 +19686,7 @@ fn next_agent_goal(
     next_agent_goal_with_station_runtime(
         simulation,
         world,
+        None,
         config,
         content,
         &station_targets,
@@ -19454,6 +19715,7 @@ fn next_agent_goal_with_reservations(
     next_agent_goal_with_station_runtime(
         simulation,
         world,
+        None,
         config,
         content,
         &station_targets,
@@ -19512,24 +19774,21 @@ fn nearest_reachable_building_to_town_hall(
         .filter(|building| building.health > 0)
         .filter_map(|building| {
             let definition = building_def_for_archetype(content, &building.archetype)?;
-            let approach = reachable_building_approach(
-                world,
-                building.position,
-                rotated_footprint(definition.footprint, building.rotation_quarter_turns),
-                current,
-            )?;
             Some((
                 grid_distance_squared(building_visual_grid(content, building), town_hall_position),
                 building.id.clone(),
-                approach,
+                building.position,
+                rotated_footprint(definition.footprint, building.rotation_quarter_turns),
             ))
         })
         .collect::<Vec<_>>();
-    candidates.sort_by_key(|(town_hall_distance, id, _)| (*town_hall_distance, id.clone()));
+    candidates.sort_by_key(|(town_hall_distance, id, _, _)| (*town_hall_distance, id.clone()));
     candidates
         .into_iter()
-        .next()
-        .map(|(_, id, approach)| (id, approach))
+        .find_map(|(_, id, position, footprint)| {
+            reachable_building_approach(world, position, footprint, current)
+                .map(|approach| (id, approach))
+        })
 }
 
 fn enemy_navigation_can_reach(world: &GeneratedWorld, current: GridPos, goal: GridPos) -> bool {
@@ -19555,10 +19814,340 @@ fn reachable_building_approach(
         .find(|approach| enemy_navigation_can_reach(world, current, *approach))
 }
 
+fn enemy_route_buildings(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+) -> Vec<EnemyRouteBuilding> {
+    let town_hall = StableId::new("building:townhall").expect("static building ID");
+    let town_hall_position = simulation
+        .buildings
+        .get(&town_hall)
+        .map_or(GridPos { x: 0, z: 0 }, |building| {
+            building_visual_grid(content, building)
+        });
+    simulation
+        .buildings
+        .values()
+        .filter(|building| building.health > 0)
+        .filter_map(|building| {
+            let definition = building_def_for_archetype(content, &building.archetype)?;
+            let approaches = building_approaches(
+                world,
+                building.position,
+                rotated_footprint(definition.footprint, building.rotation_quarter_turns),
+                town_hall_position,
+            );
+            (!approaches.is_empty()).then(|| EnemyRouteBuilding {
+                id: building.id.clone(),
+                town_hall_distance: grid_distance_squared(
+                    building_visual_grid(content, building),
+                    town_hall_position,
+                ),
+                approaches,
+            })
+        })
+        .collect()
+}
+
+fn enemy_navigation_signature(
+    navigation: &stream_town_domain::NavGrid,
+    buildings: &[EnemyRouteBuilding],
+) -> u64 {
+    fn fold_u64(mut hash: u64, value: u64) -> u64 {
+        for byte in value.to_le_bytes() {
+            hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash
+    }
+
+    let mut hash = fold_u64(0xcbf2_9ce4_8422_2325, u64::from(navigation.width()));
+    hash = fold_u64(hash, u64::from(navigation.height()));
+    for z in 0..navigation.height() {
+        for x in 0..navigation.width() {
+            let position = GridPos { x, z };
+            hash = fold_u64(hash, u64::from(navigation.is_walkable(position)));
+            let height = navigation.height_at(position).unwrap_or_default();
+            hash = fold_u64(hash, u64::from(u16::from_le_bytes(height.to_le_bytes())));
+        }
+    }
+    for building in buildings {
+        hash = fold_u64(hash, stable_id_hash(&building.id));
+        hash = fold_u64(hash, building.town_hall_distance);
+        for approach in &building.approaches {
+            hash = fold_u64(hash, u64::from(approach.x) | (u64::from(approach.z) << 16));
+        }
+    }
+    hash
+}
+
+fn navigation_neighbours(position: GridPos, width: u16, height: u16) -> [Option<GridPos>; 4] {
+    [
+        position
+            .x
+            .checked_sub(1)
+            .map(|x| GridPos { x, z: position.z }),
+        position
+            .x
+            .checked_add(1)
+            .filter(|x| *x < width)
+            .map(|x| GridPos { x, z: position.z }),
+        position
+            .z
+            .checked_sub(1)
+            .map(|z| GridPos { x: position.x, z }),
+        position
+            .z
+            .checked_add(1)
+            .filter(|z| *z < height)
+            .map(|z| GridPos { x: position.x, z }),
+    ]
+}
+
+fn grid_manhattan_distance(left: GridPos, right: GridPos) -> u32 {
+    u32::from(left.x.abs_diff(right.x)) + u32::from(left.z.abs_diff(right.z))
+}
+
+fn build_enemy_navigation_field(
+    signature: u64,
+    navigation: stream_town_domain::NavGrid,
+    buildings: Vec<EnemyRouteBuilding>,
+) -> EnemyNavigationField {
+    const BLOCKED_COMPONENT: u32 = u32::MAX;
+
+    let width = navigation.width();
+    let height = navigation.height();
+    let cell_count = usize::from(width) * usize::from(height);
+    let index =
+        |position: GridPos| usize::from(position.z) * usize::from(width) + usize::from(position.x);
+    let mut component_by_cell = vec![BLOCKED_COMPONENT; cell_count];
+    let mut component_count = 0_u32;
+    for z in 0..height {
+        for x in 0..width {
+            let start = GridPos { x, z };
+            if !navigation.is_walkable(start)
+                || component_by_cell[index(start)] != BLOCKED_COMPONENT
+            {
+                continue;
+            }
+            let component = component_count;
+            component_count = component_count.saturating_add(1);
+            component_by_cell[index(start)] = component;
+            let mut queue = VecDeque::from([start]);
+            while let Some(current) = queue.pop_front() {
+                for neighbour in navigation_neighbours(current, width, height)
+                    .into_iter()
+                    .flatten()
+                {
+                    let neighbour_index = index(neighbour);
+                    if navigation.is_walkable(neighbour)
+                        && component_by_cell[neighbour_index] == BLOCKED_COMPONENT
+                    {
+                        component_by_cell[neighbour_index] = component;
+                        queue.push_back(neighbour);
+                    }
+                }
+            }
+        }
+    }
+
+    let component_count = usize::try_from(component_count).unwrap_or(0);
+    let mut selected = vec![None::<(u64, StableId)>; component_count];
+    for building in &buildings {
+        for approach in &building.approaches {
+            let component = component_by_cell[index(*approach)];
+            if component == BLOCKED_COMPONENT {
+                continue;
+            }
+            let candidate = (building.town_hall_distance, building.id.clone());
+            let selected = &mut selected[usize::try_from(component).expect("component fits usize")];
+            if selected.as_ref().is_none_or(|current| candidate < *current) {
+                *selected = Some(candidate);
+            }
+        }
+    }
+    let target_by_component = selected
+        .iter()
+        .map(|candidate| candidate.as_ref().map(|(_, id)| id.clone()))
+        .collect::<Vec<_>>();
+    let mut next_by_cell = vec![None; cell_count];
+    let mut goal_by_cell = vec![None; cell_count];
+    let mut route_costs = vec![u32::MAX; cell_count];
+    let mut queue = BinaryHeap::new();
+    for building in &buildings {
+        for approach in &building.approaches {
+            let approach_index = index(*approach);
+            let component = component_by_cell[approach_index];
+            if component == BLOCKED_COMPONENT
+                || target_by_component[usize::try_from(component).expect("component fits usize")]
+                    .as_ref()
+                    != Some(&building.id)
+                || goal_by_cell[approach_index].is_some()
+            {
+                continue;
+            }
+            goal_by_cell[approach_index] = Some(*approach);
+            route_costs[approach_index] = 0;
+            queue.push(EnemyPathOpenNode {
+                position: *approach,
+                estimated_total: 0,
+                cost: 0,
+            });
+        }
+    }
+    while let Some(current) = queue.pop() {
+        let current_index = index(current.position);
+        if current.cost > route_costs[current_index] {
+            continue;
+        }
+        let component = component_by_cell[current_index];
+        let goal = goal_by_cell[current_index].expect("queued route cells have a goal");
+        for neighbour in navigation_neighbours(current.position, width, height)
+            .into_iter()
+            .flatten()
+        {
+            let neighbour_index = index(neighbour);
+            if component_by_cell[neighbour_index] != component {
+                continue;
+            }
+            let height_delta = (i32::from(navigation.height_at(neighbour).unwrap_or_default())
+                - i32::from(navigation.height_at(current.position).unwrap_or_default()))
+            .unsigned_abs();
+            let next_cost = current.cost.saturating_add(10 + height_delta / 100);
+            if next_cost < route_costs[neighbour_index] {
+                route_costs[neighbour_index] = next_cost;
+                next_by_cell[neighbour_index] = Some(current.position);
+                goal_by_cell[neighbour_index] = Some(goal);
+                queue.push(EnemyPathOpenNode {
+                    position: neighbour,
+                    estimated_total: next_cost,
+                    cost: next_cost,
+                });
+            }
+        }
+    }
+
+    let mut cluster_edge_sets = BTreeMap::<EnemyClusterNode, BTreeSet<EnemyClusterNode>>::new();
+    for z in 0..height {
+        for x in 0..width {
+            let current = GridPos { x, z };
+            let current_index = index(current);
+            let component = component_by_cell[current_index];
+            if component == BLOCKED_COMPONENT {
+                continue;
+            }
+            let current_cluster = EnemyClusterNode {
+                x: x / ENEMY_NAVIGATION_CLUSTER_SIZE,
+                z: z / ENEMY_NAVIGATION_CLUSTER_SIZE,
+                component,
+            };
+            cluster_edge_sets.entry(current_cluster).or_default();
+            for neighbour in [
+                x.checked_add(1)
+                    .filter(|next| *next < width)
+                    .map(|next| GridPos { x: next, z }),
+                z.checked_add(1)
+                    .filter(|next| *next < height)
+                    .map(|next| GridPos { x, z: next }),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let neighbour_component = component_by_cell[index(neighbour)];
+                if neighbour_component != component {
+                    continue;
+                }
+                let neighbour_cluster = EnemyClusterNode {
+                    x: neighbour.x / ENEMY_NAVIGATION_CLUSTER_SIZE,
+                    z: neighbour.z / ENEMY_NAVIGATION_CLUSTER_SIZE,
+                    component,
+                };
+                if neighbour_cluster != current_cluster {
+                    cluster_edge_sets
+                        .entry(current_cluster)
+                        .or_default()
+                        .insert(neighbour_cluster);
+                    cluster_edge_sets
+                        .entry(neighbour_cluster)
+                        .or_default()
+                        .insert(current_cluster);
+                }
+            }
+        }
+    }
+    let cluster_edges = cluster_edge_sets
+        .into_iter()
+        .map(|(cluster, neighbours)| (cluster, neighbours.into_iter().collect()))
+        .collect();
+
+    EnemyNavigationField {
+        signature,
+        width,
+        component_by_cell,
+        target_by_component,
+        next_by_cell,
+        goal_by_cell,
+        cluster_edges,
+    }
+}
+
+fn refresh_enemy_navigation(
+    world: Res<WorldRuntime>,
+    simulation: Res<SimulationRuntime>,
+    content: Res<RuntimeContent>,
+    mut runtime: ResMut<EnemyNavigationRuntime>,
+) {
+    let buildings = enemy_route_buildings(&content.0, &simulation.0, &world.generated);
+    let signature = enemy_navigation_signature(&world.generated.navigation, &buildings);
+    let completed = runtime
+        .task
+        .as_mut()
+        .and_then(|pending| block_on(poll_once(&mut pending.task)));
+    if let Some(field) = completed {
+        runtime.task = None;
+        if field.signature == signature {
+            runtime.field = Some(field);
+        }
+    }
+    if runtime
+        .field
+        .as_ref()
+        .is_some_and(|field| field.signature == signature)
+        || runtime
+            .task
+            .as_ref()
+            .is_some_and(|pending| pending.signature == signature)
+    {
+        return;
+    }
+    if runtime.task.is_some() {
+        return;
+    }
+
+    let navigation = world.generated.navigation.clone();
+    if runtime.field.is_none() {
+        runtime.field = Some(build_enemy_navigation_field(
+            signature, navigation, buildings,
+        ));
+    } else if let Some(pool) = AsyncComputeTaskPool::try_get() {
+        runtime.task = Some(EnemyNavigationTask {
+            signature,
+            task: pool.spawn(async move {
+                build_enemy_navigation_field(signature, navigation, buildings)
+            }),
+        });
+    } else {
+        runtime.field = Some(build_enemy_navigation_field(
+            signature, navigation, buildings,
+        ));
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn next_agent_goal_with_station_runtime(
     simulation: &WorldSimulation,
     world: &GeneratedWorld,
+    enemy_navigation: Option<&EnemyNavigationField>,
     config: &GameConfig,
     content: &ContentCatalog,
     station_targets: &StationTargetRuntime,
@@ -19596,10 +20185,6 @@ fn next_agent_goal_with_station_runtime(
                         || (target.health < target.max_health
                             && enemy_targets_kind(content, actor, "target:injured_player"))
                 })
-                .filter(|target| {
-                    within_actor_attack_range(content, simulation, actor, target, current)
-                        || enemy_navigation_can_reach(world, current, target.position)
-                })
             {
                 return (
                     AgentGoal::Attack(target.id.clone()),
@@ -19623,15 +20208,12 @@ fn next_agent_goal_with_station_runtime(
                             && enemy_targets_kind(content, actor, "target:damaged_building"))
                 })
                 && let Some(definition) = building_def_for_archetype(content, &building.archetype)
-                && let Some(approach) = reachable_building_approach(
+                && let Some(approach) = building_approach(
                     world,
                     building.position,
                     rotated_footprint(definition.footprint, building.rotation_quarter_turns),
                     current,
                 )
-                && (within_enemy_building_attack_range(
-                    content, simulation, actor, building, current,
-                ) || world.navigation.find_path(current, approach).is_ok())
             {
                 return (
                     AgentGoal::AttackBuilding(building.id.clone()),
@@ -19783,10 +20365,6 @@ fn next_agent_goal_with_station_runtime(
                     .filter(|target| {
                         within_enemy_target_search(content, actor, current, target.position)
                     })
-                    .filter(|target| {
-                        within_actor_attack_range(content, simulation, actor, target, current)
-                            || enemy_navigation_can_reach(world, current, target.position)
-                    })
                     .map(|target| {
                         (
                             grid_distance_squared(target.position, current),
@@ -19813,7 +20391,7 @@ fn next_agent_goal_with_station_runtime(
                     })
                     .filter_map(|building| {
                         let definition = building_def_for_archetype(content, &building.archetype)?;
-                        let approach = reachable_building_approach(
+                        let approach = building_approach(
                             world,
                             building.position,
                             rotated_footprint(
@@ -19875,9 +20453,23 @@ fn next_agent_goal_with_station_runtime(
             // Advance on the Town Hall when it is reachable. If fortifications
             // seal it off, attack the reachable building closest to it instead
             // of repeatedly requesting an impossible A* path and idling.
-            if let Some((building_id, approach)) =
-                nearest_reachable_building_to_town_hall(content, simulation, world, current)
-            {
+            let route = enemy_navigation
+                .and_then(|navigation| navigation.destination(current))
+                .and_then(|(building, approach)| {
+                    simulation
+                        .buildings
+                        .get(building)
+                        .filter(|building| building.health > 0)
+                        .map(|building| (building.id.clone(), approach))
+                })
+                .or_else(|| {
+                    if enemy_navigation.is_none() {
+                        nearest_reachable_building_to_town_hall(content, simulation, world, current)
+                    } else {
+                        None
+                    }
+                });
+            if let Some((building_id, approach)) = route {
                 let building = &simulation.buildings[&building_id];
                 return (
                     AgentGoal::AttackBuilding(building_id),
@@ -20286,6 +20878,13 @@ fn stable_id_hash(value: &StableId) -> u64 {
         .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
             (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
         })
+}
+
+fn initial_enemy_repath_delay(config: &GameConfig, actor: &StableId) -> f32 {
+    let interval = config.gameplay.repath_interval_seconds.max(0.1);
+    let phase =
+        f32::from(u16::try_from(stable_id_hash(actor) % 1_000).unwrap_or_default()) / 1_000.0;
+    interval * phase
 }
 
 fn regenerated_resource_offset(id: &StableId, position: GridPos) -> [i16; 2] {
@@ -22307,6 +22906,7 @@ fn update_enemy_encounters(
     asset_root: Res<RuntimeAssetRoot>,
     render: Res<RenderAssets>,
     world: Res<WorldRuntime>,
+    enemy_navigation: Res<EnemyNavigationRuntime>,
     mut simulation: ResMut<SimulationRuntime>,
     mut night_waves: ResMut<NightEnemyWaveRuntime>,
     agents: Query<(Entity, &Agent)>,
@@ -22332,6 +22932,71 @@ fn update_enemy_encounters(
         if let Some(raid) = &mut simulation.0.active_raid {
             raid.tracked_enemies.remove(&enemy);
         }
+    }
+
+    if !night_waves.pending_spawns.is_empty() {
+        night_waves.spawn_remaining_seconds =
+            (night_waves.spawn_remaining_seconds - time.delta_secs_f64()).max(0.0);
+        if night_waves.spawn_remaining_seconds <= f64::EPSILON
+            && let Some(pending) = night_waves.pending_spawns.pop_front()
+        {
+            let spawn_source = simulation
+                .0
+                .enemy_camps
+                .get(&pending.camp)
+                .and_then(|camp| {
+                    let camp_archetype = content.0.archetypes.get(&camp.archetype)?;
+                    Some((
+                        camp.clone(),
+                        camp_archetype.enemy_spawner.clone()?,
+                        camp_archetype.footprint,
+                    ))
+                });
+            if let Some((camp, spawner, footprint)) = spawn_source {
+                let position = enemy_spawn_position(
+                    &world.generated,
+                    &content.0,
+                    &simulation.0,
+                    enemy_navigation.field.as_ref(),
+                    &camp,
+                    &spawner,
+                    footprint,
+                    pending.serial,
+                );
+                if let Some(enemy) = spawn_runtime_enemy(
+                    &mut commands,
+                    &config.0,
+                    &world.generated,
+                    &content.0,
+                    &presentation.0,
+                    asset_server.as_deref(),
+                    &asset_root.0,
+                    &render,
+                    &mut simulation.0,
+                    pending.archetype,
+                    position,
+                ) {
+                    if pending.final_raid_wave {
+                        let player_count = simulation_player_count(&simulation.0);
+                        let boss_health =
+                            i32::try_from(50_usize.saturating_mul(player_count).max(1_000))
+                                .unwrap_or(i32::MAX);
+                        if let Some(actor) = simulation.0.actors.get_mut(&enemy) {
+                            actor.health = boss_health;
+                            actor.max_health = boss_health;
+                        }
+                    }
+                    if let Some(camp) = simulation.0.enemy_camps.get_mut(&pending.camp) {
+                        camp.spawned_enemies.insert(enemy.clone());
+                    }
+                    if let Some(raid) = &mut simulation.0.active_raid {
+                        raid.tracked_enemies.insert(enemy);
+                    }
+                }
+            }
+            night_waves.spawn_remaining_seconds = night_waves.spawn_interval_seconds;
+        }
+        return;
     }
 
     if simulation.0.active_event == Some(TownEvent::EnemyRaid)
@@ -22375,22 +23040,21 @@ fn update_enemy_encounters(
         let camps = simulation
             .0
             .enemy_camps
-            .values()
-            .filter_map(|camp| {
-                let camp_archetype = content.0.archetypes.get(&camp.archetype)?;
-                Some((
-                    camp.clone(),
-                    camp_archetype.enemy_spawner.clone()?,
-                    camp_archetype.footprint,
-                ))
+            .iter()
+            .filter(|(_, camp)| {
+                content
+                    .0
+                    .archetypes
+                    .get(&camp.archetype)
+                    .is_some_and(|archetype| archetype.enemy_spawner.is_some())
             })
+            .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
         if camps.is_empty() {
             simulation.0.finish_raid();
         } else {
-            let mut wave_members = BTreeSet::new();
-            for _ in 0..count {
-                let serial = simulation.0.next_enemy_serial;
+            for offset in 0..u64::from(count) {
+                let serial = simulation.0.next_enemy_serial.saturating_add(offset);
                 // Unity chooses a random eligible camp for every raid member.
                 // Use the same per-enemy distribution with a stable hash so
                 // fixed seeds and replays remain deterministic in Bevy.
@@ -22399,45 +23063,19 @@ fn update_enemy_encounters(
                         % u64::try_from(camps.len()).expect("camp count fits u64"),
                 )
                 .expect("raid camp index fits usize");
-                let (camp, spawner, footprint) = &camps[camp_index];
-                let position = enemy_spawn_position(
-                    &world.generated,
-                    &content.0,
-                    &simulation.0,
-                    camp,
-                    spawner,
-                    *footprint,
+                night_waves.pending_spawns.push_back(PendingEnemySpawn {
+                    camp: camps[camp_index].clone(),
+                    archetype: archetype.clone(),
                     serial,
-                );
-                if let Some(enemy) = spawn_runtime_enemy(
-                    &mut commands,
-                    &config.0,
-                    &world.generated,
-                    &content.0,
-                    &presentation.0,
-                    asset_server.as_deref(),
-                    &asset_root.0,
-                    &render,
-                    &mut simulation.0,
-                    archetype.clone(),
-                    position,
-                ) {
-                    if final_wave {
-                        let player_count = simulation_player_count(&simulation.0);
-                        let boss_health =
-                            i32::try_from(50_usize.saturating_mul(player_count).max(1_000))
-                                .unwrap_or(i32::MAX);
-                        if let Some(actor) = simulation.0.actors.get_mut(&enemy) {
-                            actor.health = boss_health;
-                            actor.max_health = boss_health;
-                        }
-                    }
-                    wave_members.insert(enemy);
-                }
+                    final_raid_wave: final_wave,
+                });
             }
+            night_waves.spawn_interval_seconds =
+                ENEMY_WAVE_SPAWN_SPREAD_SECONDS / f64::from(count.max(1));
+            night_waves.spawn_remaining_seconds = 0.0;
             if let Some(raid) = &mut simulation.0.active_raid {
                 raid.current_wave = raid.current_wave.saturating_add(1);
-                raid.tracked_enemies = wave_members;
+                raid.tracked_enemies.clear();
             }
         }
         return;
@@ -22477,41 +23115,26 @@ fn update_enemy_encounters(
         return;
     }
     let wave_archetype = StableId::new("enemy:night_wave").expect("static stable ID");
-    for _ in 0..raid_enemies_per_wave(player_count) {
-        let serial = simulation.0.next_enemy_serial;
+    let wave_count = raid_enemies_per_wave(player_count);
+    for offset in 0..u64::from(wave_count) {
+        let serial = simulation.0.next_enemy_serial.saturating_add(offset);
         let camp_index = usize::try_from(
             generated_enemy_camp_hash(simulation.0.world_seed, &wave_archetype, serial)
                 % u64::try_from(camps.len()).expect("camp count fits u64"),
         )
         .expect("night-wave camp index fits usize");
-        let (camp_id, camp, spawner, footprint) = &camps[camp_index];
+        let (camp_id, _, spawner, _) = &camps[camp_index];
         let archetype = weighted_enemy_archetype(spawner, simulation.0.world_seed, serial);
-        let position = enemy_spawn_position(
-            &world.generated,
-            &content.0,
-            &simulation.0,
-            camp,
-            spawner,
-            *footprint,
-            serial,
-        );
-        if let Some(enemy) = spawn_runtime_enemy(
-            &mut commands,
-            &config.0,
-            &world.generated,
-            &content.0,
-            &presentation.0,
-            asset_server.as_deref(),
-            &asset_root.0,
-            &render,
-            &mut simulation.0,
+        night_waves.pending_spawns.push_back(PendingEnemySpawn {
+            camp: camp_id.clone(),
             archetype,
-            position,
-        ) && let Some(runtime_camp) = simulation.0.enemy_camps.get_mut(camp_id)
-        {
-            runtime_camp.spawned_enemies.insert(enemy);
-        }
+            serial,
+            final_raid_wave: false,
+        });
     }
+    night_waves.spawn_interval_seconds =
+        ENEMY_WAVE_SPAWN_SPREAD_SECONDS / f64::from(wave_count.max(1));
+    night_waves.spawn_remaining_seconds = 0.0;
 }
 
 fn night_enemy_wave_due(runtime: &mut NightEnemyWaveRuntime, day: u32, delta_seconds: f64) -> bool {
@@ -23207,6 +23830,31 @@ fn try_agent_path(
     path.ok()
 }
 
+fn try_agent_path_for_goal(
+    navigation: &stream_town_domain::NavGrid,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    enemy_navigation: Option<&EnemyNavigationField>,
+    kind: &ActorKind,
+    goal_kind: &AgentGoal,
+    start: GridPos,
+    goal: GridPos,
+) -> Option<Vec<GridPos>> {
+    if *kind == ActorKind::Enemy
+        && let AgentGoal::AttackBuilding(building) = goal_kind
+        && let Some(path) = enemy_navigation.and_then(|field| field.path_to(start, building, goal))
+    {
+        return Some(path);
+    }
+    if *kind == ActorKind::Enemy
+        && let Some(path) =
+            enemy_navigation.and_then(|field| field.hierarchical_path(navigation, start, goal))
+    {
+        return Some(path);
+    }
+    try_agent_path(navigation, content, simulation, kind, start, goal)
+}
+
 fn agent_action_facing_grid(
     goal: &AgentGoal,
     content: &ContentCatalog,
@@ -23435,6 +24083,7 @@ fn move_agents(
     authored_presentation: Res<RuntimePresentation>,
     render: Res<RenderAssets>,
     station_targets: Res<StationTargetRuntime>,
+    enemy_navigation: Res<EnemyNavigationRuntime>,
     mut world: ResMut<WorldRuntime>,
     mut simulation: ResMut<SimulationRuntime>,
     mut stats: ResMut<SessionStats>,
@@ -23759,6 +24408,7 @@ fn move_agents(
             let (updated_goal, updated_target) = next_agent_goal_with_station_runtime(
                 &simulation.0,
                 &world.generated,
+                enemy_navigation.field.as_ref(),
                 &config.0,
                 &content.0,
                 &station_targets,
@@ -23950,6 +24600,7 @@ fn move_agents(
                     next_agent_goal_with_station_runtime(
                         &simulation.0,
                         &world.generated,
+                        enemy_navigation.field.as_ref(),
                         &config.0,
                         &content.0,
                         &station_targets,
@@ -23964,11 +24615,13 @@ fn move_agents(
                 if candidate_goal == AgentGoal::Wander {
                     break (candidate_goal, candidate_target, None);
                 }
-                if let Some(path) = try_agent_path(
+                if let Some(path) = try_agent_path_for_goal(
                     &world.generated.navigation,
                     &content.0,
                     &simulation.0,
+                    enemy_navigation.field.as_ref(),
                     &agent.kind,
+                    &candidate_goal,
                     location.0,
                     candidate_target,
                 ) {
@@ -24014,11 +24667,13 @@ fn move_agents(
                 target
             };
             if planned_path.is_none() {
-                planned_path = try_agent_path(
+                planned_path = try_agent_path_for_goal(
                     &world.generated.navigation,
                     &content.0,
                     &simulation.0,
+                    enemy_navigation.field.as_ref(),
                     &agent.kind,
+                    &goal,
                     location.0,
                     target,
                 );
@@ -34763,6 +35418,7 @@ fn enemy_spawn_position(
     world: &GeneratedWorld,
     content: &ContentCatalog,
     simulation: &WorldSimulation,
+    enemy_navigation: Option<&EnemyNavigationField>,
     camp: &EnemyCampState,
     spawner: &stream_town_domain::EnemySpawnerDef,
     footprint: [u16; 2],
@@ -34802,12 +35458,16 @@ fn enemy_spawn_position(
                     .min(world.navigation.width() - 1)
             {
                 let candidate = GridPos { x, z };
-                if world.navigation.is_walkable(candidate)
-                    && nearest_reachable_building_to_town_hall(
-                        content, simulation, world, candidate,
-                    )
-                    .is_some()
-                {
+                let reaches_town = enemy_navigation.map_or_else(
+                    || {
+                        nearest_reachable_building_to_town_hall(
+                            content, simulation, world, candidate,
+                        )
+                        .is_some()
+                    },
+                    |field| field.destination(candidate).is_some(),
+                );
+                if world.navigation.is_walkable(candidate) && reaches_town {
                     return candidate;
                 }
             }
@@ -34961,7 +35621,7 @@ fn spawn_runtime_enemy_entity(
             target: deterministic_wander_target(world, id, position),
             action_cooldown_seconds: 0.0,
             action_started: false,
-            repath_remaining_seconds: 0.0,
+            repath_remaining_seconds: initial_enemy_repath_delay(config, id),
             health_regen_accumulator: 0.0,
             wander_sequence: 0,
             previous_wander_origin: None,
@@ -45103,6 +45763,7 @@ mod tests {
         let (first_goal, first_target) = next_agent_goal_with_station_runtime(
             &simulation,
             &world,
+            None,
             &config,
             &content,
             &station_targets,
@@ -45132,6 +45793,7 @@ mod tests {
         let (retry_goal, retry_target) = next_agent_goal_with_station_runtime(
             &simulation,
             &world,
+            None,
             &config,
             &content,
             &station_targets,
@@ -46015,6 +46677,7 @@ mod tests {
                     &first_world,
                     &content,
                     &first,
+                    None,
                     camp,
                     camp_spawner,
                     archetype.footprint,
@@ -46287,6 +46950,7 @@ mod tests {
                 &world,
                 &content,
                 &simulation,
+                None,
                 &camp,
                 spawner,
                 camp_archetype.footprint,
@@ -54054,5 +54718,95 @@ mod tests {
         let shader = include_str!("../../../assets/shaders/water_material.wgsl");
         assert!(shader.contains("apply_pbr_lighting(pbr_input)"));
         assert!(!shader.contains("keep it unlit"));
+    }
+
+    #[test]
+    fn enemy_flow_field_routes_each_component_to_its_nearest_town_target() {
+        let width = 16_u16;
+        let height = 8_u16;
+        let mut blocked = vec![false; usize::from(width) * usize::from(height)];
+        for z in 0..height {
+            blocked[usize::from(z) * usize::from(width) + 7] = true;
+        }
+        let navigation = stream_town_domain::NavGrid::new(
+            width,
+            height,
+            blocked,
+            vec![0; usize::from(width) * usize::from(height)],
+        )
+        .unwrap();
+        let wall = StableId::new("building:test_wall").unwrap();
+        let town_hall = StableId::new("building:townhall").unwrap();
+        let field = build_enemy_navigation_field(
+            42,
+            navigation.clone(),
+            vec![
+                EnemyRouteBuilding {
+                    id: town_hall.clone(),
+                    town_hall_distance: 0,
+                    approaches: vec![GridPos { x: 12, z: 4 }],
+                },
+                EnemyRouteBuilding {
+                    id: wall.clone(),
+                    town_hall_distance: 10,
+                    approaches: vec![GridPos { x: 6, z: 4 }, GridPos { x: 8, z: 4 }],
+                },
+            ],
+        );
+
+        let left = GridPos { x: 1, z: 1 };
+        let right = GridPos { x: 14, z: 1 };
+        let (left_target, left_goal) = field.destination(left).unwrap();
+        let (right_target, right_goal) = field.destination(right).unwrap();
+        assert_eq!(left_target, &wall);
+        assert_eq!(left_goal, GridPos { x: 6, z: 4 });
+        assert_eq!(right_target, &town_hall);
+        assert_eq!(right_goal, GridPos { x: 12, z: 4 });
+        let route = field.path_to(left, &wall, left_goal).unwrap();
+        assert_eq!(route.first(), Some(&left));
+        assert_eq!(route.last(), Some(&left_goal));
+        assert!(
+            route
+                .iter()
+                .all(|position| navigation.is_walkable(*position))
+        );
+    }
+
+    #[test]
+    fn hierarchical_enemy_path_refines_a_valid_cluster_corridor() {
+        let width = 24_u16;
+        let height = 24_u16;
+        let mut blocked = vec![false; usize::from(width) * usize::from(height)];
+        for z in 0..height {
+            if z != 5 {
+                blocked[usize::from(z) * usize::from(width) + 8] = true;
+            }
+            if z != 18 {
+                blocked[usize::from(z) * usize::from(width) + 16] = true;
+            }
+        }
+        let navigation = stream_town_domain::NavGrid::new(
+            width,
+            height,
+            blocked,
+            vec![0; usize::from(width) * usize::from(height)],
+        )
+        .unwrap();
+        let field = build_enemy_navigation_field(7, navigation.clone(), Vec::new());
+        let start = GridPos { x: 2, z: 2 };
+        let goal = GridPos { x: 22, z: 22 };
+        let route = field.hierarchical_path(&navigation, start, goal).unwrap();
+        assert_eq!(route.first(), Some(&start));
+        assert_eq!(route.last(), Some(&goal));
+        assert!(
+            route
+                .iter()
+                .all(|position| navigation.is_walkable(*position))
+        );
+        assert!(
+            route
+                .windows(2)
+                .all(|cells| grid_manhattan_distance(cells[0], cells[1]) == 1)
+        );
     }
 }
