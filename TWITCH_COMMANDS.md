@@ -120,6 +120,10 @@ configured operators for bulk progression/testing; normal play should use `!upgr
 | `!rrole <id> <role>` | Assign a recruit's role. |
 | `!rdismiss <id>` | Dismiss a recruit. |
 
+Recruits can reach at most level 10 in each profession. Twitch player citizens retain the full
+profession progression range; this keeps large NPC-heavy towns useful without letting recruits
+erase the combat-pressure tradeoff created by their contribution to enemy-wave scaling.
+
 ## Camera and locating citizens
 
 | Command | Purpose |
@@ -128,9 +132,12 @@ configured operators for bulk progression/testing; normal play should use `!upgr
 | `!cam <direction> [amount]` | Ruler/operator: smoothly move the broadcast camera with `up`, `down`, `left`, `right`, `in`, or `out`. Multiple direction/amount pairs are accepted. |
 | `!cam home` / `!resetcam` | Ruler/operator: return to the authored town composition and base zoom. |
 | `!follow <username>` / `!follow me` | During an automatic-camera shot, follow one living player citizen without leaving automatic mode. |
+| `!focus <BuildingName> <BID>` | During automatic direction or while you are placing a building, focus that building for 15 seconds. Successful placement commands refresh the focus timer. |
 
 After 30 seconds without any acknowledged command, the broadcast camera can enter its automatic
-director. Any ordinary command during an automatic shot returns it home and restarts that timer.
+director. Votes do not interrupt it. Damage switches the director to the damaged citizen or
+building closest to the TownHall for 15 seconds. Any other ordinary command during an automatic
+shot returns it home and restarts that timer.
 
 ## Voting, technology, and rulership
 
@@ -143,6 +150,11 @@ director. Any ordinary command during an automatic shot returns it home and rest
 The Nursery, ProspectorHut, and Greenhouse technologies begin locked but have no prerequisite
 technology, so each can appear in a technology vote immediately. Their post-vote objectives use a
 different resource from the one the unlocked worker restores.
+
+Each three-choice technology ballot contains one deepest eligible specialization, one shallowest
+eligible fundamental, and one random remaining technology. Equal-depth choices are tie-broken
+deterministically from the town seed. The UI labels the first two choices `Specialized!` and
+`Fundamental!`.
 
 ## Information
 

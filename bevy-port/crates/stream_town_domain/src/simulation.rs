@@ -776,12 +776,24 @@ impl WorldSimulation {
         amount: u32,
         multiplier_per_thousand: u32,
     ) -> Result<u16, SimulationError> {
+        self.grant_role_experience_capped(actor, amount, multiplier_per_thousand, MAX_ROLE_LEVEL)
+    }
+
+    pub fn grant_role_experience_capped(
+        &mut self,
+        actor: &StableId,
+        amount: u32,
+        multiplier_per_thousand: u32,
+        maximum_level: u16,
+    ) -> Result<u16, SimulationError> {
+        let maximum_level = maximum_level.clamp(1, MAX_ROLE_LEVEL);
         let actor_state = self.actor_mut(actor)?;
         let progress = actor_state
             .role_progression
             .entry(actor_state.role.clone())
             .or_default();
-        if progress.level >= MAX_ROLE_LEVEL {
+        if progress.level >= maximum_level {
+            progress.level = maximum_level;
             progress.experience = 0;
             return Ok(0);
         }
@@ -790,7 +802,7 @@ impl WorldSimulation {
         let adjusted = u32::try_from(adjusted).unwrap_or(u32::MAX).max(1);
         progress.experience = progress.experience.saturating_add(adjusted);
         let mut levels_gained = 0_u16;
-        while progress.level < MAX_ROLE_LEVEL {
+        while progress.level < maximum_level {
             let required = required_role_experience(progress.level);
             if progress.experience < required {
                 break;
@@ -798,6 +810,9 @@ impl WorldSimulation {
             progress.experience -= required;
             progress.level += 1;
             levels_gained += 1;
+        }
+        if progress.level >= maximum_level {
+            progress.experience = 0;
         }
         Ok(levels_gained)
     }
@@ -807,14 +822,24 @@ impl WorldSimulation {
         actor: &StableId,
         amount: u16,
     ) -> Result<u16, SimulationError> {
+        self.grant_role_levels_capped(actor, amount, MAX_ROLE_LEVEL)
+    }
+
+    pub fn grant_role_levels_capped(
+        &mut self,
+        actor: &StableId,
+        amount: u16,
+        maximum_level: u16,
+    ) -> Result<u16, SimulationError> {
+        let maximum_level = maximum_level.clamp(1, MAX_ROLE_LEVEL);
         let actor_state = self.actor_mut(actor)?;
         let progress = actor_state
             .role_progression
             .entry(actor_state.role.clone())
             .or_default();
         let before = progress.level;
-        progress.level = progress.level.saturating_add(amount).min(MAX_ROLE_LEVEL);
-        if progress.level >= MAX_ROLE_LEVEL {
+        progress.level = progress.level.saturating_add(amount).min(maximum_level);
+        if progress.level >= maximum_level {
             progress.experience = 0;
         }
         if actor_state.alive {
@@ -1736,6 +1761,28 @@ mod tests {
             RoleProgress {
                 level: 2,
                 experience: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn capped_role_progression_discards_excess_at_the_requested_level() {
+        let actor = StableId::new("npc:recruit_cap").unwrap();
+        let role = StableId::new("role:builder").unwrap();
+        let mut simulation = WorldSimulation::new(7);
+        assert!(simulation.join_player(actor.clone(), GridPos { x: 1, z: 1 }));
+        simulation.assign_role(&actor, role.clone()).unwrap();
+        assert_eq!(simulation.grant_role_levels_capped(&actor, 50, 10), Ok(9));
+        assert_eq!(simulation.actors[&actor].role_progression[&role].level, 10);
+        assert_eq!(
+            simulation.grant_role_experience_capped(&actor, 100_000, 1_000, 10),
+            Ok(0)
+        );
+        assert_eq!(
+            simulation.actors[&actor].role_progression[&role],
+            RoleProgress {
+                level: 10,
+                experience: 0,
             }
         );
     }

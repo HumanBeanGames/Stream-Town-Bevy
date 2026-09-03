@@ -108,6 +108,7 @@ use stream_town_domain::{
 };
 
 const MAX_TOWN_GOALS: usize = 2;
+const MAX_RECRUIT_ROLE_LEVEL: u16 = 10;
 const AUTOMATIC_PLAYER_RESPAWN_SECONDS: f64 = 10.0 * 60.0;
 const MAX_ACTIVE_CITIZEN_NIGHT_LIGHTS: usize = 32;
 const MAX_ACTIVE_BUILDING_NIGHT_LIGHTS: usize = 20;
@@ -176,7 +177,13 @@ const AUTO_CAMERA_TOWN_SHOT_SECONDS: f32 = 12.0;
 const AUTO_CAMERA_CITIZEN_SHOT_SECONDS: f32 = 24.0;
 const AUTO_CAMERA_CITIZEN_HEIGHT: f32 = 15.0;
 const AUTO_CAMERA_CITIZEN_FOCUS_HEIGHT: f32 = 1.4;
+const AUTO_CAMERA_BUILDING_HEIGHT: f32 = 22.0;
+const AUTO_CAMERA_BUILDING_FOCUS_HEIGHT: f32 = 2.5;
+const AUTO_CAMERA_ATTENTION_SECONDS: f32 = 15.0;
 const AUTO_CAMERA_TOWN_SHOT_INTERVAL: u64 = 4;
+const RETREAT_HEALTH_PERCENT: i32 = 25;
+const RETREAT_TOWN_HALL_RADIUS_CELLS: u16 = 10;
+const HEALING_HYSTERESIS_PERCENT: u128 = 125;
 const ACTOR_OVERLAY_ANCHOR_HEIGHT_CELLS: f32 = 1.15;
 const ACTOR_HEALTH_OVERLAY_TOP_PX: f32 = -11.0;
 const ACTOR_NAME_OVERLAY_TOP_PX: f32 = 4.0;
@@ -1316,6 +1323,7 @@ struct CameraRequest {
     reset: bool,
     actions: Vec<CameraAction>,
     follow: Option<StableId>,
+    focus_building: Option<StableId>,
 }
 
 #[derive(Clone, Debug)]
@@ -3146,6 +3154,7 @@ enum VoteTextKind {
     TechnologyTitle,
     TechnologyTimer,
     TechnologyOptionTitle(u8),
+    TechnologyOptionDepthTag(u8),
     TechnologyOptionRequirements(u8),
     RulerDescription,
     RulerTimer,
@@ -3636,6 +3645,8 @@ struct TownCameraControllerRuntime {
     auto_shot: AutoCameraShot,
     auto_shot_elapsed_seconds: f32,
     auto_sequence: u64,
+    temporary_focus: Option<TemporaryCameraFocus>,
+    observed_damage_sequence: u64,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -3644,6 +3655,37 @@ enum AutoCameraShot {
     Inactive,
     Town,
     Citizen(StableId),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CameraFocusTarget {
+    Citizen(StableId),
+    Building(StableId),
+}
+
+#[derive(Clone, Debug)]
+struct TemporaryCameraFocus {
+    target: CameraFocusTarget,
+    remaining_seconds: f32,
+    return_to_auto_camera: bool,
+}
+
+#[derive(Resource, Default)]
+struct CameraDamageRuntime {
+    actor_health: BTreeMap<StableId, i32>,
+    building_health: BTreeMap<StableId, i32>,
+    latest_target: Option<CameraFocusTarget>,
+    sequence: u64,
+    initialized: bool,
+}
+
+#[derive(Resource, Default)]
+struct RetreatingCitizens(BTreeSet<StableId>);
+
+#[derive(SystemParam)]
+struct AgentRecoveryRuntime<'w> {
+    path_failures: ResMut<'w, PathFailureRuntime>,
+    retreating: ResMut<'w, RetreatingCitizens>,
 }
 
 #[derive(Default)]
@@ -3677,6 +3719,8 @@ impl TownCameraControllerRuntime {
             auto_shot: AutoCameraShot::Inactive,
             auto_shot_elapsed_seconds: 0.0,
             auto_sequence: 0,
+            temporary_focus: None,
+            observed_damage_sequence: 0,
             home,
         }
     }
@@ -3688,6 +3732,7 @@ impl TownCameraControllerRuntime {
         self.auto_shot = AutoCameraShot::Inactive;
         self.auto_shot_elapsed_seconds = 0.0;
         self.auto_sequence = 0;
+        self.temporary_focus = None;
         self.home = home;
     }
 
@@ -4087,6 +4132,8 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<InjectedCommands>()
             .init_resource::<CommandFeedback>()
             .init_resource::<CommandAcknowledgementRuntime>()
+            .init_resource::<CameraDamageRuntime>()
+            .init_resource::<RetreatingCitizens>()
             .init_resource::<MenuRuntime>()
             .init_resource::<TownRestartRuntime>()
             .init_resource::<NightEnemyWaveRuntime>()
@@ -4302,7 +4349,12 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 OnEnter(GameState::InGame),
-                (begin_world_reveal, spawn_level_up_toast, spawn_menu_overlay),
+                (
+                    reset_gameplay_attention_runtime,
+                    begin_world_reveal,
+                    spawn_level_up_toast,
+                    spawn_menu_overlay,
+                ),
             )
             .add_systems(
                 Update,
@@ -4368,6 +4420,9 @@ impl Plugin for StreamTownGamePlugin {
                     announce_citizen_deaths
                         .after(move_agents)
                         .after(move_combat_projectiles),
+                    track_camera_damage_focus
+                        .after(move_agents)
+                        .after(move_combat_projectiles),
                     restart_world_after_town_hall_falls.after(move_agents),
                     sync_pooled_night_lights
                         .after(move_combat_projectiles)
@@ -4424,6 +4479,7 @@ impl Plugin for StreamTownGamePlugin {
                     sync_active_pets.after(move_agents),
                     camera_zoom_and_commands
                         .after(process_injected_commands)
+                        .after(track_camera_damage_focus)
                         .after(follow_animation_closeup_camera)
                         .after(follow_pet_closeup_camera)
                         .in_set(GameplaySimulationSet),
@@ -10749,6 +10805,30 @@ fn spawn_technology_vote_option_row(
                     top: px(TECHNOLOGY_VOTE_ICON_TOP),
                     width: px(30),
                     height: px(30),
+                    ..default()
+                },
+            ));
+            row.spawn((
+                VoteTextKind::TechnologyOptionDepthTag(index),
+                UiDisplayFont,
+                Text::new("Fundamental!"),
+                TextFont {
+                    font_size: FontSize::Px(9.0),
+                    ..default()
+                },
+                TextLayout::new(Justify::Right, LineBreak::NoWrap),
+                TextColor(Color::srgb(0.97, 0.78, 0.32)),
+                TextShadow {
+                    offset: Vec2::splat(1.0),
+                    color: Color::linear_rgba(0.0, 0.0, 0.0, 0.95),
+                },
+                Pickable::IGNORE,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(9),
+                    right: px(3),
+                    width: px(70),
+                    overflow: Overflow::clip(),
                     ..default()
                 },
             ));
@@ -18775,6 +18855,56 @@ fn within_actor_heal_range(
             .saturating_add(target_size.saturating_mul(target_size))
 }
 
+fn within_actor_heal_hysteresis_range(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    healer: &ActorState,
+    target: &ActorState,
+    current: GridPos,
+) -> bool {
+    let range = u128::from(role_action_range_milli_cells(content, simulation, healer));
+    let target_size = u128::from(actor_target_size_milli_cells(content, target));
+    let normal_squared = range
+        .saturating_mul(1_000)
+        .saturating_add(target_size.saturating_mul(target_size));
+    grid_distance_squared_milli_cells(current, target.position).saturating_mul(10_000)
+        <= normal_squared
+            .saturating_mul(HEALING_HYSTERESIS_PERCENT)
+            .saturating_mul(HEALING_HYSTERESIS_PERCENT)
+}
+
+fn retained_healing_goal(
+    goal: &AgentGoal,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    actor_id: &StableId,
+    current: GridPos,
+) -> Option<(AgentGoal, GridPos)> {
+    let AgentGoal::Heal(target_id) = goal else {
+        return None;
+    };
+    let healer = simulation.actors.get(actor_id)?;
+    let target = simulation.actors.get(target_id)?;
+    (healer.alive
+        && target.alive
+        && target.role.as_str() != "role:enemy"
+        && target.health < target.max_health
+        && within_actor_heal_hysteresis_range(content, simulation, healer, target, current))
+    .then(|| (AgentGoal::Heal(target_id.clone()), current))
+}
+
+fn citizen_should_retreat(actor: &ActorState, was_retreating: bool) -> bool {
+    if !actor.alive || actor.role.as_str() == "role:enemy" || actor.max_health <= 0 {
+        return false;
+    }
+    if was_retreating {
+        actor.health < actor.max_health
+    } else {
+        i64::from(actor.health.max(0)).saturating_mul(100)
+            < i64::from(actor.max_health).saturating_mul(i64::from(RETREAT_HEALTH_PERCENT))
+    }
+}
+
 fn within_enemy_building_attack_range(
     content: &ContentCatalog,
     simulation: &WorldSimulation,
@@ -21733,7 +21863,7 @@ fn complete_agent_goal_with_regeneration(
                 || !target.alive
                 || target.role.as_str() == "role:enemy"
                 || target.health >= target.max_health
-                || !within_actor_heal_range(content, simulation, healer, target, current)
+                || !within_actor_heal_hysteresis_range(content, simulation, healer, target, current)
             {
                 return None;
             }
@@ -21857,10 +21987,11 @@ fn complete_agent_goal_with_regeneration(
         };
     if grants_role_experience
         && let Some(stats) = stats
-        && let Ok(levels_gained) = simulation.grant_role_experience(
+        && let Ok(levels_gained) = simulation.grant_role_experience_capped(
             actor_id,
             action_amount,
             stats.experience_multiplier_per_thousand,
+            actor_role_level_cap(actor_id),
         )
         && levels_gained > 0
     {
@@ -24288,7 +24419,7 @@ fn move_agents(
     mut simulation: ResMut<SimulationRuntime>,
     mut stats: ResMut<SessionStats>,
     mut render_stats: ResMut<WorldRenderStats>,
-    mut path_failures: ResMut<PathFailureRuntime>,
+    mut recovery: AgentRecoveryRuntime,
     mut regeneration: ResMut<RegenerationRoleRuntime>,
     mut agents: Query<(
         Entity,
@@ -24406,9 +24537,14 @@ fn move_agents(
         .map(|(entity, agent, _, _, _, _)| (agent.id.clone(), entity))
         .collect();
     agent_order.sort_by(|(left, _), (right, _)| left.cmp(right));
-    path_failures
+    recovery
+        .path_failures
         .0
         .retain(|actor, _| simulation.0.actors.contains_key(actor));
+    recovery
+        .retreating
+        .0
+        .retain(|actor| simulation.0.actors.contains_key(actor));
     let predictive_agents = agents
         .iter()
         .filter_map(|(_, agent, _, _, transform, _)| {
@@ -24502,6 +24638,26 @@ fn move_agents(
                     .saturating_add(regenerated)
                     .min(desired_max);
             }
+        }
+        let was_retreating = recovery.retreating.0.contains(&agent.id);
+        let is_retreating = simulation
+            .0
+            .actors
+            .get(&agent.id)
+            .is_some_and(|actor| citizen_should_retreat(actor, was_retreating));
+        if is_retreating {
+            recovery.retreating.0.insert(agent.id.clone());
+        } else {
+            recovery.retreating.0.remove(&agent.id);
+        }
+        if is_retreating != was_retreating {
+            agent.goal = AgentGoal::Wander;
+            agent.path.clear();
+            agent.path_index = 0;
+            agent.action_started = false;
+            agent.action_cooldown_seconds = 0.0;
+            agent.repath_remaining_seconds = 0.0;
+            agent.previous_wander_origin = None;
         }
         let alive = simulation
             .0
@@ -24598,27 +24754,37 @@ fn move_agents(
             continue;
         }
         ensure_actor_station(&content.0, &mut simulation.0, &config.0, &agent.id);
-        if agent_is_moving(&agent)
+        if !is_retreating
+            && agent_is_moving(&agent)
             && agent.repath_remaining_seconds <= f32::EPSILON
             && matches!(
                 agent.goal,
                 AgentGoal::Attack(_) | AgentGoal::AttackBuilding(_) | AgentGoal::Heal(_)
             )
         {
-            let (updated_goal, updated_target) = next_agent_goal_with_station_runtime(
-                &simulation.0,
-                &world.generated,
-                enemy_navigation.field.as_ref(),
-                &config.0,
+            let (updated_goal, updated_target) = retained_healing_goal(
+                &agent.goal,
                 &content.0,
-                &station_targets,
+                &simulation.0,
                 &agent.id,
                 location.0,
-                &resource_reservations,
-                &target_assignment_counts,
-                &occupied_approaches,
-                &construction_approaches,
-            );
+            )
+            .unwrap_or_else(|| {
+                next_agent_goal_with_station_runtime(
+                    &simulation.0,
+                    &world.generated,
+                    enemy_navigation.field.as_ref(),
+                    &config.0,
+                    &content.0,
+                    &station_targets,
+                    &agent.id,
+                    location.0,
+                    &resource_reservations,
+                    &target_assignment_counts,
+                    &occupied_approaches,
+                    &construction_approaches,
+                )
+            });
             if updated_goal != agent.goal || updated_target != agent.target {
                 agent.path.clear();
                 agent.path_index = 0;
@@ -24788,14 +24954,26 @@ fn move_agents(
                 StableId::new("system:unreachable-resource").expect("static stable ID");
             let mut rejected_resources = 0_usize;
             let (goal, target, mut planned_path) = loop {
-                let (candidate_goal, candidate_target) = regeneration_agent_goal(
+                if is_retreating {
+                    break (AgentGoal::Wander, location.0, None);
+                }
+                let (candidate_goal, candidate_target) = retained_healing_goal(
+                    &agent.goal,
                     &content.0,
                     &simulation.0,
-                    &world.generated,
-                    &mut regeneration,
                     &agent.id,
                     location.0,
                 )
+                .or_else(|| {
+                    regeneration_agent_goal(
+                        &content.0,
+                        &simulation.0,
+                        &world.generated,
+                        &mut regeneration,
+                        &agent.id,
+                        location.0,
+                    )
+                })
                 .unwrap_or_else(|| {
                     next_agent_goal_with_station_runtime(
                         &simulation.0,
@@ -24849,19 +25027,55 @@ fn move_agents(
                 }
             };
             let target = if goal == AgentGoal::Wander {
-                let anchor =
-                    actor_idle_anchor(&content.0, &simulation.0, &config.0, &agent.id, location.0);
-                let target = deterministic_wander_target_step(
-                    &world.generated,
-                    &agent.id,
-                    anchor,
-                    location.0,
-                    agent.wander_sequence,
-                    agent.previous_wander_origin,
-                );
-                agent.wander_sequence = agent.wander_sequence.wrapping_add(1);
-                agent.previous_wander_origin = Some(location.0);
-                target
+                if is_retreating {
+                    let town_hall =
+                        restored_town_hall_position(&content.0, &simulation.0, &config.0);
+                    if grid_distance_squared(location.0, town_hall)
+                        > u64::from(RETREAT_TOWN_HALL_RADIUS_CELLS).pow(2)
+                    {
+                        agent.previous_wander_origin = None;
+                        town_hall_wait_target(
+                            &content.0,
+                            &simulation.0,
+                            &world.generated,
+                            &config.0,
+                            location.0,
+                        )
+                    } else {
+                        let anchor =
+                            nearest_walkable(&world.generated, town_hall).unwrap_or(town_hall);
+                        let target = deterministic_wander_target_step(
+                            &world.generated,
+                            &agent.id,
+                            anchor,
+                            location.0,
+                            agent.wander_sequence,
+                            agent.previous_wander_origin,
+                        );
+                        agent.wander_sequence = agent.wander_sequence.wrapping_add(1);
+                        agent.previous_wander_origin = Some(location.0);
+                        target
+                    }
+                } else {
+                    let anchor = actor_idle_anchor(
+                        &content.0,
+                        &simulation.0,
+                        &config.0,
+                        &agent.id,
+                        location.0,
+                    );
+                    let target = deterministic_wander_target_step(
+                        &world.generated,
+                        &agent.id,
+                        anchor,
+                        location.0,
+                        agent.wander_sequence,
+                        agent.previous_wander_origin,
+                    );
+                    agent.wander_sequence = agent.wander_sequence.wrapping_add(1);
+                    agent.previous_wander_origin = Some(location.0);
+                    target
+                }
             } else {
                 agent.previous_wander_origin = None;
                 target
@@ -24879,8 +25093,11 @@ fn move_agents(
                 );
             }
             if planned_path.is_some() {
-                path_failures.clear_path_failure(&agent.id);
-            } else if path_failures.record_failure(&agent.id, time.delta_secs()) {
+                recovery.path_failures.clear_path_failure(&agent.id);
+            } else if recovery
+                .path_failures
+                .record_failure(&agent.id, time.delta_secs())
+            {
                 return_agent_to_town_hall(
                     &content.0,
                     &mut simulation.0,
@@ -24892,7 +25109,7 @@ fn move_agents(
                     animation,
                     &mut transform,
                 );
-                path_failures.clear(&agent.id);
+                recovery.path_failures.clear(&agent.id);
                 warn!(actor = %agent.id, "automatically returned an endlessly unpathable actor to the Town Hall");
                 continue;
             }
@@ -24916,7 +25133,7 @@ fn move_agents(
             agent.path_index = usize::from(agent.path.len() > 1);
         }
         let Some(next) = agent.path.get(agent.path_index).copied() else {
-            path_failures.clear_movement(&agent.id);
+            recovery.path_failures.clear_movement(&agent.id);
             continue;
         };
         let mut target =
@@ -24938,7 +25155,7 @@ fn move_agents(
         } else {
             transform.translation += distance.normalize_or_zero() * step;
         }
-        if path_failures.record_movement(
+        if recovery.path_failures.record_movement(
             &agent.id,
             Vec2::new(transform.translation.x, transform.translation.z),
             agent.path_index,
@@ -24957,7 +25174,7 @@ fn move_agents(
                 animation,
                 &mut transform,
             );
-            path_failures.clear(&agent.id);
+            recovery.path_failures.clear(&agent.id);
             warn!(actor = %agent.id, "automatically returned an immobilized actor to the Town Hall");
             continue;
         }
@@ -30618,13 +30835,107 @@ fn next_auto_camera_shot(
     AutoCameraShot::Citizen(citizens[index].clone())
 }
 
-fn auto_camera_citizen_translation(home: &Transform, citizen: Vec3) -> Vec3 {
-    let focus = citizen + Vec3::Y * AUTO_CAMERA_CITIZEN_FOCUS_HEIGHT;
+fn auto_camera_focus_translation(
+    home: &Transform,
+    target: Vec3,
+    camera_height: f32,
+    focus_height: f32,
+) -> Vec3 {
+    let focus = target + Vec3::Y * focus_height;
     let forward = home.forward().as_vec3();
-    let height = (citizen.y + AUTO_CAMERA_CITIZEN_HEIGHT)
+    let height = (target.y + camera_height)
         .clamp(UNITY_TOWN_CAMERA_MIN_HEIGHT, UNITY_TOWN_CAMERA_MAX_HEIGHT);
     let distance = (height - focus.y) / (-forward.y).max(0.001);
     focus - forward * distance
+}
+
+fn auto_camera_citizen_translation(home: &Transform, citizen: Vec3) -> Vec3 {
+    auto_camera_focus_translation(
+        home,
+        citizen,
+        AUTO_CAMERA_CITIZEN_HEIGHT,
+        AUTO_CAMERA_CITIZEN_FOCUS_HEIGHT,
+    )
+}
+
+fn track_camera_damage_focus(
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    mut damage: ResMut<CameraDamageRuntime>,
+) {
+    let actor_health = simulation
+        .0
+        .actors
+        .iter()
+        .map(|(id, actor)| (id.clone(), actor.health))
+        .collect::<BTreeMap<_, _>>();
+    let building_health = simulation
+        .0
+        .buildings
+        .iter()
+        .map(|(id, building)| (id.clone(), building.health))
+        .collect::<BTreeMap<_, _>>();
+    if !damage.initialized {
+        damage.actor_health = actor_health;
+        damage.building_health = building_health;
+        damage.initialized = true;
+        return;
+    }
+
+    let town_hall = StableId::new("building:townhall").expect("static building ID");
+    let town_hall_position = simulation
+        .0
+        .buildings
+        .get(&town_hall)
+        .map_or(GridPos { x: 0, z: 0 }, |building| {
+            building_visual_grid(&content.0, building)
+        });
+    let mut candidates = Vec::new();
+    for (id, actor) in &simulation.0.actors {
+        if actor.role.as_str() != "role:enemy"
+            && damage
+                .actor_health
+                .get(id)
+                .is_some_and(|previous| actor.health < *previous)
+        {
+            candidates.push((
+                grid_distance_squared(actor.position, town_hall_position),
+                id.clone(),
+                CameraFocusTarget::Citizen(id.clone()),
+            ));
+        }
+    }
+    for (id, building) in &simulation.0.buildings {
+        if damage
+            .building_health
+            .get(id)
+            .is_some_and(|previous| building.health < *previous)
+        {
+            candidates.push((
+                grid_distance_squared(
+                    building_visual_grid(&content.0, building),
+                    town_hall_position,
+                ),
+                id.clone(),
+                CameraFocusTarget::Building(id.clone()),
+            ));
+        }
+    }
+    candidates.sort_by(|left, right| (left.0, &left.1).cmp(&(right.0, &right.1)));
+    if let Some((_, _, target)) = candidates.into_iter().next() {
+        damage.latest_target = Some(target);
+        damage.sequence = damage.sequence.saturating_add(1);
+    }
+    damage.actor_health = actor_health;
+    damage.building_health = building_health;
+}
+
+fn reset_gameplay_attention_runtime(
+    mut damage: ResMut<CameraDamageRuntime>,
+    mut retreating: ResMut<RetreatingCitizens>,
+) {
+    *damage = CameraDamageRuntime::default();
+    retreating.0.clear();
 }
 
 fn camera_zoom_and_commands(
@@ -30634,8 +30945,10 @@ fn camera_zoom_and_commands(
     settings: Res<RuntimePlayerSettings>,
     simulation: Option<Res<SimulationRuntime>>,
     acknowledgements: Res<CommandAcknowledgementRuntime>,
+    damage: Res<CameraDamageRuntime>,
     mut requests: ResMut<CameraCommandQueue>,
     agents: Query<(&Agent, &Transform), Without<TownCamera>>,
+    buildings: Query<(&RuntimeBuilding, &Transform), Without<TownCamera>>,
     mut cameras: Query<
         (
             &mut Transform,
@@ -30673,10 +30986,32 @@ fn camera_zoom_and_commands(
             controller.return_home();
         }
         controller.cancel_auto_camera();
+        controller.temporary_focus = None;
+    }
+
+    let damage_changed = controller.observed_damage_sequence != damage.sequence;
+    if damage_changed {
+        controller.observed_damage_sequence = damage.sequence;
+        if auto_camera_is_managed(&controller)
+            && let Some(target) = damage.latest_target.clone()
+        {
+            controller.temporary_focus = Some(TemporaryCameraFocus {
+                target,
+                remaining_seconds: AUTO_CAMERA_ATTENTION_SECONDS,
+                return_to_auto_camera: true,
+            });
+        }
     }
 
     if let Some(request) = requests.0.pop_front() {
-        if let Some(citizen) = request.follow {
+        if let Some(building) = request.focus_building {
+            let return_to_auto_camera = auto_camera_is_managed(&controller);
+            controller.temporary_focus = Some(TemporaryCameraFocus {
+                target: CameraFocusTarget::Building(building),
+                remaining_seconds: AUTO_CAMERA_ATTENTION_SECONDS,
+                return_to_auto_camera,
+            });
+        } else if let Some(citizen) = request.follow {
             let valid_target = auto_camera_is_managed(&controller)
                 && is_stream_player_actor(&citizen)
                 && simulation.as_ref().is_some_and(|simulation| {
@@ -30704,6 +31039,7 @@ fn camera_zoom_and_commands(
         } else {
             controller.seconds_since_acknowledgement = 0.0;
             controller.cancel_auto_camera();
+            controller.temporary_focus = None;
             if request.reset {
                 controller.return_home();
             } else {
@@ -30820,6 +31156,58 @@ fn camera_zoom_and_commands(
                         controller.auto_shot_elapsed_seconds = AUTO_CAMERA_CITIZEN_SHOT_SECONDS;
                     }
                 }
+            }
+        }
+    }
+
+    let focus_target = controller
+        .temporary_focus
+        .as_ref()
+        .map(|focus| focus.target.clone());
+    if let Some(focus_target) = focus_target {
+        let target = match &focus_target {
+            CameraFocusTarget::Citizen(citizen) => agents
+                .iter()
+                .find(|(agent, _)| &agent.id == citizen)
+                .map(|(_, transform)| {
+                    auto_camera_citizen_translation(&controller.home, transform.translation)
+                }),
+            CameraFocusTarget::Building(building) => buildings
+                .iter()
+                .find(|(runtime, _)| &runtime.id == building)
+                .map(|(_, transform)| {
+                    auto_camera_focus_translation(
+                        &controller.home,
+                        transform.translation,
+                        AUTO_CAMERA_BUILDING_HEIGHT,
+                        AUTO_CAMERA_BUILDING_FOCUS_HEIGHT,
+                    )
+                }),
+        };
+        if let Some(target) = target {
+            controller.move_target = constrain_town_camera_position(target, &config.0.world);
+            controller.zoom_target_height = controller.move_target.y;
+            if let Some(focus) = controller.temporary_focus.as_mut() {
+                focus.remaining_seconds = (focus.remaining_seconds - delta_seconds).max(0.0);
+            }
+        } else if let Some(focus) = controller.temporary_focus.as_mut() {
+            focus.remaining_seconds = 0.0;
+        }
+        let expired = controller
+            .temporary_focus
+            .as_ref()
+            .is_some_and(|focus| focus.remaining_seconds <= f32::EPSILON);
+        if expired {
+            let return_to_auto_camera = controller
+                .temporary_focus
+                .take()
+                .is_some_and(|focus| focus.return_to_auto_camera);
+            controller.return_home();
+            if return_to_auto_camera {
+                controller.auto_shot = AutoCameraShot::Town;
+                controller.auto_shot_elapsed_seconds = 0.0;
+            } else {
+                controller.cancel_auto_camera();
             }
         }
     }
@@ -32624,6 +33012,9 @@ fn update_vote_panels(
                         format!("{}. {label}", index + 1)
                     })
                     .unwrap_or_default(),
+                VoteTextKind::TechnologyOptionDepthTag(index) => {
+                    technology_vote_depth_tag(options.len(), *index).to_owned()
+                }
                 VoteTextKind::TechnologyOptionRequirements(index) => options
                     .get(usize::from(*index))
                     .map(|technology| technology_vote_requirements(&content.0, technology))
@@ -32686,6 +33077,7 @@ fn update_vote_panels(
                 VoteTextKind::TechnologyTitle
                     | VoteTextKind::TechnologyTimer
                     | VoteTextKind::TechnologyOptionTitle(_)
+                    | VoteTextKind::TechnologyOptionDepthTag(_)
                     | VoteTextKind::TechnologyOptionRequirements(_)
             ) {
                 text.0.clear();
@@ -33744,6 +34136,14 @@ fn load_input(
         .simulation
         .upgrade_time_schema(restored_config.time.seconds_per_day);
     normalize_building_health(&content.0, &mut snapshot.simulation);
+    let capped_recruit_progress = normalize_recruit_role_progression(&mut snapshot.simulation);
+    if capped_recruit_progress > 0 {
+        info!(
+            adjusted_professions = capped_recruit_progress,
+            maximum_level = MAX_RECRUIT_ROLE_LEVEL,
+            "capped loaded recruit profession levels"
+        );
+    }
     if entities.town_halls.single_mut().is_err() {
         "Load failed: the persistent Town Hall visual is unavailable"
             .clone_into(&mut runtime_console.last_result);
@@ -34636,8 +35036,9 @@ fn eligible_technology_ids(
         .collect()
 }
 
-fn technology_ballot_rank(world_seed: u64, unlocked_count: usize, id: &StableId) -> u64 {
+fn technology_ballot_rank(world_seed: u64, unlocked_count: usize, salt: u64, id: &StableId) -> u64 {
     let mut hash = world_seed
+        ^ salt
         ^ u64::try_from(unlocked_count)
             .unwrap_or(u64::MAX)
             .wrapping_mul(0x9E37_79B9_7F4A_7C15);
@@ -34648,23 +35049,118 @@ fn technology_ballot_rank(world_seed: u64, unlocked_count: usize, id: &StableId)
     hash
 }
 
+fn technology_node_depth(
+    content: &ContentCatalog,
+    id: &StableId,
+    memo: &mut BTreeMap<StableId, u32>,
+    visiting: &mut BTreeSet<StableId>,
+) -> u32 {
+    if let Some(depth) = memo.get(id) {
+        return *depth;
+    }
+    if !visiting.insert(id.clone()) {
+        return 0;
+    }
+    let depth = content.technology.nodes.get(id).map_or(0, |node| {
+        node.prerequisites
+            .iter()
+            .filter(|required| content.technology.nodes.contains_key(*required))
+            .map(|required| technology_node_depth(content, required, memo, visiting))
+            .max()
+            .map_or(0, |depth| depth.saturating_add(1))
+    });
+    visiting.remove(id);
+    memo.insert(id.clone(), depth);
+    depth
+}
+
+fn technology_depths(content: &ContentCatalog) -> BTreeMap<StableId, u32> {
+    let mut memo = BTreeMap::new();
+    for id in content.technology.nodes.keys() {
+        technology_node_depth(content, id, &mut memo, &mut BTreeSet::new());
+    }
+    memo
+}
+
+fn take_ranked_technology(
+    eligible: &mut Vec<StableId>,
+    world_seed: u64,
+    unlocked_count: usize,
+    salt: u64,
+    required_depth: Option<u32>,
+    depths: &BTreeMap<StableId, u32>,
+) -> Option<StableId> {
+    let index = eligible
+        .iter()
+        .enumerate()
+        .filter(|(_, id)| required_depth.is_none_or(|depth| depths.get(*id) == Some(&depth)))
+        .min_by_key(|(_, id)| {
+            (
+                technology_ballot_rank(world_seed, unlocked_count, salt, id),
+                (*id).clone(),
+            )
+        })
+        .map(|(index, _)| index)?;
+    Some(eligible.remove(index))
+}
+
 fn technology_ballot_options(
     content: &ContentCatalog,
     simulation: &WorldSimulation,
 ) -> Vec<StableId> {
     let mut eligible = eligible_technology_ids(content, simulation);
-    eligible.sort_by_key(|technology| {
-        (
-            technology_ballot_rank(
-                simulation.world_seed,
-                simulation.unlocked_technology.len(),
-                technology,
-            ),
-            technology.clone(),
-        )
-    });
-    eligible.truncate(TECHNOLOGY_VOTE_OPTION_COUNT);
-    eligible
+    let depths = technology_depths(content);
+    let deepest = eligible
+        .iter()
+        .filter_map(|id| depths.get(id))
+        .max()
+        .copied();
+    let shallowest = eligible
+        .iter()
+        .filter_map(|id| depths.get(id))
+        .min()
+        .copied();
+    let mut options = Vec::with_capacity(TECHNOLOGY_VOTE_OPTION_COUNT);
+    if let Some(technology) = take_ranked_technology(
+        &mut eligible,
+        simulation.world_seed,
+        simulation.unlocked_technology.len(),
+        0x0073_7065_6369_616c,
+        deepest,
+        &depths,
+    ) {
+        options.push(technology);
+    }
+    if let Some(technology) = take_ranked_technology(
+        &mut eligible,
+        simulation.world_seed,
+        simulation.unlocked_technology.len(),
+        0x6675_6e64_616d_656e,
+        shallowest,
+        &depths,
+    ) {
+        options.push(technology);
+    }
+    if let Some(technology) = take_ranked_technology(
+        &mut eligible,
+        simulation.world_seed,
+        simulation.unlocked_technology.len(),
+        0x7261_6e64_6f6d,
+        None,
+        &depths,
+    ) {
+        options.push(technology);
+    }
+    options
+}
+
+fn technology_vote_depth_tag(option_count: usize, index: u8) -> &'static str {
+    match (option_count, index) {
+        (1, 0) => "Specialized! / Fundamental!",
+        (_, 0) => "Specialized!",
+        (_, 1) => "Fundamental!",
+        _ => "",
+    }
 }
 
 fn start_scheduled_technology_vote(
@@ -36053,6 +36549,38 @@ fn recruited_actor_ids(simulation: &WorldSimulation) -> Vec<StableId> {
         .collect()
 }
 
+fn is_recruited_actor_id(id: &StableId) -> bool {
+    id.as_str().starts_with("npc:recruit_") || id.as_str().starts_with("npc:starting_")
+}
+
+fn actor_role_level_cap(id: &StableId) -> u16 {
+    if is_recruited_actor_id(id) {
+        MAX_RECRUIT_ROLE_LEVEL
+    } else {
+        stream_town_domain::MAX_ROLE_LEVEL
+    }
+}
+
+fn normalize_recruit_role_progression(simulation: &mut WorldSimulation) -> usize {
+    let mut adjusted = 0;
+    for actor in simulation
+        .actors
+        .values_mut()
+        .filter(|actor| is_recruited_actor_id(&actor.id))
+    {
+        for progress in actor.role_progression.values_mut() {
+            if progress.level > MAX_RECRUIT_ROLE_LEVEL
+                || (progress.level == MAX_RECRUIT_ROLE_LEVEL && progress.experience > 0)
+            {
+                progress.level = MAX_RECRUIT_ROLE_LEVEL;
+                progress.experience = 0;
+                adjusted += 1;
+            }
+        }
+    }
+    adjusted
+}
+
 fn spawn_numbered_world_labels(commands: &mut Commands, targets: &[StableId]) {
     for (index, target) in targets.iter().enumerate() {
         commands.spawn((
@@ -36194,7 +36722,21 @@ fn auto_camera_is_managed(controller: &TownCameraControllerRuntime) -> bool {
 }
 
 fn command_interrupts_auto_camera(command: &ChatCommand) -> bool {
-    !matches!(command, ChatCommand::Follow(_))
+    !matches!(
+        command,
+        ChatCommand::Follow(_) | ChatCommand::FocusBuilding { .. } | ChatCommand::Vote(_)
+    )
+}
+
+fn command_refreshes_building_focus(command: &ChatCommand) -> bool {
+    matches!(
+        command,
+        ChatCommand::Build(_)
+            | ChatCommand::MoveBuilding(_)
+            | ChatCommand::BeginBuildingLine
+            | ChatCommand::EndBuildingLine
+            | ChatCommand::ConfirmBuilding
+    )
 }
 
 fn item_info(
@@ -37834,7 +38376,7 @@ fn process_injected_commands(
                         .get(&recruit.role)
                         .map_or(recruit.role.as_str(), |role| role.display_name.as_str());
                     Ok(format!(
-                        "----- Recruit {index} | Current role {role} |  Health: {} / {} |  Level: {} / 100 |  Experience: {} / {}",
+                        "----- Recruit {index} | Current role {role} |  Health: {} / {} |  Level: {} / {MAX_RECRUIT_ROLE_LEVEL} |  Experience: {} / {}",
                         recruit.health,
                         recruit.max_health,
                         progress.level,
@@ -38088,6 +38630,7 @@ fn process_injected_commands(
                         reset: false,
                         actions: actions.clone(),
                         follow: None,
+                        focus_building: None,
                     });
                     Ok("camera request queued".to_owned())
                 }
@@ -38097,6 +38640,7 @@ fn process_injected_commands(
                         reset: true,
                         actions: Vec::new(),
                         follow: None,
+                        focus_building: None,
                     });
                     Ok("camera reset queued".to_owned())
                 }
@@ -38124,8 +38668,34 @@ fn process_injected_commands(
                         reset: false,
                         actions: Vec::new(),
                         follow: Some(target),
+                        focus_building: None,
                     });
                     Ok(format!("automatic camera is now following {name}"))
+                }
+                ChatCommand::FocusBuilding { building, index } => {
+                    let controller = cameras
+                        .single()
+                        .map_err(|_| "the town camera is unavailable".to_owned())?;
+                    if !auto_camera_is_managed(controller)
+                        && !queues.placers.0.contains_key(&actor_id)
+                    {
+                        return Err(
+                            "!focus is available only during automatic camera direction or building placement"
+                                .to_owned(),
+                        );
+                    }
+                    let (definition, runtime_id) =
+                        numbered_building_instance_id(&content.0, &simulation.0, building, *index)?;
+                    let name = content.0.buildings[&definition].display_name.clone();
+                    queues.camera.0.push_back(CameraRequest {
+                        reset: false,
+                        actions: Vec::new(),
+                        follow: None,
+                        focus_building: Some(runtime_id),
+                    });
+                    Ok(format!(
+                        "camera focused on {name} BID {index} for 15 seconds"
+                    ))
                 }
                 ChatCommand::ModRole { player, role } => {
                     require_staff(&pending)?;
@@ -38271,7 +38841,12 @@ fn process_injected_commands(
                         .map_or(1_000, |role| role.experience_multiplier_per_thousand);
                     let levels = simulation
                         .0
-                        .grant_role_experience(&target, *amount, multiplier)
+                        .grant_role_experience_capped(
+                            &target,
+                            *amount,
+                            multiplier,
+                            actor_role_level_cap(&target),
+                        )
                         .map_err(|error| error.to_string())?;
                     Ok(format!(
                         "gave {target} {amount} experience; {levels} levels gained"
@@ -38295,7 +38870,12 @@ fn process_injected_commands(
                             .map_or(1_000, |role| role.experience_multiplier_per_thousand);
                         simulation
                             .0
-                            .grant_role_experience(player, *amount, multiplier)
+                            .grant_role_experience_capped(
+                                player,
+                                *amount,
+                                multiplier,
+                                actor_role_level_cap(player),
+                            )
                             .map_err(|error| error.to_string())?;
                     }
                     Ok(format!(
@@ -38309,7 +38889,7 @@ fn process_injected_commands(
                         .ok_or_else(|| format!("unknown player {player}"))?;
                     let gained = simulation
                         .0
-                        .grant_role_levels(&target, *amount)
+                        .grant_role_levels_capped(&target, *amount, actor_role_level_cap(&target))
                         .map_err(|error| error.to_string())?;
                     Ok(format!("leveled {target} by {gained}"))
                 }
@@ -38530,10 +39110,11 @@ fn process_injected_commands(
                                 .roles
                                 .get(&simulation.0.actors[&actor_id].role)
                                 .map_or(1_000, |role| role.experience_multiplier_per_thousand);
-                            let _ = simulation.0.grant_role_experience(
+                            let _ = simulation.0.grant_role_experience_capped(
                                 &actor_id,
                                 maximum_health,
                                 experience_multiplier,
+                                actor_role_level_cap(&actor_id),
                             );
                         }
                         Ok(format!("revived {target_id}"))
@@ -38574,12 +39155,36 @@ fn process_injected_commands(
             }
         })();
         let succeeded = result.is_ok();
+        let refreshed_building_focus = succeeded
+            .then(|| {
+                command_refreshes_building_focus(&command)
+                    .then(|| {
+                        cameras.single().ok().and_then(|controller| {
+                            controller.temporary_focus.as_ref().and_then(|focus| {
+                                let CameraFocusTarget::Building(building) = &focus.target else {
+                                    return None;
+                                };
+                                Some(building.clone())
+                            })
+                        })
+                    })
+                    .flatten()
+            })
+            .flatten();
+        if let Some(building) = refreshed_building_focus.as_ref() {
+            queues.camera.0.push_back(CameraRequest {
+                reset: false,
+                actions: Vec::new(),
+                follow: None,
+                focus_building: Some(building.clone()),
+            });
+        }
         let message = match result {
             Ok(message) => message,
             Err(error) => format!("command rejected: {error}"),
         };
         response.feedback.0 = format!("{}: {message}", pending.display_name);
-        if command_interrupts_auto_camera(&command) {
+        if command_interrupts_auto_camera(&command) && refreshed_building_focus.is_none() {
             response.acknowledgements.acknowledge();
         }
         if let Some(outbound) =
@@ -41198,6 +41803,7 @@ mod tests {
             .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
             .insert_resource(MenuRuntime::default())
             .init_resource::<CommandAcknowledgementRuntime>()
+            .init_resource::<CameraDamageRuntime>()
             .insert_resource(CameraCommandQueue(VecDeque::from([CameraRequest {
                 reset: false,
                 actions: vec![CameraAction {
@@ -41205,6 +41811,7 @@ mod tests {
                     amount: 2,
                 }],
                 follow: None,
+                focus_building: None,
             }])))
             .add_systems(Update, camera_zoom_and_commands);
         let camera = app
@@ -41230,6 +41837,61 @@ mod tests {
     }
 
     #[test]
+    fn damage_camera_selects_the_damaged_town_target_closest_to_the_town_hall() {
+        let content = embedded_content();
+        let town_hall = StableId::new("building:townhall").unwrap();
+        let house_definition = &content.buildings[&StableId::new("building:house").unwrap()];
+        let house = StableId::new("building:runtime_damage_focus").unwrap();
+        let citizen = StableId::new("npc:damage_focus").unwrap();
+        let mut simulation = WorldSimulation::new(1);
+        simulation.buildings.insert(
+            town_hall.clone(),
+            BuildingState {
+                id: town_hall,
+                archetype: content.buildings[&StableId::new("building:townhall").unwrap()]
+                    .archetype
+                    .clone(),
+                position: GridPos { x: 20, z: 20 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: 1_000,
+                complete: true,
+            },
+        );
+        simulation.buildings.insert(
+            house.clone(),
+            BuildingState {
+                id: house.clone(),
+                archetype: house_definition.archetype.clone(),
+                position: GridPos { x: 22, z: 20 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: 500,
+                complete: true,
+            },
+        );
+        assert!(simulation.join_player(citizen.clone(), GridPos { x: 40, z: 40 }));
+        let mut app = App::new();
+        app.insert_resource(RuntimeContent(content))
+            .insert_resource(SimulationRuntime(simulation))
+            .init_resource::<CameraDamageRuntime>()
+            .add_systems(Update, track_camera_damage_focus);
+        app.update();
+        {
+            let mut simulation = app.world_mut().resource_mut::<SimulationRuntime>();
+            simulation.0.damage_actor(&citizen, 10).unwrap();
+            simulation.0.damage_building(&house, 10).unwrap();
+        }
+        app.update();
+        let damage = app.world().resource::<CameraDamageRuntime>();
+        assert_eq!(
+            damage.latest_target,
+            Some(CameraFocusTarget::Building(house))
+        );
+        assert_eq!(damage.sequence, 1);
+    }
+
+    #[test]
     fn inactive_camera_smoothly_returns_to_home_position_and_zoom() {
         let home = Transform::from_xyz(0.0, 30.0, 0.0);
         let current = Transform::from_xyz(24.0, 40.0, 12.0);
@@ -41245,6 +41907,7 @@ mod tests {
             .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
             .insert_resource(MenuRuntime::default())
             .init_resource::<CommandAcknowledgementRuntime>()
+            .init_resource::<CameraDamageRuntime>()
             .init_resource::<CameraCommandQueue>()
             .add_systems(Update, camera_zoom_and_commands);
         let camera = app
@@ -41282,6 +41945,7 @@ mod tests {
             .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
             .insert_resource(MenuRuntime::default())
             .init_resource::<CommandAcknowledgementRuntime>()
+            .init_resource::<CameraDamageRuntime>()
             .init_resource::<CameraCommandQueue>()
             .add_systems(Update, camera_zoom_and_commands);
         let camera = app
@@ -41435,10 +42099,12 @@ mod tests {
             .insert_resource(MenuRuntime::default())
             .insert_resource(SimulationRuntime(simulation))
             .init_resource::<CommandAcknowledgementRuntime>()
+            .init_resource::<CameraDamageRuntime>()
             .insert_resource(CameraCommandQueue(VecDeque::from([CameraRequest {
                 reset: false,
                 actions: Vec::new(),
                 follow: Some(target.clone()),
+                focus_building: None,
             }])))
             .add_systems(Update, camera_zoom_and_commands);
         let camera = app
@@ -41489,6 +42155,16 @@ mod tests {
         assert!(!command_interrupts_auto_camera(&ChatCommand::Follow(Some(
             target
         ))));
+        assert!(!command_interrupts_auto_camera(&ChatCommand::Vote(
+            StableId::new("1").unwrap()
+        )));
+        assert!(!command_interrupts_auto_camera(
+            &ChatCommand::FocusBuilding {
+                building: StableId::new("tower").unwrap(),
+                index: 2,
+            }
+        ));
+        assert!(command_interrupts_auto_camera(&ChatCommand::Health));
     }
 
     #[test]
@@ -47717,6 +48393,110 @@ mod tests {
     }
 
     #[test]
+    fn engaged_priest_keeps_healing_through_the_twenty_five_percent_range_band() {
+        let content = embedded_content();
+        let priest = StableId::new("npc:priest_hysteresis").unwrap();
+        let patient = StableId::new("npc:patient_hysteresis").unwrap();
+        let origin = GridPos { x: 20, z: 20 };
+        let mut simulation = WorldSimulation::new(1);
+        assert!(simulation.join_player(priest.clone(), origin));
+        assert!(simulation.join_player(patient.clone(), origin));
+        simulation
+            .assign_role(&priest, StableId::new("role:priest").unwrap())
+            .unwrap();
+        simulation.damage_actor(&patient, 40).unwrap();
+        let edge = (1..20)
+            .map(|offset| GridPos {
+                x: origin.x + offset,
+                z: origin.z,
+            })
+            .find(|position| {
+                simulation.actors.get_mut(&patient).unwrap().position = *position;
+                !within_actor_heal_range(
+                    &content,
+                    &simulation,
+                    &simulation.actors[&priest],
+                    &simulation.actors[&patient],
+                    origin,
+                ) && within_actor_heal_hysteresis_range(
+                    &content,
+                    &simulation,
+                    &simulation.actors[&priest],
+                    &simulation.actors[&patient],
+                    origin,
+                )
+            })
+            .expect("the expanded range has at least one whole-cell sample");
+        simulation.actors.get_mut(&patient).unwrap().position = edge;
+        assert_eq!(
+            retained_healing_goal(
+                &AgentGoal::Heal(patient.clone()),
+                &content,
+                &simulation,
+                &priest,
+                origin,
+            ),
+            Some((AgentGoal::Heal(patient), origin))
+        );
+    }
+
+    #[test]
+    fn citizen_retreat_uses_entry_and_full_health_exit_hysteresis() {
+        let actor = StableId::new("npc:retreat_test").unwrap();
+        let mut simulation = WorldSimulation::new(1);
+        assert!(simulation.join_player(actor.clone(), GridPos { x: 1, z: 1 }));
+        let state = simulation.actors.get_mut(&actor).unwrap();
+        state.max_health = 100;
+        state.health = 24;
+        assert!(citizen_should_retreat(state, false));
+        state.health = 99;
+        assert!(citizen_should_retreat(state, true));
+        state.health = 100;
+        assert!(!citizen_should_retreat(state, true));
+        state.health = 25;
+        assert!(!citizen_should_retreat(state, false));
+    }
+
+    #[test]
+    fn saved_recruits_are_normalized_to_level_ten_without_capping_players() {
+        let recruit = StableId::new("npc:recruit_level_cap").unwrap();
+        let player = StableId::new("twitch:player_level_cap").unwrap();
+        let role = StableId::new("role:defender").unwrap();
+        let mut simulation = WorldSimulation::new(1);
+        assert!(simulation.join_player(recruit.clone(), GridPos { x: 1, z: 1 }));
+        assert!(simulation.join_player(player.clone(), GridPos { x: 2, z: 1 }));
+        for actor in [&recruit, &player] {
+            simulation
+                .actors
+                .get_mut(actor)
+                .unwrap()
+                .role_progression
+                .insert(
+                    role.clone(),
+                    stream_town_domain::RoleProgress {
+                        level: 42,
+                        experience: 12_345,
+                    },
+                );
+        }
+
+        assert_eq!(normalize_recruit_role_progression(&mut simulation), 1);
+        assert_eq!(
+            simulation.actors[&recruit].role_progression[&role].level,
+            10
+        );
+        assert_eq!(
+            simulation.actors[&recruit].role_progression[&role].experience,
+            0
+        );
+        assert_eq!(simulation.actors[&player].role_progression[&role].level, 42);
+        assert_eq!(
+            simulation.actors[&player].role_progression[&role].experience,
+            12_345
+        );
+    }
+
+    #[test]
     fn healing_effect_curves_preserve_authored_lifetimes_and_channel_keys() {
         let presentation = embedded_presentation();
         let burst_duration = healing_effect_duration(&presentation, HealingEffectKind::Burst);
@@ -50746,6 +51526,20 @@ mod tests {
         assert!(simulation.active_vote.is_none());
         assert_eq!(simulation.technology_vote_cooldown_seconds, Some(1.0));
         simulation.tick(1.0, seconds_per_day);
+        let eligible_before_vote = eligible_technology_ids(&content, &simulation);
+        let depths = technology_depths(&content);
+        let deepest_available = eligible_before_vote
+            .iter()
+            .filter_map(|technology| depths.get(technology))
+            .max()
+            .copied()
+            .unwrap();
+        let shallowest_available = eligible_before_vote
+            .iter()
+            .filter_map(|technology| depths.get(technology))
+            .min()
+            .copied()
+            .unwrap();
 
         let mut app = App::new();
         app.insert_resource(RuntimeContent(content.clone()))
@@ -50768,6 +51562,12 @@ mod tests {
             .expect("the generated-world technology ballot starts after Unity's delay");
         assert_eq!(vote.options.len(), TECHNOLOGY_VOTE_OPTION_COUNT);
         assert_eq!(vote.technology, vote.options[0]);
+        assert_eq!(depths[&vote.options[0]], deepest_available);
+        assert_eq!(depths[&vote.options[1]], shallowest_available);
+        assert_eq!(
+            vote.options.iter().collect::<BTreeSet<_>>().len(),
+            vote.options.len()
+        );
         assert!(vote.option_votes.is_empty());
         assert!((vote.remaining_seconds - TECHNOLOGY_VOTE_DURATION_SECONDS).abs() <= f32::EPSILON);
         let vote_options = vote.options.clone();
@@ -50776,6 +51576,19 @@ mod tests {
         for index in 1..=TECHNOLOGY_VOTE_OPTION_COUNT {
             assert!(announcement.contains(&format!("!vote {index}")));
         }
+        let mut vote_tags = app.world_mut().query::<(&VoteTextKind, &Text)>();
+        let vote_tags = vote_tags
+            .iter(app.world())
+            .filter_map(|(kind, text)| {
+                let VoteTextKind::TechnologyOptionDepthTag(index) = kind else {
+                    return None;
+                };
+                Some((*index, text.0.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(vote_tags.get(&0).map(String::as_str), Some("Specialized!"));
+        assert_eq!(vote_tags.get(&1).map(String::as_str), Some("Fundamental!"));
+        assert_eq!(vote_tags.get(&2).map(String::as_str), Some(""));
         let mut panels = app
             .world_mut()
             .query_filtered::<

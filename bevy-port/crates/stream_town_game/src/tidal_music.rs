@@ -37,7 +37,7 @@ const HARMONY_CHORDS: [&str; 7] = [
 const SCORE_TEMPLATE: &str = r#"stack
   [ sound "${kick}" # lpf ${kick_brightness} # gain ${kick_gain}
   , struct "${root_pattern}" $ ${roots}
-      # sound "gm_harpsichord"
+      # sound "superpiano"
       # legato 0.9
       # attack ${melody_attack}
       # decay 0.02
@@ -47,7 +47,7 @@ const SCORE_TEMPLATE: &str = r#"stack
       # room 0.08
       # roomsize 1
   , struct "${chord_pattern}" $ ${chords}
-      # sound "gm_harpsichord"
+      # sound "superpiano"
       # attack ${chord_attack}
       # release 0.4
       # lpf ${chord_brightness}
@@ -303,14 +303,19 @@ fn intensity_song_program(intensity: f64) -> Result<IntensitySongProgram, String
     }
     let intensity = intensity.clamp(0.0, MAX_SONG_INTENSITY);
     let t = intensity / MAX_SONG_INTENSITY;
-    let attack_t = t * t * t;
+    // The native engine has no sampled `gm_harpsichord` bank; that name fell
+    // through to its intentionally soft generic tone. `superpiano` is the
+    // bright, overtone-rich struck voice exercised by the library's reference
+    // score, and a square-root response makes articulation audible well before
+    // the maximum intensity.
+    let attack_t = t.sqrt();
 
-    let melody_attack = lerp(0.14, 0.01, attack_t);
-    let melody_brightness = lerp(1_200.0, 4_000.0, t);
-    let melody_gain = lerp(0.35, 0.85, t);
-    let chord_attack = lerp(0.11, 0.03, attack_t);
-    let chord_brightness = lerp(1_100.0, 3_000.0, t);
-    let chord_gain = lerp(0.14, 0.30, t);
+    let melody_attack = lerp(0.16, 0.0015, attack_t);
+    let melody_brightness = lerp(1_600.0, 12_000.0, t);
+    let melody_gain = lerp(0.30, 0.56, t);
+    let chord_attack = lerp(0.12, 0.006, attack_t);
+    let chord_brightness = lerp(1_400.0, 8_500.0, t);
+    let chord_gain = lerp(0.12, 0.22, t);
     let kick_brightness = lerp(500.0, 2_200.0, t);
     let kick_gain = lerp(0.04, 0.12, t);
     let hat_brightness = lerp(1_200.0, 5_000.0, t);
@@ -496,12 +501,25 @@ mod tests {
     fn intensity_changes_every_authored_low_pass_filter() {
         let quiet = intensity_song_program(0.0).unwrap().expression;
         let intense = intensity_song_program(12.0).unwrap().expression;
-        for cutoff in ["lpf 500.000000", "lpf 1200.000000", "lpf 1100.000000"] {
+        for cutoff in ["lpf 500.000000", "lpf 1600.000000", "lpf 1400.000000"] {
             assert!(quiet.contains(cutoff), "quiet score omitted {cutoff}");
         }
-        for cutoff in ["lpf 2200.000000", "lpf 5000.000000", "lpf 4000.000000"] {
+        for cutoff in ["lpf 2200.000000", "lpf 5000.000000", "lpf 12000.000000"] {
             assert!(intense.contains(cutoff), "intense score omitted {cutoff}");
         }
+        assert!(intense.contains("lpf 8500.000000"));
+    }
+
+    #[test]
+    fn intensity_makes_the_struck_voice_brighter_sharper_and_not_excessively_louder() {
+        let quiet = intensity_song_program(0.0).unwrap().expression;
+        let intense = intensity_song_program(12.0).unwrap().expression;
+        assert!(quiet.contains("sound \"superpiano\""));
+        assert!(!quiet.contains("gm_harpsichord"));
+        assert!(quiet.contains("attack 0.160000"));
+        assert!(intense.contains("attack 0.001500"));
+        assert!(intense.contains("gain 0.560000"));
+        assert!(intense.contains("gain 0.220000"));
     }
 
     #[test]

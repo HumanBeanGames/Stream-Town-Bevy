@@ -70,6 +70,7 @@ pub fn unity_command_usage(input: &str) -> Option<&'static str> {
         "pet" => "!pet <pet> (or !pet to list pets)",
         "cam" => "!cam <up|down|left|right|in|out> [amount] OR !cam home",
         "follow" => "!follow <username|me>",
+        "focus" => "!focus <building> <BID>",
         "info" => "!info <resource|role|building|enemy> [id]",
         "rrole" => "!rrole <id> <role>",
         "rinfo" => "!rinfo <id>",
@@ -194,6 +195,10 @@ pub enum ChatCommand {
     Camera(Vec<CameraAction>),
     ResetCamera,
     Follow(Option<StableId>),
+    FocusBuilding {
+        building: StableId,
+        index: u16,
+    },
     ModRole {
         player: StableId,
         role: StableId,
@@ -461,6 +466,21 @@ impl FromStr for ChatCommand {
                     content_id(requested.trim_start_matches('@'))
                         .map(|requested| Self::Follow(Some(requested)))
                 }
+            }
+            "focus" => {
+                let building = content_id(
+                    parts
+                        .next()
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
+                )?;
+                let index = parts
+                    .next()
+                    .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))
+                    .and_then(parse_index)?;
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                Ok(Self::FocusBuilding { building, index })
             }
             "info" => {
                 let item = content_id(
@@ -1152,6 +1172,13 @@ mod tests {
             Ok(ChatCommand::GameMasterRevive(
                 StableId::new("viewer").unwrap()
             ))
+        );
+        assert_eq!(
+            "!focus OreStorage 3".parse(),
+            Ok(ChatCommand::FocusBuilding {
+                building: StableId::new("orestorage").unwrap(),
+                index: 3,
+            })
         );
         assert_eq!(
             "!givexp viewer 200000".parse(),
