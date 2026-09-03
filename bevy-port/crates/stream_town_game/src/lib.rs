@@ -150,12 +150,7 @@ const CHIMNEY_ALPHA_STEPS: usize = 8;
 const TERRAIN_CHUNK_CELLS: u16 = 16;
 const OCEAN_PADDING_CELLS: u16 = 128;
 const WATER_SURFACE_LIFT_METRES: f32 = 0.20;
-const TRAVERSAL_WEAR_FADE_START: f32 = 3.0;
-const TRAVERSAL_WEAR_FULL_DIRT: f32 = 9.0;
-const TRAVERSAL_WEAR_HALF_LIFE_SECONDS: f32 = 30.0 * 60.0;
-const TRAVERSAL_WEAR_PRUNE_SCORE: f32 = 0.01;
 const TRAVERSAL_WEAR_DECAY_INTERVAL_SECONDS: f32 = 1.0;
-const TRAVERSAL_WEAR_DECAY_PAUSE_SECONDS: f32 = 5.0;
 const TERRAIN_HIGH_DETAIL_RADIUS: f32 = 220.0;
 const TERRAIN_MEDIUM_DETAIL_RADIUS: f32 = 440.0;
 const TERRAIN_LOD_HYSTERESIS: f32 = 36.0;
@@ -188,6 +183,7 @@ const AUTO_CAMERA_CITIZEN_FOCUS_HEIGHT: f32 = 1.4;
 const AUTO_CAMERA_BUILDING_HEIGHT: f32 = 22.0;
 const AUTO_CAMERA_BUILDING_FOCUS_HEIGHT: f32 = 2.5;
 const AUTO_CAMERA_ATTENTION_SECONDS: f32 = 15.0;
+const AUTO_CAMERA_COMBAT_REDIRECT_COOLDOWN_SECONDS: f32 = 5.0;
 const AUTO_CAMERA_TOWN_SHOT_INTERVAL: u64 = 4;
 const RETREAT_HEALTH_PERCENT: i32 = 25;
 const RETREAT_TOWN_HALL_RADIUS_CELLS: u16 = 10;
@@ -506,6 +502,13 @@ struct TraversalWearRuntime {
     texture_dirty: bool,
 }
 
+#[derive(Resource, Default)]
+struct PathSurfaceRuntime {
+    applied_signature: u64,
+    initialized: bool,
+    levels: HashMap<GridPos, u16>,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct TraversalWearCell {
     score: f32,
@@ -523,14 +526,27 @@ impl Default for TraversalWearRuntime {
 }
 
 impl TraversalWearRuntime {
-    fn record(&mut self, position: GridPos) {
+    fn record(
+        &mut self,
+        position: GridPos,
+        settings: &stream_town_domain::TerrainAppearanceConfig,
+    ) {
         let cell = self.cells.entry(position).or_default();
-        cell.score = (cell.score + 1.0).min(MAX_TRAVERSAL_WEAR_SCORE);
-        cell.decay_pause_seconds = TRAVERSAL_WEAR_DECAY_PAUSE_SECONDS;
+        cell.score = (cell.score + 1.0)
+            .min(traversal_score_for_rate(
+                settings.traversal_full_tint_per_minute,
+                settings.traversal_half_life_seconds,
+            ))
+            .min(MAX_TRAVERSAL_WEAR_SCORE);
+        cell.decay_pause_seconds = settings.traversal_decay_pause_seconds;
         self.texture_dirty = true;
     }
 
-    fn decay(&mut self, delta_seconds: f32) {
+    fn decay(
+        &mut self,
+        delta_seconds: f32,
+        settings: &stream_town_domain::TerrainAppearanceConfig,
+    ) {
         self.decay_elapsed_seconds += delta_seconds.max(0.0);
         if self.decay_elapsed_seconds < TRAVERSAL_WEAR_DECAY_INTERVAL_SECONDS {
             return;
@@ -544,27 +560,39 @@ impl TraversalWearRuntime {
             let active_decay_seconds = (elapsed - cell.decay_pause_seconds).max(0.0);
             cell.decay_pause_seconds = (cell.decay_pause_seconds - elapsed).max(0.0);
             if active_decay_seconds > 0.0 {
-                cell.score *= 0.5_f32.powf(active_decay_seconds / TRAVERSAL_WEAR_HALF_LIFE_SECONDS);
+                cell.score *=
+                    0.5_f32.powf(active_decay_seconds / settings.traversal_half_life_seconds);
             }
-            cell.score >= TRAVERSAL_WEAR_PRUNE_SCORE
+            cell.score >= settings.traversal_prune_score
         });
         self.texture_dirty = true;
     }
 
-    fn restore(&mut self, cells: &BTreeMap<GridPos, f32>, width: u16, height: u16) {
+    fn restore(
+        &mut self,
+        cells: &BTreeMap<GridPos, f32>,
+        width: u16,
+        height: u16,
+        settings: &stream_town_domain::TerrainAppearanceConfig,
+    ) {
         self.cells = cells
             .iter()
             .filter(|(position, score)| {
                 position.x < width
                     && position.z < height
                     && score.is_finite()
-                    && **score >= TRAVERSAL_WEAR_PRUNE_SCORE
+                    && **score >= settings.traversal_prune_score
             })
             .map(|(position, score)| {
                 (
                     *position,
                     TraversalWearCell {
-                        score: score.min(MAX_TRAVERSAL_WEAR_SCORE),
+                        score: score
+                            .min(traversal_score_for_rate(
+                                settings.traversal_full_tint_per_minute,
+                                settings.traversal_half_life_seconds,
+                            ))
+                            .min(MAX_TRAVERSAL_WEAR_SCORE),
                         decay_pause_seconds: 0.0,
                     },
                 )
@@ -577,15 +605,31 @@ impl TraversalWearRuntime {
     fn saved_cells(&self) -> BTreeMap<GridPos, f32> {
         self.cells
             .iter()
-            .filter(|(_, cell)| cell.score.is_finite() && cell.score >= TRAVERSAL_WEAR_PRUNE_SCORE)
+            .filter(|(_, cell)| cell.score.is_finite() && cell.score > 0.0)
             .map(|(position, cell)| (*position, cell.score.min(MAX_TRAVERSAL_WEAR_SCORE)))
             .collect()
     }
 }
 
-fn traversal_wear_fraction(score: f32) -> f32 {
-    ((score - TRAVERSAL_WEAR_FADE_START) / (TRAVERSAL_WEAR_FULL_DIRT - TRAVERSAL_WEAR_FADE_START))
-        .clamp(0.0, 1.0)
+fn traversal_wear_fraction(
+    score: f32,
+    settings: &stream_town_domain::TerrainAppearanceConfig,
+) -> f32 {
+    let fade_start = traversal_score_for_rate(
+        settings.traversal_fade_start_per_minute,
+        settings.traversal_half_life_seconds,
+    );
+    let full_tint = traversal_score_for_rate(
+        settings.traversal_full_tint_per_minute,
+        settings.traversal_half_life_seconds,
+    );
+    ((score - fade_start) / (full_tint - fade_start)).clamp(0.0, 1.0)
+}
+
+/// Maps an author-facing sustained crossing rate to the equilibrium of the
+/// exponentially decaying sparse score: rate / decay constant.
+fn traversal_score_for_rate(rate_per_minute: f32, half_life_seconds: f32) -> f32 {
+    rate_per_minute.max(0.0) * half_life_seconds.max(f32::EPSILON) / (60.0 * std::f32::consts::LN_2)
 }
 
 #[derive(Resource)]
@@ -1003,6 +1047,7 @@ struct SessionStats {
 struct MovementStats<'w> {
     session: ResMut<'w, SessionStats>,
     traversal_wear: ResMut<'w, TraversalWearRuntime>,
+    path_surfaces: Res<'w, PathSurfaceRuntime>,
 }
 
 #[derive(Resource, Default)]
@@ -1630,6 +1675,7 @@ struct TerrainMaterialUniform {
     selection_color: Vec4,
     traversal_grid: Vec4,
     traversal_dirt_color: Vec4,
+    constructed_path_color: Vec4,
 }
 
 #[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
@@ -1642,6 +1688,9 @@ struct TerrainMaterialExtension {
     #[texture(103)]
     #[sampler(104)]
     traversal_wear_texture: Option<Handle<Image>>,
+    #[texture(105)]
+    #[sampler(106)]
+    path_surface_texture: Option<Handle<Image>>,
 }
 
 impl MaterialExtension for TerrainMaterialExtension {
@@ -2059,6 +2108,7 @@ struct RenderAssets {
     projectile_arrow_scene: Option<Handle<bevy::world_serialization::WorldAsset>>,
     ground: Handle<TerrainMaterial>,
     traversal_wear: Handle<Image>,
+    path_surface: Handle<Image>,
     water: Handle<WaterMaterial>,
     menu_water: Handle<WaterMaterial>,
     menu_sky: Handle<MenuSkyMaterial>,
@@ -3784,6 +3834,7 @@ struct TownCameraControllerRuntime {
     auto_sequence: u64,
     temporary_focus: Option<TemporaryCameraFocus>,
     observed_damage_sequence: u64,
+    combat_redirect_cooldown_seconds: f32,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -3858,6 +3909,7 @@ impl TownCameraControllerRuntime {
             auto_sequence: 0,
             temporary_focus: None,
             observed_damage_sequence: 0,
+            combat_redirect_cooldown_seconds: 0.0,
             home,
         }
     }
@@ -4261,6 +4313,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<SessionStats>()
             .init_resource::<WorldRenderStats>()
             .init_resource::<TraversalWearRuntime>()
+            .init_resource::<PathSurfaceRuntime>()
             .init_resource::<CrowdSeparationRuntime>()
             .init_resource::<StationTargetRuntime>()
             .init_resource::<EnemyNavigationRuntime>()
@@ -4807,6 +4860,10 @@ impl Plugin for StreamTownGamePlugin {
                     apply_building_placement_ghosts.after(sync_building_placers),
                     decay_traversal_wear.after(move_agents),
                     sync_traversal_wear_texture.after(decay_traversal_wear),
+                    sync_path_surface_texture
+                        .after(apply_building_commands)
+                        .after(load_input)
+                        .before(move_agents),
                     sync_building_placement_overlays
                         .after(process_injected_commands)
                         .after(apply_building_placement_ghosts),
@@ -5652,6 +5709,10 @@ fn setup_rendering(
         config.0.world.width,
         config.0.world.height,
     ));
+    let path_surface = images.add(traversal_wear_image(
+        config.0.world.width,
+        config.0.world.height,
+    ));
     commands.insert_resource(RenderAssets {
         cube: meshes.add(Cuboid::default()),
         chimney_particle: meshes.add(Sphere::new(0.5).mesh().ico(1).expect("valid icosphere")),
@@ -5677,8 +5738,10 @@ fn setup_rendering(
             &config.0,
             asset_server.as_deref(),
             Some(traversal_wear.clone()),
+            Some(path_surface.clone()),
         )),
         traversal_wear,
+        path_surface,
         water: water_materials.add(water),
         menu_water: water_materials.add(menu_water),
         menu_sky,
@@ -6787,6 +6850,7 @@ fn terrain_material(
     config: &GameConfig,
     asset_server: Option<&AssetServer>,
     traversal_wear_texture: Option<Handle<Image>>,
+    path_surface_texture: Option<Handle<Image>>,
 ) -> TerrainMaterial {
     let authored = presentation
         .materials
@@ -6869,10 +6933,12 @@ fn terrain_material(
                 // Alpha controls the maximum contribution over the authored
                 // terrain. Keep paths legible without replacing the grass and
                 // use a cooler, less red soil than the first wear pass.
-                traversal_dirt_color: unity_shader_color([0.30, 0.245, 0.14, 0.50]),
+                traversal_dirt_color: unity_shader_color(config.terrain.spring.traversal_tint),
+                constructed_path_color: unity_shader_color(config.terrain.spring.path_tint),
             },
             grid_texture,
             traversal_wear_texture,
+            path_surface_texture,
         },
     }
 }
@@ -16874,6 +16940,7 @@ fn generate_and_spawn_world(
         commands.insert_resource(SelectedActor::default());
         commands.insert_resource(RegenerationRoleRuntime::default());
         commands.insert_resource(TraversalWearRuntime::default());
+        commands.insert_resource(PathSurfaceRuntime::default());
         *render_stats = WorldRenderStats::default();
         let Some(prepared) = loading.prepared_world.as_mut() else {
             loading.phase = WorldLoadingPhase::Loading;
@@ -20133,6 +20200,9 @@ fn nearest_reachable_building_to_town_hall(
         .filter(|building| building.health > 0)
         .filter_map(|building| {
             let definition = building_def_for_archetype(content, &building.archetype)?;
+            if !building_blocks_navigation(definition) {
+                return None;
+            }
             Some((
                 grid_distance_squared(building_visual_grid(content, building), town_hall_position),
                 building.id.clone(),
@@ -21996,7 +22066,9 @@ fn complete_agent_goal_with_regeneration(
             match simulation.damage_building(building_id, action_amount) {
                 Ok(remaining) if action_amount > 0 => {
                     if remaining == 0 {
-                        if let Some(definition) = building_definition.as_ref()
+                        if let Some(definition) = building_definition
+                            .as_ref()
+                            .filter(|definition| building_blocks_navigation(definition))
                             && let Some(region) = building_navigation_region(
                                 building_origin,
                                 definition,
@@ -24475,6 +24547,32 @@ fn actor_movement_speed(
         })
 }
 
+fn actor_movement_speed_on_path(
+    config: &GameConfig,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    paths: &PathSurfaceRuntime,
+    actor_id: &StableId,
+) -> f32 {
+    let speed = actor_movement_speed(config, content, simulation, actor_id);
+    let Some(actor) = simulation
+        .actors
+        .get(actor_id)
+        .filter(|actor| actor.role.as_str() != "role:enemy")
+    else {
+        return speed;
+    };
+    speed
+        * (1.0
+            + f32::from(
+                paths
+                    .levels
+                    .get(&actor.position)
+                    .copied()
+                    .unwrap_or_default(),
+            ) * 0.05)
+}
+
 fn predictive_speed_factors(
     agents: &[(StableId, Vec2, Vec2)],
     radius: f32,
@@ -24731,8 +24829,13 @@ fn move_agents(
             let position = Vec2::new(transform.translation.x, transform.translation.z);
             let target = grid_to_world_on_surface(next, &config.0, &world.generated);
             let direction = Vec2::new(target.x - position.x, target.z - position.y);
-            let speed = actor_movement_speed(&config.0, &content.0, &simulation.0, &agent.id)
-                * config.0.world.cell_size;
+            let speed = actor_movement_speed_on_path(
+                &config.0,
+                &content.0,
+                &simulation.0,
+                &movement_stats.path_surfaces,
+                &agent.id,
+            ) * config.0.world.cell_size;
             Some((
                 agent.id.clone(),
                 position,
@@ -25321,13 +25424,19 @@ fn move_agents(
             target.y += animation.base_scale.y * 0.5;
         }
         let distance = target - transform.translation;
-        let speed = actor_movement_speed(&config.0, &content.0, &simulation.0, &agent.id)
-            * predictive_factors.get(&agent.id).copied().unwrap_or(1.0);
+        let speed = actor_movement_speed_on_path(
+            &config.0,
+            &content.0,
+            &simulation.0,
+            &movement_stats.path_surfaces,
+            &agent.id,
+        ) * predictive_factors.get(&agent.id).copied().unwrap_or(1.0);
         let step = speed * config.0.world.cell_size * time.delta_secs();
         if distance.length_squared() <= step * step {
             transform.translation = target;
             record_completed_cell_traversal(
                 &mut movement_stats.traversal_wear,
+                &config.0.terrain,
                 &agent.kind,
                 location.0,
                 next,
@@ -25389,12 +25498,13 @@ fn move_agents(
 
 fn record_completed_cell_traversal(
     traversal_wear: &mut TraversalWearRuntime,
+    settings: &stream_town_domain::TerrainAppearanceConfig,
     kind: &ActorKind,
     previous: GridPos,
     next: GridPos,
 ) {
     if *kind == ActorKind::Player && previous != next {
-        traversal_wear.record(next);
+        traversal_wear.record(next, settings);
     }
 }
 
@@ -26482,8 +26592,8 @@ fn update_environment_presentation(
         return;
     }
     let palette = blend_environment_palette(
-        environment_palette(season_from, environment.1),
-        environment_palette(season_to, environment.1),
+        environment_palette(season_from, environment.1, &config.0.terrain),
+        environment_palette(season_to, environment.1, &config.0.terrain),
         season_blend,
     );
     let authored_daylight = f32::from(config.0.time.day_light_intensity_milli) / 1_000.0;
@@ -26508,6 +26618,18 @@ fn update_environment_presentation(
             palette.terrain_tint[2],
             ground.extension.parameters.season_tint.w,
         );
+        let from_path = seasonal_terrain_palette(&config.0.terrain, season_from).traversal_tint;
+        let to_path = seasonal_terrain_palette(&config.0.terrain, season_to).traversal_tint;
+        ground.extension.parameters.traversal_dirt_color =
+            Vec4::from_array(std::array::from_fn(|index| {
+                from_path[index] + (to_path[index] - from_path[index]) * season_blend
+            }));
+        let from_surface = seasonal_terrain_palette(&config.0.terrain, season_from).path_tint;
+        let to_surface = seasonal_terrain_palette(&config.0.terrain, season_to).path_tint;
+        ground.extension.parameters.constructed_path_color =
+            Vec4::from_array(std::array::from_fn(|index| {
+                from_surface[index] + (to_surface[index] - from_surface[index]) * season_blend
+            }));
     }
     if (environment_changed || season_visual_changed)
         && let Some(water_materials) = water_materials.as_deref_mut()
@@ -26774,7 +26896,7 @@ fn sync_pooled_night_lights(
         if !state.complete
             || matches!(
                 state.archetype.as_str(),
-                "archetype:building:wall" | "archetype:building:gate"
+                "archetype:building:wall" | "archetype:building:gate" | "archetype:building:path"
             )
         {
             continue;
@@ -27044,31 +27166,44 @@ fn weather_particle_visible(kind: Weather, particle_position: Vec3, camera_posit
             >= RAIN_CAMERA_CULL_DISTANCE * RAIN_CAMERA_CULL_DISTANCE
 }
 
-fn environment_palette(season: Season, weather: Weather) -> EnvironmentPalette {
-    let (terrain_tint, water_color, clear_color, sun_color, ambient_color) = match season {
+fn seasonal_terrain_palette(
+    terrain: &stream_town_domain::TerrainAppearanceConfig,
+    season: Season,
+) -> stream_town_domain::SeasonalTerrainPalette {
+    match season {
+        Season::Spring => terrain.spring,
+        Season::Summer => terrain.summer,
+        Season::Autumn => terrain.autumn,
+        Season::Winter => terrain.winter,
+    }
+}
+
+fn environment_palette(
+    season: Season,
+    weather: Weather,
+    terrain: &stream_town_domain::TerrainAppearanceConfig,
+) -> EnvironmentPalette {
+    let terrain_tint = seasonal_terrain_palette(terrain, season).base_color;
+    let (water_color, clear_color, sun_color, ambient_color) = match season {
         Season::Spring => (
-            [0.86, 1.14, 0.84],
             [0.05, 0.29, 0.47, 0.62],
             [0.025, 0.04, 0.055],
             [1.0, 0.95, 0.84],
             [0.70, 0.82, 0.92],
         ),
         Season::Summer => (
-            [1.0, 0.96, 0.78],
             [0.03, 0.34, 0.54, 0.62],
             [0.035, 0.045, 0.05],
             [1.0, 0.88, 0.68],
             [0.82, 0.78, 0.68],
         ),
         Season::Autumn => (
-            [1.0, 0.64, 0.30],
             [0.08, 0.25, 0.36, 0.65],
             [0.055, 0.035, 0.035],
             [1.0, 0.72, 0.50],
             [0.82, 0.62, 0.52],
         ),
         Season::Winter => (
-            [0.76, 0.88, 1.0],
             [0.10, 0.27, 0.40, 0.68],
             [0.032, 0.044, 0.060],
             [0.78, 0.88, 1.0],
@@ -27083,7 +27218,7 @@ fn environment_palette(season: Season, weather: Weather) -> EnvironmentPalette {
             Weather::Snow => (9_000.0, 105.0, [0.76, 0.84, 0.90, 0.42], 170.0, 590.0, 150),
         };
     EnvironmentPalette {
-        terrain_tint,
+        terrain_tint: [terrain_tint[0], terrain_tint[1], terrain_tint[2]],
         water_color,
         clear_color,
         sun_color,
@@ -31169,6 +31304,8 @@ fn camera_zoom_and_commands(
     }
 
     let delta_seconds = time.delta_secs();
+    controller.combat_redirect_cooldown_seconds =
+        (controller.combat_redirect_cooldown_seconds - delta_seconds).max(0.0);
     if let Projection::Perspective(perspective) = &mut *projection {
         perspective.fov = f32::from(settings.0.camera.field_of_view_degrees).to_radians();
     }
@@ -31188,7 +31325,8 @@ fn camera_zoom_and_commands(
     let damage_changed = controller.observed_damage_sequence != damage.sequence;
     if damage_changed {
         controller.observed_damage_sequence = damage.sequence;
-        if auto_camera_is_managed(&controller)
+        if controller.combat_redirect_cooldown_seconds <= f32::EPSILON
+            && auto_camera_is_managed(&controller)
             && let Some(target) = damage.latest_target.clone()
         {
             controller.temporary_focus = Some(TemporaryCameraFocus {
@@ -31196,6 +31334,8 @@ fn camera_zoom_and_commands(
                 remaining_seconds: AUTO_CAMERA_ATTENTION_SECONDS,
                 return_to_auto_camera: true,
             });
+            controller.combat_redirect_cooldown_seconds =
+                AUTO_CAMERA_COMBAT_REDIRECT_COOLDOWN_SECONDS;
         }
     }
 
@@ -31989,9 +32129,17 @@ fn apply_building_commands(
     }
 }
 
+fn is_line_building(building: &StableId) -> bool {
+    matches!(building.as_str(), "building:wall" | "building:path")
+}
+
+fn building_blocks_navigation(definition: &BuildingDef) -> bool {
+    definition.archetype.as_str() != "archetype:building:path"
+}
+
 fn wall_line_cells(start: GridPos, end: GridPos) -> Result<Vec<GridPos>, String> {
     if start.x != end.x && start.z != end.z {
-        return Err("wall endpoints must be orthogonal (same row or same column)".to_owned());
+        return Err("line endpoints must be orthogonal (same row or same column)".to_owned());
     }
     if start.x == end.x {
         let (minimum, maximum) = if start.z <= end.z {
@@ -32015,7 +32163,7 @@ fn wall_line_cells(start: GridPos, end: GridPos) -> Result<Vec<GridPos>, String>
 }
 
 fn placement_visual_cells(placement: &BuildingPlacement) -> Vec<GridPos> {
-    if placement.building.as_str() == "building:wall"
+    if is_line_building(&placement.building)
         && let (Some(start), Some(end)) = (placement.line_start, placement.line_end)
     {
         return wall_line_cells(start, end).unwrap_or_else(|_| vec![placement.position]);
@@ -32641,10 +32789,12 @@ fn remove_selected_building(
         world,
     )
     .ok_or_else(|| "removed building lies outside the world".to_owned())?;
-    world
-        .navigation
-        .set_blocked(region, false)
-        .map_err(|error| error.to_string())?;
+    if building_blocks_navigation(definition) {
+        world
+            .navigation
+            .set_blocked(region, false)
+            .map_err(|error| error.to_string())?;
+    }
     simulation.buildings.remove(runtime_id);
     simulation.building_night_light_colors.remove(runtime_id);
     for actor in simulation.actors.values_mut() {
@@ -34394,7 +34544,9 @@ fn load_input(
             error!(building = %saved.id, "native save building lies outside the world");
             return;
         };
-        if let Err(error) = restored_world.navigation.set_blocked(region, true) {
+        if building_blocks_navigation(building)
+            && let Err(error) = restored_world.navigation.set_blocked(region, true)
+        {
             runtime_console.last_result = format!(
                 "Load failed: building {} cannot update navigation",
                 saved.id
@@ -34727,6 +34879,7 @@ fn load_input(
         &snapshot.traversal_wear,
         world.generated.navigation.width(),
         world.generated.navigation.height(),
+        &config.0.terrain,
     );
     let forked_from_template = source_path != save.store.path();
     if forked_from_template {
@@ -35875,6 +36028,7 @@ fn region_contains_grid_position(
 /// structural occupancy also restores foliage when a building is removed and
 /// recomputes the correct result after loading a different save.
 fn sync_foliage_clearance(
+    config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
     simulation: Res<SimulationRuntime>,
     world: Res<WorldRuntime>,
@@ -35897,8 +36051,12 @@ fn sync_foliage_clearance(
             .get(&location.0)
             .map(|cell| cell.score)
             .unwrap_or_default();
-        let should_be_hidden =
-            foliage_should_be_hidden(structure_hidden, pending_grounding.is_some(), wear_score);
+        let should_be_hidden = foliage_should_be_hidden(
+            structure_hidden,
+            pending_grounding.is_some(),
+            wear_score,
+            &config.0.terrain,
+        );
         if should_be_hidden && !matches!(*visibility, Visibility::Hidden) {
             *visibility = Visibility::Hidden;
         } else if !should_be_hidden && matches!(*visibility, Visibility::Hidden) {
@@ -35915,12 +36073,23 @@ fn foliage_should_be_hidden(
     structure_hidden: bool,
     pending_grounding: bool,
     wear_score: f32,
+    settings: &stream_town_domain::TerrainAppearanceConfig,
 ) -> bool {
-    structure_hidden || pending_grounding || wear_score >= TRAVERSAL_WEAR_FADE_START
+    structure_hidden
+        || pending_grounding
+        || wear_score
+            >= traversal_score_for_rate(
+                settings.traversal_fade_start_per_minute,
+                settings.traversal_half_life_seconds,
+            )
 }
 
-fn decay_traversal_wear(time: Res<Time>, mut traversal_wear: ResMut<TraversalWearRuntime>) {
-    traversal_wear.decay(time.delta_secs());
+fn decay_traversal_wear(
+    time: Res<Time>,
+    config: Res<RuntimeConfig>,
+    mut traversal_wear: ResMut<TraversalWearRuntime>,
+) {
+    traversal_wear.decay(time.delta_secs(), &config.0.terrain);
 }
 
 fn sync_traversal_wear_texture(
@@ -35944,7 +36113,13 @@ fn sync_traversal_wear_texture(
     if image.width() != u32::from(width) || image.height() != u32::from(height) {
         *image = traversal_wear_image(width, height);
     }
-    write_traversal_wear_pixels(&mut image, width, height, &traversal_wear.cells);
+    write_traversal_wear_pixels(
+        &mut image,
+        width,
+        height,
+        &traversal_wear.cells,
+        &config.0.terrain,
+    );
     if let Some(mut material) = terrain_materials.get_mut(&render.ground) {
         material.extension.parameters.traversal_grid = Vec4::new(
             f32::from(width),
@@ -35956,11 +36131,95 @@ fn sync_traversal_wear_texture(
     traversal_wear.texture_dirty = false;
 }
 
+fn path_surface_signature(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    width: u16,
+    height: u16,
+) -> u64 {
+    let path_archetype = content
+        .buildings
+        .get(&StableId::new("building:path").expect("static path ID"))
+        .map(|definition| &definition.archetype);
+    let mut signature = u64::from(width) << 48 | u64::from(height) << 32;
+    for building in simulation.buildings.values().filter(|building| {
+        building.complete
+            && path_archetype.is_some_and(|archetype| *archetype == building.archetype)
+    }) {
+        signature = signature
+            .wrapping_mul(0x0000_0100_0000_01b3)
+            .wrapping_add(stable_id_hash(&building.id))
+            .wrapping_add(u64::from(building.position.x) << 16)
+            .wrapping_add(u64::from(building.position.z))
+            .wrapping_add(u64::from(building.level) << 40);
+    }
+    signature
+}
+
+fn sync_path_surface_texture(
+    config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    render: Res<RenderAssets>,
+    mut runtime: ResMut<PathSurfaceRuntime>,
+    images: Option<ResMut<Assets<Image>>>,
+) {
+    let width = config.0.world.width.max(1);
+    let height = config.0.world.height.max(1);
+    let signature = path_surface_signature(&content.0, &simulation.0, width, height);
+    if runtime.initialized && runtime.applied_signature == signature {
+        return;
+    }
+    let Some(mut images) = images else {
+        return;
+    };
+    let Some(mut image) = images.get_mut(&render.path_surface) else {
+        return;
+    };
+    if image.width() != u32::from(width) || image.height() != u32::from(height) {
+        *image = traversal_wear_image(width, height);
+    }
+    let path_archetype = content
+        .0
+        .buildings
+        .get(&StableId::new("building:path").expect("static path ID"))
+        .map(|definition| &definition.archetype);
+    let Some(data) = image.data.as_mut() else {
+        return;
+    };
+    for pixel in data.chunks_exact_mut(4) {
+        pixel.copy_from_slice(&[0, 0, 0, u8::MAX]);
+    }
+    runtime.levels.clear();
+    for building in simulation.0.buildings.values().filter(|building| {
+        building.complete
+            && path_archetype.is_some_and(|archetype| *archetype == building.archetype)
+    }) {
+        if building.position.x >= width || building.position.z >= height {
+            continue;
+        }
+        let index = (usize::from(building.position.z) * usize::from(width)
+            + usize::from(building.position.x))
+            * 4;
+        if let Some(level) = data.get_mut(index) {
+            *level = u8::try_from(building.level.min(u16::from(u8::MAX))).unwrap_or(u8::MAX);
+        }
+        runtime
+            .levels
+            .entry(building.position)
+            .and_modify(|level| *level = (*level).max(building.level))
+            .or_insert(building.level);
+    }
+    runtime.applied_signature = signature;
+    runtime.initialized = true;
+}
+
 fn write_traversal_wear_pixels(
     image: &mut Image,
     width: u16,
     height: u16,
     cells: &HashMap<GridPos, TraversalWearCell>,
+    settings: &stream_town_domain::TerrainAppearanceConfig,
 ) {
     let Some(data) = image.data.as_mut() else {
         return;
@@ -35973,7 +36232,7 @@ fn write_traversal_wear_pixels(
             continue;
         }
         let index = (usize::from(position.z) * usize::from(width) + usize::from(position.x)) * 4;
-        let wear = traversal_wear_byte(cell.score);
+        let wear = traversal_wear_byte(cell.score, settings);
         if let Some(red) = data.get_mut(index) {
             *red = wear;
         }
@@ -35981,10 +36240,10 @@ fn write_traversal_wear_pixels(
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn traversal_wear_byte(score: f32) -> u8 {
+fn traversal_wear_byte(score: f32, settings: &stream_town_domain::TerrainAppearanceConfig) -> u8 {
     // The fraction is clamped to [0, 1], so the rounded value is always in
     // the complete u8 range before this intentional texture conversion.
-    (traversal_wear_fraction(score) * f32::from(u8::MAX)).round() as u8
+    (traversal_wear_fraction(score, settings) * f32::from(u8::MAX)).round() as u8
 }
 
 fn quarter_turn_rotation(rotation_quarter_turns: i32) -> Quat {
@@ -36675,6 +36934,9 @@ fn spawn_runtime_building(
                 .as_ref()
                 .map_or(0.0, |shooter| milli_units_as_f32(shooter.fire_milliseconds)),
         });
+    }
+    if archetype.source_path == "native://buildings/path" {
+        return;
     }
     if let Some(scene) = archetype_scene_for_age(archetype, age).filter(|scene| {
         asset_server.is_some() && converted_asset_exists(asset_root, &scene.asset_path)
@@ -37522,6 +37784,7 @@ fn unity_outbound_reply(
         | ChatCommand::Help
         | ChatCommand::Roles
         | ChatCommand::TownStats
+        | ChatCommand::Population
         | ChatCommand::Info { .. }
         | ChatCommand::ToggleBuildCosts
         | ChatCommand::ToggleRoleLimits => Some(message.to_owned()),
@@ -37772,6 +38035,7 @@ fn hud_building_count(content: &ContentCatalog, simulation: &WorldSimulation) ->
                 .is_some_and(|(id, definition)| {
                     id.as_str() != "building:townhall"
                         && id.as_str() != "building:wall"
+                        && id.as_str() != "building:path"
                         && definition.projectile_shooter.is_none()
                 })
         })
@@ -38143,7 +38407,7 @@ fn process_injected_commands(
                             &building_id,
                             building,
                         );
-                        if building_id.as_str() != "building:wall"
+                        if !is_line_building(&building_id)
                             && simulation.0.building_costs_enabled
                             && let Some(message) = building_shortage_message(
                                 &simulation.0,
@@ -38158,6 +38422,7 @@ fn process_injected_commands(
                             .last_building_position
                             .or(selected.0)
                             .unwrap_or(actor.position);
+                        let line_building = is_line_building(&building_id);
                         queues.placers.0.insert(
                             actor_id.clone(),
                             BuildingPlacement {
@@ -38169,10 +38434,17 @@ fn process_injected_commands(
                                 inactivity_seconds: 0.0,
                             },
                         );
-                        Ok(format!(
-                            "placing {} at {},{}; use !move, !rotate, !confirm, or !cancel",
-                            building.display_name, near.x, near.z
-                        ))
+                        Ok(if line_building {
+                            format!(
+                                "placing {} at {},{}; move to the first endpoint and use !beginplace",
+                                building.display_name, near.x, near.z
+                            )
+                        } else {
+                            format!(
+                                "placing {} at {},{}; use !move, !rotate, !confirm, or !cancel",
+                                building.display_name, near.x, near.z
+                            )
+                        })
                     })
                 }
                 ChatCommand::MoveBuilding(actions) => {
@@ -38219,15 +38491,20 @@ fn process_injected_commands(
                         .0
                         .get_mut(&actor_id)
                         .ok_or_else(|| "not in building placement mode".to_owned())?;
-                    if placement.building.as_str() != "building:wall" {
-                        return Err("!beginplace is only used for wall placement".to_owned());
+                    if !is_line_building(&placement.building) {
+                        return Err(
+                            "!beginplace is only used for wall or path placement".to_owned()
+                        );
                     }
+                    let line_name = content.0.buildings[&placement.building]
+                        .display_name
+                        .clone();
                     placement.line_start = Some(placement.position);
                     placement.line_end = None;
                     placement.inactivity_seconds = 0.0;
                     Ok(format!(
-                        "wall start set at {},{}; move to the other endpoint and use !endplace",
-                        placement.position.x, placement.position.z
+                        "{line_name} start set at {},{}; move to the other endpoint and use !endplace",
+                        placement.position.x, placement.position.z,
                     ))
                 }
                 ChatCommand::EndBuildingLine => {
@@ -38236,18 +38513,21 @@ fn process_injected_commands(
                         .0
                         .get_mut(&actor_id)
                         .ok_or_else(|| "not in building placement mode".to_owned())?;
-                    if placement.building.as_str() != "building:wall" {
-                        return Err("!endplace is only used for wall placement".to_owned());
+                    if !is_line_building(&placement.building) {
+                        return Err("!endplace is only used for wall or path placement".to_owned());
                     }
-                    let start = placement
-                        .line_start
-                        .ok_or_else(|| "set the first wall endpoint with !beginplace".to_owned())?;
+                    let line_name = content.0.buildings[&placement.building]
+                        .display_name
+                        .clone();
+                    let start = placement.line_start.ok_or_else(|| {
+                        format!("set the first {line_name} endpoint with !beginplace")
+                    })?;
                     placement.line_end = None;
                     let cells = wall_line_cells(start, placement.position)?;
                     placement.line_end = Some(placement.position);
                     placement.inactivity_seconds = 0.0;
                     Ok(format!(
-                        "wall endpoint set at {},{} ({} sections); review the ghost then use !confirm",
+                        "{line_name} endpoint set at {},{} ({} sections); review the ghost then use !confirm",
                         placement.position.x,
                         placement.position.z,
                         cells.len()
@@ -38266,12 +38546,13 @@ fn process_injected_commands(
                     {
                         return Err(format!("{} can no longer be placed", building.display_name));
                     }
-                    let cells = if placement.building.as_str() == "building:wall" {
+                    let cells = if is_line_building(&placement.building) {
+                        let line_name = building.display_name.to_ascii_lowercase();
                         let start = placement.line_start.ok_or_else(|| {
-                            "wall placement requires !beginplace before !confirm".to_owned()
+                            format!("{line_name} placement requires !beginplace before !confirm")
                         })?;
                         let end = placement.line_end.ok_or_else(|| {
-                            "wall placement requires !endplace before !confirm".to_owned()
+                            format!("{line_name} placement requires !endplace before !confirm")
                         })?;
                         wall_line_cells(start, end)?
                     } else {
@@ -38336,11 +38617,13 @@ fn process_injected_commands(
                             )
                             .map_err(|error| error.to_string())?;
                         first = false;
-                        world
-                            .generated
-                            .navigation
-                            .set_blocked(region, true)
-                            .map_err(|error| error.to_string())?;
+                        if building_blocks_navigation(building) {
+                            world
+                                .generated
+                                .navigation
+                                .set_blocked(region, true)
+                                .map_err(|error| error.to_string())?;
+                        }
                         spawn_runtime_building(
                             &mut ecs,
                             &config.0,
@@ -39043,6 +39326,47 @@ fn process_injected_commands(
                         .collect::<Vec<_>>()
                         .join(", ")
                 )),
+                ChatCommand::Population => {
+                    let recruits = recruited_actor_ids(&simulation.0)
+                        .into_iter()
+                        .collect::<BTreeSet<_>>();
+                    let populations = content
+                        .0
+                        .roles
+                        .iter()
+                        .filter(|(id, _)| id.as_str() != "role:ruler")
+                        .filter(|(id, role)| {
+                            !role.has_user_limit
+                                || role_capacity(&content.0, &simulation.0, id)
+                                    .is_some_and(|capacity| capacity > 0)
+                        })
+                        .map(|(id, role)| {
+                            let players = simulation
+                                .0
+                                .actors
+                                .values()
+                                .filter(|actor| {
+                                    actor.alive
+                                        && actor.role == *id
+                                        && is_stream_player_actor(&actor.id)
+                                })
+                                .count();
+                            let npc_recruits = simulation
+                                .0
+                                .actors
+                                .values()
+                                .filter(|actor| {
+                                    actor.alive && actor.role == *id && recruits.contains(&actor.id)
+                                })
+                                .count();
+                            format!("{} P{players}/R{npc_recruits}", role.display_name)
+                        })
+                        .collect::<Vec<_>>();
+                    Ok(format!(
+                        "Population by role (P=players, R=recruits) — {}",
+                        populations.join("; ")
+                    ))
+                }
                 ChatCommand::Discord => {
                     Ok("Stream Town Discord: https://discord.gg/By4jvks".to_owned())
                 }
@@ -41961,28 +42285,45 @@ mod tests {
     #[test]
     fn traversal_wear_records_only_completed_citizen_cell_entries() {
         let mut wear = TraversalWearRuntime::default();
+        let settings = stream_town_domain::TerrainAppearanceConfig::default();
         let start = GridPos { x: 1, z: 2 };
         let next = GridPos { x: 2, z: 2 };
-        record_completed_cell_traversal(&mut wear, &ActorKind::Enemy, start, next);
-        record_completed_cell_traversal(&mut wear, &ActorKind::Player, start, start);
+        record_completed_cell_traversal(&mut wear, &settings, &ActorKind::Enemy, start, next);
+        record_completed_cell_traversal(&mut wear, &settings, &ActorKind::Player, start, start);
         assert!(wear.cells.is_empty());
 
-        for _ in 0..20 {
-            record_completed_cell_traversal(&mut wear, &ActorKind::Player, start, next);
+        let full_score = traversal_score_for_rate(
+            settings.traversal_full_tint_per_minute,
+            settings.traversal_half_life_seconds,
+        );
+        while wear.cells.get(&next).map_or(0.0, |cell| cell.score) < full_score {
+            record_completed_cell_traversal(&mut wear, &settings, &ActorKind::Player, start, next);
         }
-        assert!((wear.cells[&next].score - MAX_TRAVERSAL_WEAR_SCORE).abs() < f32::EPSILON);
+        assert!((wear.cells[&next].score - full_score).abs() < f32::EPSILON);
         assert!(
-            (wear.cells[&next].decay_pause_seconds - TRAVERSAL_WEAR_DECAY_PAUSE_SECONDS).abs()
+            (wear.cells[&next].decay_pause_seconds - settings.traversal_decay_pause_seconds).abs()
                 < f32::EPSILON
         );
     }
 
     #[test]
-    fn traversal_wear_fades_from_three_to_nine_and_decays_by_half_life() {
-        assert!(traversal_wear_fraction(2.99).abs() < f32::EPSILON);
-        assert!((traversal_wear_fraction(6.0) - 0.5).abs() < f32::EPSILON);
-        assert!((traversal_wear_fraction(9.0) - 1.0).abs() < f32::EPSILON);
-        assert!((traversal_wear_fraction(12.0) - 1.0).abs() < f32::EPSILON);
+    fn traversal_wear_fades_from_five_to_fifty_and_decays_by_half_life() {
+        let settings = stream_town_domain::TerrainAppearanceConfig::default();
+        let fade_start = traversal_score_for_rate(
+            settings.traversal_fade_start_per_minute,
+            settings.traversal_half_life_seconds,
+        );
+        let full_tint = traversal_score_for_rate(
+            settings.traversal_full_tint_per_minute,
+            settings.traversal_half_life_seconds,
+        );
+        assert!(traversal_wear_fraction(fade_start - 0.01, &settings).abs() < f32::EPSILON);
+        assert!(
+            (traversal_wear_fraction((fade_start + full_tint) * 0.5, &settings) - 0.5).abs()
+                < f32::EPSILON
+        );
+        assert!((traversal_wear_fraction(full_tint, &settings) - 1.0).abs() < f32::EPSILON);
+        assert!((traversal_wear_fraction(full_tint * 2.0, &settings) - 1.0).abs() < f32::EPSILON);
 
         let position = GridPos { x: 4, z: 5 };
         let pruned = GridPos { x: 5, z: 5 };
@@ -41990,7 +42331,7 @@ mod tests {
         wear.cells.insert(
             position,
             TraversalWearCell {
-                score: 12.0,
+                score: full_tint,
                 decay_pause_seconds: 0.0,
             },
         );
@@ -42001,42 +42342,51 @@ mod tests {
                 decay_pause_seconds: 0.0,
             },
         );
-        wear.decay(TRAVERSAL_WEAR_HALF_LIFE_SECONDS);
-        assert!((wear.cells[&position].score - 6.0).abs() < 0.000_1);
+        wear.decay(settings.traversal_half_life_seconds, &settings);
+        assert!((wear.cells[&position].score - full_tint * 0.5).abs() < 0.000_1);
         assert!(!wear.cells.contains_key(&pruned));
 
         let paused = GridPos { x: 6, z: 5 };
-        wear.record(paused);
-        wear.decay(TRAVERSAL_WEAR_DECAY_PAUSE_SECONDS - 1.0);
+        wear.record(paused, &settings);
+        wear.decay(settings.traversal_decay_pause_seconds - 1.0, &settings);
         assert!((wear.cells[&paused].score - 1.0).abs() < f32::EPSILON);
-        wear.decay(1.0);
+        wear.decay(1.0, &settings);
         assert!((wear.cells[&paused].score - 1.0).abs() < f32::EPSILON);
-        wear.decay(TRAVERSAL_WEAR_HALF_LIFE_SECONDS);
+        wear.decay(settings.traversal_half_life_seconds, &settings);
         assert!((wear.cells[&paused].score - 0.5).abs() < 0.000_1);
     }
 
     #[test]
     fn traversal_wear_texture_maps_scores_to_their_grid_cells() {
+        let settings = stream_town_domain::TerrainAppearanceConfig::default();
         let mut image = traversal_wear_image(4, 3);
+        let fade_start = traversal_score_for_rate(
+            settings.traversal_fade_start_per_minute,
+            settings.traversal_half_life_seconds,
+        );
+        let full_tint = traversal_score_for_rate(
+            settings.traversal_full_tint_per_minute,
+            settings.traversal_half_life_seconds,
+        );
         let half = GridPos { x: 1, z: 2 };
         let full = GridPos { x: 3, z: 0 };
         let cells = HashMap::from([
             (
                 half,
                 TraversalWearCell {
-                    score: 6.0,
+                    score: (fade_start + full_tint) * 0.5,
                     decay_pause_seconds: 0.0,
                 },
             ),
             (
                 full,
                 TraversalWearCell {
-                    score: 9.0,
+                    score: full_tint,
                     decay_pause_seconds: 0.0,
                 },
             ),
         ]);
-        write_traversal_wear_pixels(&mut image, 4, 3, &cells);
+        write_traversal_wear_pixels(&mut image, 4, 3, &cells, &settings);
         let data = image.data.as_ref().expect("wear texture is CPU-backed");
         let half_index = (usize::from(half.z) * 4 + usize::from(half.x)) * 4;
         let full_index = (usize::from(full.z) * 4 + usize::from(full.x)) * 4;
@@ -42047,10 +42397,40 @@ mod tests {
 
     #[test]
     fn traversal_wear_hides_foliage_without_removing_it() {
-        assert!(!foliage_should_be_hidden(false, false, 2.99));
-        assert!(foliage_should_be_hidden(false, false, 3.0));
-        assert!(foliage_should_be_hidden(true, false, 0.0));
-        assert!(foliage_should_be_hidden(false, true, 0.0));
+        let settings = stream_town_domain::TerrainAppearanceConfig::default();
+        let fade_start = traversal_score_for_rate(
+            settings.traversal_fade_start_per_minute,
+            settings.traversal_half_life_seconds,
+        );
+        assert!(!foliage_should_be_hidden(
+            false,
+            false,
+            fade_start - 0.01,
+            &settings
+        ));
+        assert!(foliage_should_be_hidden(
+            false, false, fade_start, &settings
+        ));
+        assert!(foliage_should_be_hidden(true, false, 0.0, &settings));
+        assert!(foliage_should_be_hidden(false, true, 0.0, &settings));
+    }
+
+    #[test]
+    fn completed_path_levels_accelerate_citizens_by_five_percent_each() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let position = GridPos { x: 8, z: 9 };
+        let citizen = StableId::new("twitch:path_speed_test").unwrap();
+        let mut simulation = WorldSimulation::new(7);
+        assert!(simulation.join_player(citizen.clone(), position));
+        let base = actor_movement_speed(&config, &content, &simulation, &citizen);
+        let paths = PathSurfaceRuntime {
+            levels: HashMap::from([(position, 3)]),
+            ..default()
+        };
+        let accelerated =
+            actor_movement_speed_on_path(&config, &content, &simulation, &paths, &citizen);
+        assert!((accelerated - base * 1.15).abs() < 0.000_1);
     }
 
     fn audio_acceptance_record(wav: &[u8]) -> serde_json::Value {
@@ -42372,6 +42752,94 @@ mod tests {
             Some(CameraFocusTarget::Building(house))
         );
         assert_eq!(damage.sequence, 1);
+    }
+
+    #[test]
+    fn combat_camera_holds_a_target_for_five_seconds_before_redirecting() {
+        let home = Transform::from_xyz(0.0, 30.0, 0.0);
+        let first = StableId::new("twitch:combat_camera_first").unwrap();
+        let second = StableId::new("twitch:combat_camera_second").unwrap();
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_millis(100));
+        let mut app = App::new();
+        app.insert_resource(time)
+            .insert_resource(RuntimeConfig(GameConfig::default()))
+            .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
+            .insert_resource(MenuRuntime::default())
+            .init_resource::<CommandAcknowledgementRuntime>()
+            .insert_resource(CameraDamageRuntime {
+                latest_target: Some(CameraFocusTarget::Citizen(first.clone())),
+                sequence: 1,
+                ..default()
+            })
+            .init_resource::<CameraCommandQueue>()
+            .add_systems(Update, camera_zoom_and_commands);
+        let camera = app
+            .world_mut()
+            .spawn((
+                TownCamera,
+                home,
+                Projection::Perspective(PerspectiveProjection::default()),
+                {
+                    let mut controller = TownCameraControllerRuntime::new(home);
+                    controller.auto_shot = AutoCameraShot::Town;
+                    controller.seconds_since_acknowledgement = AUTO_CAMERA_IDLE_SECONDS;
+                    controller
+                },
+            ))
+            .id();
+        for (id, x) in [(first.clone(), 10.0), (second.clone(), 20.0)] {
+            app.world_mut().spawn((
+                Agent {
+                    id,
+                    kind: ActorKind::Player,
+                    archetype: StableId::new("archetype:player").unwrap(),
+                    goal: AgentGoal::Wander,
+                    spawn: GridPos { x: 10, z: 10 },
+                    origin: GridPos { x: 10, z: 10 },
+                    path: Vec::new(),
+                    path_index: 0,
+                    target: GridPos { x: 10, z: 10 },
+                    action_cooldown_seconds: 0.0,
+                    action_started: false,
+                    repath_remaining_seconds: 0.0,
+                    health_regen_accumulator: 0.0,
+                    wander_sequence: 0,
+                    previous_wander_origin: None,
+                },
+                Transform::from_xyz(x, 1.0, 10.0),
+            ));
+        }
+
+        app.update();
+        let focused = |app: &App| {
+            app.world()
+                .entity(camera)
+                .get::<TownCameraControllerRuntime>()
+                .and_then(|controller| controller.temporary_focus.as_ref())
+                .map(|focus| focus.target.clone())
+        };
+        assert_eq!(
+            focused(&app),
+            Some(CameraFocusTarget::Citizen(first.clone()))
+        );
+
+        {
+            let mut damage = app.world_mut().resource_mut::<CameraDamageRuntime>();
+            damage.latest_target = Some(CameraFocusTarget::Citizen(second.clone()));
+            damage.sequence = 2;
+        }
+        app.update();
+        assert_eq!(focused(&app), Some(CameraFocusTarget::Citizen(first)));
+
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs_f32(5.0));
+        app.world_mut()
+            .resource_mut::<CameraDamageRuntime>()
+            .sequence = 3;
+        app.update();
+        assert_eq!(focused(&app), Some(CameraFocusTarget::Citizen(second)));
     }
 
     #[test]
@@ -44917,6 +45385,7 @@ mod tests {
         );
 
         let mut app = App::new();
+        app.insert_resource(RuntimeConfig(config));
         app.insert_resource(RuntimeContent(content));
         app.insert_resource(SimulationRuntime(simulation));
         app.insert_resource(WorldRuntime {
@@ -50706,6 +51175,7 @@ mod tests {
 
     #[test]
     fn environment_palette_covers_every_season_and_weather() {
+        let terrain = stream_town_domain::TerrainAppearanceConfig::default();
         assert_eq!(parse_weather("SNOW"), Some(Weather::Snow));
         assert_eq!(parse_weather("unknown"), None);
         let seasons = [
@@ -50717,7 +51187,7 @@ mod tests {
         let weather = [Weather::Clear, Weather::Rain, Weather::Fog, Weather::Snow];
         for season in seasons {
             for weather in weather {
-                let palette = environment_palette(season, weather);
+                let palette = environment_palette(season, weather, &terrain);
                 assert!(palette.fog_start >= 0.0);
                 assert!(palette.fog_end > palette.fog_start);
                 assert!(palette.sun_illuminance > 0.0);
@@ -50725,19 +51195,19 @@ mod tests {
             }
         }
         assert_eq!(
-            environment_palette(Season::Spring, Weather::Clear).particle_count,
+            environment_palette(Season::Spring, Weather::Clear, &terrain).particle_count,
             0
         );
         assert_eq!(
-            environment_palette(Season::Spring, Weather::Rain).particle_count,
+            environment_palette(Season::Spring, Weather::Rain, &terrain).particle_count,
             180
         );
         assert_eq!(
-            environment_palette(Season::Winter, Weather::Snow).particle_count,
+            environment_palette(Season::Winter, Weather::Snow, &terrain).particle_count,
             150
         );
-        let spring = environment_palette(Season::Spring, Weather::Clear).terrain_tint;
-        let winter = environment_palette(Season::Winter, Weather::Clear).terrain_tint;
+        let spring = environment_palette(Season::Spring, Weather::Clear, &terrain).terrain_tint;
+        let winter = environment_palette(Season::Winter, Weather::Clear, &terrain).terrain_tint;
         assert!(
             spring
                 .iter()
@@ -51319,7 +51789,7 @@ mod tests {
             Vec2::splat(config.world.cell_size * PLAYER_SELECTION_OUTLINE_SCALE_CELLS * 0.5,)
         );
 
-        let terrain = terrain_material(&presentation, &config, None, None);
+        let terrain = terrain_material(&presentation, &config, None, None, None);
         assert_eq!(
             terrain.extension.parameters.selection_center_extent,
             Vec4::ZERO
@@ -52979,7 +53449,7 @@ mod tests {
     #[test]
     fn embedded_unity_content_catalog_is_valid() {
         let content = embedded_content();
-        assert_eq!(content.archetypes.len(), 218);
+        assert_eq!(content.archetypes.len(), 219);
         assert_eq!(content.foliage.len(), 4);
         assert_eq!(
             content
@@ -52989,10 +53459,21 @@ mod tests {
                 .sum::<usize>(),
             21
         );
-        assert_eq!(content.buildings.len(), 29);
+        assert_eq!(content.buildings.len(), 30);
         assert_eq!(content.roles.len(), 18);
-        assert_eq!(content.technology.nodes.len(), 366);
-        assert_eq!(content.technology.groups.len(), 21);
+        assert_eq!(content.technology.nodes.len(), 370);
+        assert_eq!(content.technology.groups.len(), 22);
+        let path = &content.buildings[&StableId::new("building:path").unwrap()];
+        assert_eq!(path.display_name, "Path");
+        assert_eq!(path.footprint, [1, 1]);
+        assert!(path.placeable && path.can_level && path.model_handlers.is_empty());
+        assert_eq!(path.cost[&StableId::new("resource:wood").unwrap()], 150);
+        assert_eq!(path.cost[&StableId::new("resource:ore").unwrap()], 130);
+        assert_eq!(
+            content.technology.nodes[&StableId::new("tech:native_path_level13").unwrap()]
+                .building_level_caps[&StableId::new("building:path").unwrap()],
+            13
+        );
         let logger = &content.roles[&StableId::new("role:logger").unwrap()];
         assert_eq!(logger.base_action_amount, 1);
         assert_eq!(logger.experience_multiplier_per_thousand, 1_000);
@@ -53713,7 +54194,7 @@ mod tests {
                 .sum::<usize>(),
             32
         );
-        let terrain = terrain_material(&presentation, &GameConfig::default(), None, None);
+        let terrain = terrain_material(&presentation, &GameConfig::default(), None, None, None);
         assert!(terrain.extension.grid_texture.is_none());
         assert!((terrain.base.perceptual_roughness - 1.0).abs() < f32::EPSILON);
         assert!(terrain.base.metallic.abs() < f32::EPSILON);
@@ -56427,12 +56908,13 @@ mod tests {
     }
 
     #[test]
-    fn hud_building_count_excludes_town_hall_walls_and_towers() {
+    fn hud_building_count_excludes_town_hall_walls_paths_and_towers() {
         let content = embedded_content();
         let mut simulation = WorldSimulation::new(1);
         for (runtime, definition_id) in [
             ("building:townhall", "building:townhall"),
             ("building:test_wall", "building:wall"),
+            ("building:test_path", "building:path"),
             ("building:test_tower", "building:tower"),
             ("building:test_house", "building:house"),
         ] {

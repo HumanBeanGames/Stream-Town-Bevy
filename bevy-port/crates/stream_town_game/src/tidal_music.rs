@@ -5,14 +5,15 @@ use bevy_tidal::{
     NativeAudioRouting, NativeAudioState, NativeAudioStatus, TidalBackendState, TidalBackendStatus,
     TidalConfig, TidalController, TidalPlugin,
 };
-use stream_town_domain::{ActorKind, PlayerSettings};
+use stream_town_domain::{ActorKind, AdaptiveMusicConfig, PlayerSettings, Season};
 
-use super::{Agent, RuntimeConfig, RuntimePlayerSettings, SimulationRuntime, TownCamera};
+use super::{
+    Agent, RuntimeConfig, RuntimeContent, RuntimePlayerSettings, SimulationRuntime, TownCamera,
+    hud_building_count,
+};
 
 const MUSIC_TRACK: u64 = 1;
-const INTENSITY_SMOOTHING_SECONDS: f64 = 15.0;
 const INTENSITY_PROGRAM_THRESHOLD: f64 = 0.25;
-const MAX_SONG_INTENSITY: f64 = 12.0;
 
 const HARMONY_ROOTS: [&str; 7] = [
     "<c4 a3 f3 g3 c4 e3 f3 g3>",
@@ -34,41 +35,32 @@ const HARMONY_CHORDS: [&str; 7] = [
     "<c4'M db3'M fs3'dim g3'7f9 c4'M ab3'M fs3'dim g3'7f9>",
 ];
 
-const SCORE_TEMPLATE: &str = r#"stack
-  [ sound "${kick}" # lpf ${kick_brightness} # gain ${kick_gain}
-  , struct "${root_pattern}" $ ${roots}
-      # sound "superpiano"
-      # legato 0.9
-      # attack ${melody_attack}
-      # decay 0.02
-      # release 0.035
-      # lpf ${melody_brightness}
-      # gain ${melody_gain}
-      # room 0.08
-      # roomsize 1
-  , struct "${chord_pattern}" $ ${chords}
-      # sound "superpiano"
-      # attack ${chord_attack}
-      # release 0.4
-      # lpf ${chord_brightness}
-      # gain ${chord_gain}
-      # room 0.20
-      # roomsize 2
-  , sound "${hats}" # lpf ${hat_brightness} # gain ${hat_gain}
-  ]"#;
-
 /// Externally driven input to the downstream-owned intensity composition.
 #[derive(Resource, Clone, Debug, Default)]
 pub(super) struct IntensitySongInput {
     pub(super) intensity: f64,
     pub(super) visible_enemies: usize,
+    pub(super) season: f64,
+    pub(super) time_of_day: f64,
+    pub(super) population: usize,
+    pub(super) building_count: usize,
 }
 
 #[derive(Resource, Default)]
 pub(super) struct TidalMusicRuntime {
-    applied_intensity: Option<f64>,
-    failed_intensity: Option<f64>,
+    applied_signature: Option<AdaptiveMusicSignature>,
+    failed_signature: Option<AdaptiveMusicSignature>,
     diagnostic: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AdaptiveMusicSignature {
+    energy_bucket: i64,
+    intensity_bucket: Option<i64>,
+    season: Option<u8>,
+    time_of_day_bucket: Option<u8>,
+    population: Option<usize>,
+    building_count: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -90,6 +82,7 @@ pub(super) fn tidal_plugin(asset_root: &Path) -> TidalPlugin {
 pub(super) fn update_enemy_music_intensity(
     time: Res<Time>,
     config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
     simulation: Res<SimulationRuntime>,
     cameras: Query<(&Camera, &GlobalTransform), With<TownCamera>>,
     agents: Query<(&Agent, &GlobalTransform)>,
@@ -117,11 +110,30 @@ pub(super) fn update_enemy_music_intensity(
             .count()
     });
     input.visible_enemies = visible_enemies;
+    input.season = match simulation.0.season {
+        Season::Spring => 0.0,
+        Season::Summer => 1.0,
+        Season::Autumn => 2.0,
+        Season::Winter => 3.0,
+    };
+    input.time_of_day = simulation
+        .0
+        .elapsed_seconds
+        .rem_euclid(f64::from(config.0.time.seconds_per_day.max(1)))
+        / f64::from(config.0.time.seconds_per_day.max(1));
+    input.population = simulation
+        .0
+        .actors
+        .values()
+        .filter(|actor| actor.alive && actor.role.as_str() != "role:enemy")
+        .count();
+    input.building_count = hud_building_count(&content.0, &simulation.0);
     let visible_enemies = u32::try_from(visible_enemies).unwrap_or(u32::MAX);
     input.intensity = smoothed_intensity(
         input.intensity,
         f64::from(visible_enemies),
         time.delta_secs_f64(),
+        f64::from(config.0.music.intensity_smoothing_seconds),
     );
 }
 
@@ -131,6 +143,7 @@ pub(super) fn drive_tidal_music(
     audio: Option<Res<NativeAudioStatus>>,
     routing: Option<Res<NativeAudioRouting>>,
     input: Res<IntensitySongInput>,
+    config: Res<RuntimeConfig>,
     player_settings: Res<RuntimePlayerSettings>,
     mut runtime: ResMut<TidalMusicRuntime>,
 ) {
@@ -149,31 +162,29 @@ pub(super) fn drive_tidal_music(
     }
 
     routing.set_master_gain(player_music_gain(&player_settings.0));
-    let requested_intensity = input.intensity.clamp(0.0, MAX_SONG_INTENSITY);
-    if !intensity_program_needs_update(
-        runtime.applied_intensity,
-        runtime.failed_intensity,
-        requested_intensity,
-    ) {
+    let requested_signature = adaptive_music_signature(&input, &config.0.music);
+    if runtime.applied_signature == Some(requested_signature)
+        && runtime.failed_signature != Some(requested_signature)
+    {
         return;
     }
 
-    match intensity_song_program(requested_intensity).and_then(|program| {
+    match adaptive_song_program(&input, &config.0.music).and_then(|program| {
         controller.transition(MUSIC_TRACK, program.expression, program.cycles_per_second)
     }) {
         Ok(()) => {
-            if runtime.applied_intensity.is_none() {
+            if runtime.applied_signature.is_none() {
                 info!(
                     target: "stream_town::music",
                     "Started native Tidal intensity score"
                 );
             }
-            runtime.applied_intensity = Some(requested_intensity);
-            runtime.failed_intensity = None;
+            runtime.applied_signature = Some(requested_signature);
+            runtime.failed_signature = None;
             runtime.diagnostic = None;
         }
         Err(error) => {
-            runtime.failed_intensity = Some(requested_intensity);
+            runtime.failed_signature = Some(requested_signature);
             report_once(
                 &mut runtime,
                 format!("Could not apply the Stream Town intensity score: {error}"),
@@ -190,8 +201,8 @@ pub(super) fn stop_tidal_music(
     if let Some(controller) = controller {
         silence_music(&controller, &mut runtime);
     } else {
-        runtime.applied_intensity = None;
-        runtime.failed_intensity = None;
+        runtime.applied_signature = None;
+        runtime.failed_signature = None;
     }
     *input = IntensitySongInput::default();
 }
@@ -216,7 +227,12 @@ fn point_inside_viewport(viewport: Vec2, position: Vec2) -> bool {
     position.x >= 0.0 && position.y >= 0.0 && position.x <= viewport.x && position.y <= viewport.y
 }
 
-fn smoothed_intensity(previous: f64, visible_enemies: f64, delta_seconds: f64) -> f64 {
+fn smoothed_intensity(
+    previous: f64,
+    visible_enemies: f64,
+    delta_seconds: f64,
+    smoothing_seconds: f64,
+) -> f64 {
     let previous = if previous.is_finite() {
         previous.max(0.0)
     } else {
@@ -227,10 +243,11 @@ fn smoothed_intensity(previous: f64, visible_enemies: f64, delta_seconds: f64) -
     } else {
         0.0
     };
-    let alpha = 1.0 - (-delta_seconds.max(0.0) / INTENSITY_SMOOTHING_SECONDS).exp();
+    let alpha = 1.0 - (-delta_seconds.max(0.0) / smoothing_seconds.max(f64::EPSILON)).exp();
     previous + (target - previous) * alpha
 }
 
+#[cfg(test)]
 fn intensity_program_needs_update(
     applied: Option<f64>,
     failed: Option<f64>,
@@ -246,8 +263,58 @@ fn intensity_program_needs_update(
     (requested - previous).abs() >= INTENSITY_PROGRAM_THRESHOLD
 }
 
-fn intensity_cycles_per_second(intensity: f64) -> f64 {
-    (75.0 + intensity.clamp(0.0, MAX_SONG_INTENSITY) * 5.0) / 240.0
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn adaptive_music_signature(
+    input: &IntensitySongInput,
+    config: &AdaptiveMusicConfig,
+) -> AdaptiveMusicSignature {
+    let template = config.score_template.as_str();
+    AdaptiveMusicSignature {
+        energy_bucket: quantized(
+            adaptive_music_energy(input, config),
+            INTENSITY_PROGRAM_THRESHOLD,
+        ),
+        intensity_bucket: template
+            .contains("${intensity}")
+            .then(|| quantized(input.intensity, INTENSITY_PROGRAM_THRESHOLD)),
+        season: template
+            .contains("${season}")
+            .then(|| input.season.clamp(0.0, 3.0).round() as u8),
+        // Sixty-four slices keep authored time-of-day changes responsive without
+        // replacing the score every frame.
+        time_of_day_bucket: template
+            .contains("${time_of_day}")
+            .then(|| (input.time_of_day.rem_euclid(1.0) * 64.0).floor() as u8),
+        population: template
+            .contains("${population}")
+            .then_some(input.population),
+        building_count: template
+            .contains("${building_count}")
+            .then_some(input.building_count),
+    }
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn quantized(value: f64, interval: f64) -> i64 {
+    (value.max(0.0) / interval).floor() as i64
+}
+
+fn adaptive_music_energy(input: &IntensitySongInput, config: &AdaptiveMusicConfig) -> f64 {
+    let population = u32::try_from(input.population).unwrap_or(u32::MAX);
+    let buildings = u32::try_from(input.building_count).unwrap_or(u32::MAX);
+    (input.intensity * f64::from(config.intensity_weight)
+        + input.season * f64::from(config.season_weight)
+        + input.time_of_day * f64::from(config.time_of_day_weight)
+        + f64::from(population) * f64::from(config.population_weight)
+        + f64::from(buildings) * f64::from(config.building_count_weight))
+    .clamp(0.0, f64::from(config.maximum_energy))
+}
+
+fn intensity_cycles_per_second(intensity: f64, config: &AdaptiveMusicConfig) -> f64 {
+    (f64::from(config.cycles_per_minute_base)
+        + intensity.clamp(0.0, f64::from(config.maximum_energy))
+            * f64::from(config.cycles_per_minute_per_energy))
+        / 240.0
 }
 
 fn tidal_is_ready(
@@ -273,7 +340,7 @@ fn tidal_is_ready(
 }
 
 fn silence_music(controller: &TidalController, runtime: &mut TidalMusicRuntime) {
-    if runtime.applied_intensity.is_some()
+    if runtime.applied_signature.is_some()
         && let Err(error) = controller.silence(MUSIC_TRACK)
     {
         report_once(
@@ -281,8 +348,8 @@ fn silence_music(controller: &TidalController, runtime: &mut TidalMusicRuntime) 
             format!("Could not silence the Stream Town Tidal track: {error}"),
         );
     }
-    runtime.applied_intensity = None;
-    runtime.failed_intensity = None;
+    runtime.applied_signature = None;
+    runtime.failed_signature = None;
 }
 
 fn report_once(runtime: &mut TidalMusicRuntime, diagnostic: String) {
@@ -296,13 +363,16 @@ fn player_music_gain(settings: &PlayerSettings) -> f32 {
     (settings.audio.master * settings.audio.music).clamp(0.0, 1.0)
 }
 
-/// Renders the complete score from its externally supplied intensity.
-fn intensity_song_program(intensity: f64) -> Result<IntensitySongProgram, String> {
-    if !intensity.is_finite() {
+/// Renders one transitionable score from all authorable live-town variables.
+fn adaptive_song_program(
+    input: &IntensitySongInput,
+    config: &AdaptiveMusicConfig,
+) -> Result<IntensitySongProgram, String> {
+    if !input.intensity.is_finite() {
         return Err("The downstream song intensity must be finite".to_owned());
     }
-    let intensity = intensity.clamp(0.0, MAX_SONG_INTENSITY);
-    let t = intensity / MAX_SONG_INTENSITY;
+    let intensity = adaptive_music_energy(input, config);
+    let t = intensity / f64::from(config.maximum_energy);
     // The native engine has no sampled `gm_harpsichord` bank; that name fell
     // through to its intentionally soft generic tone. `superpiano` is the
     // bright, overtone-rich struck voice exercised by the library's reference
@@ -354,7 +424,15 @@ fn intensity_song_program(intensity: f64) -> Result<IntensitySongProgram, String
     let lower_level = harmony_level.saturating_sub(1);
     let upper_level = (harmony_level + 1).min(HARMONY_ROOTS.len() - 1);
 
+    let population = u32::try_from(input.population).unwrap_or(u32::MAX);
+    let building_count = u32::try_from(input.building_count).unwrap_or(u32::MAX);
     let values = [
+        ("intensity", format_number(input.intensity)),
+        ("season", format_number(input.season)),
+        ("time_of_day", format_number(input.time_of_day)),
+        ("population", population.to_string()),
+        ("building_count", building_count.to_string()),
+        ("energy", format_number(intensity)),
         (
             "kick",
             sound_pattern(&euclidean_steps(slow_hits, 4, 0), "bd"),
@@ -385,13 +463,24 @@ fn intensity_song_program(intensity: f64) -> Result<IntensitySongProgram, String
         ("hat_gain", format_number(hat_gain)),
     ];
     Ok(IntensitySongProgram {
-        expression: render_score_template(&values)?,
-        cycles_per_second: intensity_cycles_per_second(intensity),
+        expression: render_score_template(&config.score_template, &values)?,
+        cycles_per_second: intensity_cycles_per_second(intensity, config),
     })
 }
 
-fn render_score_template(values: &[(&str, String)]) -> Result<String, String> {
-    let mut program = SCORE_TEMPLATE.to_owned();
+#[cfg(test)]
+fn intensity_song_program(intensity: f64) -> Result<IntensitySongProgram, String> {
+    adaptive_song_program(
+        &IntensitySongInput {
+            intensity,
+            ..default()
+        },
+        &AdaptiveMusicConfig::default(),
+    )
+}
+
+fn render_score_template(template: &str, values: &[(&str, String)]) -> Result<String, String> {
+    let mut program = template.to_owned();
     for (name, value) in values {
         program = program.replace(&format!("${{{name}}}"), value);
     }
@@ -462,10 +551,10 @@ mod tests {
     }
 
     #[test]
-    fn intensity_smoothing_has_a_fifteen_second_time_constant() {
-        let one_step = smoothed_intensity(0.0, 12.0, 15.0);
+    fn intensity_smoothing_has_a_five_second_time_constant() {
+        let one_step = smoothed_intensity(0.0, 12.0, 5.0, 5.0);
         let many_steps = (0..900).fold(0.0, |value, _| {
-            smoothed_intensity(value, 12.0, 15.0 / 900.0)
+            smoothed_intensity(value, 12.0, 5.0 / 900.0, 5.0)
         });
         let expected = 12.0 * (1.0 - (-1.0_f64).exp());
         assert!((one_step - expected).abs() < 1.0e-10);
@@ -481,9 +570,50 @@ mod tests {
     }
 
     #[test]
+    fn authorable_live_variables_participate_in_program_refreshes() {
+        let mut config = AdaptiveMusicConfig::default();
+        config.score_template.push_str(
+            " -- ${intensity} ${season} ${time_of_day} ${population} ${building_count} ${energy}",
+        );
+        let input = IntensitySongInput {
+            intensity: 2.4,
+            season: 2.0,
+            time_of_day: 0.5,
+            population: 17,
+            building_count: 9,
+            ..default()
+        };
+        let signature = adaptive_music_signature(&input, &config);
+        assert_eq!(signature.intensity_bucket, Some(9));
+        assert_eq!(signature.season, Some(2));
+        assert_eq!(signature.time_of_day_bucket, Some(32));
+        assert_eq!(signature.population, Some(17));
+        assert_eq!(signature.building_count, Some(9));
+        let program = adaptive_song_program(&input, &config).unwrap();
+        assert!(
+            program
+                .expression
+                .ends_with("-- 2.400000 2.000000 0.500000 17 9 2.400000")
+        );
+    }
+
+    #[test]
+    fn unused_raw_variables_do_not_churn_the_score_signature() {
+        let config = AdaptiveMusicConfig::default();
+        let mut input = IntensitySongInput::default();
+        let original = adaptive_music_signature(&input, &config);
+        input.season = 3.0;
+        input.time_of_day = 0.9;
+        input.population = 50;
+        input.building_count = 20;
+        assert_eq!(adaptive_music_signature(&input, &config), original);
+    }
+
+    #[test]
     fn authored_tempo_still_spans_the_intensity_range() {
-        assert!((intensity_cycles_per_second(0.0).recip() - 3.2).abs() < 1.0e-10);
-        assert!((intensity_cycles_per_second(12.0) - 0.5625).abs() < 1.0e-10);
+        let config = AdaptiveMusicConfig::default();
+        assert!((intensity_cycles_per_second(0.0, &config).recip() - 3.2).abs() < 1.0e-10);
+        assert!((intensity_cycles_per_second(12.0, &config) - 0.5625).abs() < 1.0e-10);
     }
 
     #[test]

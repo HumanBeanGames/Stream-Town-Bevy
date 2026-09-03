@@ -540,14 +540,14 @@ fn validate() -> Result<()> {
             content.source_records.len(),
         ) != (
             stream_town_domain::CURRENT_CONTENT_SCHEMA,
-            218,
+            219,
             294,
-            29,
+            30,
             18,
-            425,
+            430,
+            370,
+            22,
             366,
-            21,
-            362,
             4,
             404,
         )
@@ -555,7 +555,20 @@ fn validate() -> Result<()> {
         || content.loading_screen.completion_hold_milliseconds != 500
         || content.loading_screen.tooltips.len() != 1
     {
-        bail!("authored content counts differ from the verified catalog baseline");
+        bail!(
+            "authored content counts differ from the verified catalog baseline: schema={}, archetypes={}, scenes={}, buildings={}, roles={}, objectives={}, technologies={}, groups={}, edges={}, roots={}, sources={}",
+            content.schema_version,
+            content.archetypes.len(),
+            archetype_scenes,
+            content.buildings.len(),
+            content.roles.len(),
+            content.objectives.len(),
+            content.technology.nodes.len(),
+            content.technology.groups.len(),
+            technology_edges,
+            technology_roots,
+            content.source_records.len(),
+        );
     }
     let health_definitions = content
         .archetypes
@@ -611,9 +624,9 @@ fn validate() -> Result<()> {
         .values()
         .filter(|archetype| archetype.enemy_spawner.is_some())
         .count();
-    if building_health.len() != 29
-        || building_base_health != 4_425
-        || building_level_health != 1_055
+    if building_health.len() != 30
+        || building_base_health != 4_475
+        || building_level_health != 1_065
         || (
             health_definitions,
             projectile_shooters,
@@ -623,10 +636,10 @@ fn validate() -> Result<()> {
             enemy_retaliation,
             goblin_sensor_ranges,
             standard_sensor_ranges,
-        ) != (45, 1, 9, 1, 9, 9, 1, 8)
+        ) != (46, 1, 9, 1, 9, 9, 1, 8)
     {
         bail!(
-            "authored combat component counts differ from the verified Unity baseline: building health {} definitions, {} base total, {} per-level total; {health_definitions} total health, {projectile_shooters} projectile shooters, {enemy_definitions} enemies, {enemy_spawners} spawners, {enemy_resource_rewards} rewards",
+            "authored combat component counts differ from the verified content baseline: building health {} definitions, {} base total, {} per-level total; {health_definitions} total health, {projectile_shooters} projectile shooters, {enemy_definitions} enemies, {enemy_spawners} spawners, {enemy_resource_rewards} rewards",
             building_health.len(),
             building_base_health,
             building_level_health
@@ -1031,7 +1044,7 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration, 218 prefab archetypes with 47 target sizes, 1 disable-after-time lifetime, 1 unit health-bar contract, and 1 exact pet follower with 5 authored models, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 48 building model handlers, 6 storage model handlers, 3 authored rotating nodes, 1 passive resource generator, 29 target scoring definitions, 29 building health definitions, 45 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 425 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, 122 embedded FBX clips, 2 active fish-school bindings, 14 role-audio contracts with 35 variants, and all 253 converted models are valid; checked {checked_json} generated JSON files"
+        "Configuration, 219 prefab archetypes with 47 target sizes, 1 disable-after-time lifetime, 1 unit health-bar contract, and 1 exact pet follower with 5 authored models, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 48 building model handlers, 6 storage model handlers, 3 authored rotating nodes, 1 passive resource generator, 29 target scoring definitions, 30 building health definitions, 46 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 430 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, 122 embedded FBX clips, 2 active fish-school bindings, 14 role-audio contracts with 35 variants, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }

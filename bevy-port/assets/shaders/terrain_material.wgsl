@@ -16,6 +16,7 @@ struct TerrainMaterialUniform {
     selection_color: vec4<f32>,
     traversal_grid: vec4<f32>,
     traversal_dirt_color: vec4<f32>,
+    constructed_path_color: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -28,6 +29,10 @@ var grid_sampler: sampler;
 var traversal_wear_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(104)
 var traversal_wear_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(105)
+var path_surface_texture: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(106)
+var path_surface_sampler: sampler;
 
 @fragment
 fn fragment(
@@ -84,8 +89,36 @@ fn fragment(
         terrain_material.traversal_dirt_color.rgb,
         wear * terrain_material.traversal_dirt_color.a,
     );
+    let path_level = textureSample(
+        path_surface_texture,
+        path_surface_sampler,
+        wear_uv,
+    ).r * 255.0;
+    let path_mask = select(0.0, 1.0, path_level >= 0.5);
+    // Staggered stones and a narrow mortar line are generated directly in
+    // terrain space, so paving conforms to slopes without another mesh.
+    let stone_scale = 1.8 + min(path_level, 8.0) * 0.06;
+    let stone_row = floor(in.world_position.z * stone_scale);
+    let odd_row = abs(i32(stone_row)) % 2 == 1;
+    let stone_uv = fract(vec2<f32>(
+        in.world_position.x * stone_scale + select(0.0, 0.5, odd_row),
+        in.world_position.z * stone_scale,
+    ));
+    let mortar_distance = min(
+        min(stone_uv.x, 1.0 - stone_uv.x),
+        min(stone_uv.y, 1.0 - stone_uv.y),
+    );
+    let mortar = smoothstep(0.035, 0.075, mortar_distance);
+    let stone_noise = textureSample(grid_texture, grid_sampler, grid_uv * 0.63).r;
+    let cobble = terrain_material.constructed_path_color.rgb
+        * mix(0.64, mix(0.88, 1.08, stone_noise), mortar);
+    let surfaced_color = mix(
+        worn_color,
+        cobble,
+        path_mask * terrain_material.constructed_path_color.a,
+    );
     let terrain_color = vec4<f32>(
-        worn_color * terrain_material.season_tint.rgb,
+        surfaced_color * terrain_material.season_tint.rgb,
         1.0,
     );
     let selection_delta = abs(

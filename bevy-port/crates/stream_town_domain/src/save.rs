@@ -14,7 +14,9 @@ use crate::{CURRENT_SIMULATION_SCHEMA, GridPos, StableId, WorldSimulation};
 
 pub const NATIVE_SAVE_VERSION: u32 = 1;
 pub const CURRENT_WORLD_SNAPSHOT_SCHEMA: u32 = 3;
-pub const MAX_TRAVERSAL_WEAR_SCORE: f32 = 12.0;
+/// Defensive persistence ceiling for the decaying traversal integral. Visible
+/// thresholds are authored as sustained crossings per minute and converted at runtime.
+pub const MAX_TRAVERSAL_WEAR_SCORE: f32 = 1_000_000_000_000.0;
 pub const NATIVE_SAVE_BACKUP_GENERATIONS: usize = 5;
 const LEGACY_MAGIC: &[u8; 4] = b"STSV";
 
@@ -633,7 +635,7 @@ mod tests {
 
         invalid
             .traversal_wear
-            .insert(GridPos { x: 4, z: 9 }, MAX_TRAVERSAL_WEAR_SCORE + 0.1);
+            .insert(GridPos { x: 4, z: 9 }, MAX_TRAVERSAL_WEAR_SCORE * 2.0);
         assert!(matches!(
             validate_snapshot(&invalid),
             Err(NativeSaveError::InvalidTraversalWear { .. })

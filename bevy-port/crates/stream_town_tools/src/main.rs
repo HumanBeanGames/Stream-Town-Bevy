@@ -75,6 +75,8 @@ enum ToolTab {
     Buildings,
     Roles,
     Technology,
+    Terrain,
+    Music,
     World,
     Validation,
 }
@@ -182,13 +184,15 @@ impl ModelPreviewControls {
 }
 
 impl ToolTab {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 10] = [
         Self::Migration,
         Self::Authority,
         Self::Assets,
         Self::Buildings,
         Self::Roles,
         Self::Technology,
+        Self::Terrain,
+        Self::Music,
         Self::World,
         Self::Validation,
     ];
@@ -201,6 +205,8 @@ impl ToolTab {
             Self::Buildings => "Buildings",
             Self::Roles => "Roles",
             Self::Technology => "Technology",
+            Self::Terrain => "Terrain",
+            Self::Music => "Music",
             Self::World => "World + Nav",
             Self::Validation => "Validation",
         }
@@ -1587,6 +1593,8 @@ fn tools_ui(
             &mut preview.controls,
         ),
         ToolTab::Technology => technology_tab(ui, &mut state),
+        ToolTab::Terrain => terrain_tab(ui, &mut state),
+        ToolTab::Music => music_tab(ui, &mut state),
         ToolTab::World => world_tab(
             ui,
             &mut state,
@@ -1825,6 +1833,177 @@ fn authority_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                 format!("Configuration is not saveable: {error}"),
             ),
         };
+    });
+}
+
+fn authoring_config_save_bar(ui: &mut egui::Ui, state: &mut ToolState) {
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Save + apply to game").clicked() {
+            state.status = match save_and_apply_game_config(&state.config, &state.config_path) {
+                Ok((project, runtime)) => format!(
+                    "Saved {} and applied {} while preserving local Twitch setup; restart the game to load the changes",
+                    project.display(),
+                    runtime.display()
+                ),
+                Err(error) => format!("Could not save and apply game configuration: {error:#}"),
+            };
+        }
+        if ui.button("Reload").clicked() {
+            state.status = match load_game_config(&state.config_path) {
+                Ok(config) => {
+                    state.config = config;
+                    sync_twitch_tool_fields(state);
+                    "Reloaded the authoritative game configuration".to_owned()
+                }
+                Err(error) => format!("Could not reload game configuration: {error:#}"),
+            };
+        }
+        match state.config.validate() {
+            Ok(()) => ui.colored_label(egui::Color32::LIGHT_GREEN, "Valid"),
+            Err(error) => ui.colored_label(egui::Color32::LIGHT_RED, error.to_string()),
+        };
+    });
+}
+
+fn terrain_tab(ui: &mut egui::Ui, state: &mut ToolState) {
+    ui.heading("Terrain texture and traversal wear");
+    ui.label(
+        "Seasonal colours are applied to the authored terrain shader. Traversal is recorded only when a citizen completes a cell crossing.",
+    );
+    authoring_config_save_bar(ui, state);
+    ui.separator();
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        egui::Grid::new("seasonal_terrain_palettes")
+            .striped(true)
+            .show(ui, |ui| {
+                ui.strong("Season");
+                ui.strong("Terrain base multiplier");
+                ui.strong("Built-path tint / opacity");
+                ui.strong("Traversal-wear tint / opacity");
+                ui.end_row();
+                for (name, palette) in [
+                    ("Spring", &mut state.config.terrain.spring),
+                    ("Summer", &mut state.config.terrain.summer),
+                    ("Autumn", &mut state.config.terrain.autumn),
+                    ("Winter", &mut state.config.terrain.winter),
+                ] {
+                    ui.label(name);
+                    ui.color_edit_button_rgba_unmultiplied(&mut palette.base_color);
+                    ui.color_edit_button_rgba_unmultiplied(&mut palette.path_tint);
+                    ui.color_edit_button_rgba_unmultiplied(&mut palette.traversal_tint);
+                    ui.end_row();
+                }
+            });
+        ui.separator();
+        ui.heading("Traversal response");
+        ui.add(
+            egui::DragValue::new(&mut state.config.terrain.traversal_fade_start_per_minute)
+                .range(0.0..=10_000.0)
+                .speed(0.25)
+                .prefix("Wear begins at ")
+                .suffix(" crossings/minute"),
+        );
+        ui.add(
+            egui::DragValue::new(&mut state.config.terrain.traversal_full_tint_per_minute)
+                .range(0.01..=10_000.0)
+                .speed(0.5)
+                .prefix("Full tint at ")
+                .suffix(" crossings/minute"),
+        );
+        ui.add(
+            egui::DragValue::new(&mut state.config.terrain.traversal_half_life_seconds)
+                .range(1.0..=604_800.0)
+                .speed(10.0)
+                .prefix("Half-life ")
+                .suffix(" seconds"),
+        );
+        ui.add(
+            egui::DragValue::new(&mut state.config.terrain.traversal_decay_pause_seconds)
+                .range(0.0..=3_600.0)
+                .speed(0.25)
+                .prefix("Decay pause after crossing ")
+                .suffix(" seconds"),
+        );
+        ui.add(
+            egui::DragValue::new(&mut state.config.terrain.traversal_prune_score)
+                .range(0.0..=100.0)
+                .speed(0.001)
+                .prefix("Sparse-map prune score "),
+        );
+    });
+}
+
+fn music_tab(ui: &mut egui::Ui, state: &mut ToolState) {
+    ui.heading("Adaptive Bevy Tidal score");
+    ui.label(
+        "The five live variables below are available both as weighted energy inputs and as score-template placeholders. Changes take effect after saving and restarting the game.",
+    );
+    authoring_config_save_bar(ui, state);
+    ui.separator();
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        let music = &mut state.config.music;
+        ui.add(
+            egui::DragValue::new(&mut music.intensity_smoothing_seconds)
+                .range(0.05..=120.0)
+                .speed(0.1)
+                .prefix("Enemy intensity smoothing ")
+                .suffix(" seconds"),
+        );
+        ui.add(
+            egui::DragValue::new(&mut music.maximum_energy)
+                .range(0.1..=1_000.0)
+                .speed(0.25)
+                .prefix("Maximum energy "),
+        );
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::DragValue::new(&mut music.cycles_per_minute_base)
+                    .range(1.0..=1_000.0)
+                    .prefix("Base CPM "),
+            );
+            ui.add(
+                egui::DragValue::new(&mut music.cycles_per_minute_per_energy)
+                    .range(-100.0..=100.0)
+                    .speed(0.1)
+                    .prefix("CPM / energy "),
+            );
+        });
+        ui.separator();
+        egui::Grid::new("adaptive_music_variables")
+            .striped(true)
+            .show(ui, |ui| {
+                ui.strong("Live variable");
+                ui.strong("Template token");
+                ui.strong("Energy weight");
+                ui.end_row();
+                for (name, token, weight) in [
+                    ("Enemies on screen (smoothed)", "${intensity}", &mut music.intensity_weight),
+                    ("Season (0 spring .. 3 winter)", "${season}", &mut music.season_weight),
+                    ("Time of day (0 .. 1)", "${time_of_day}", &mut music.time_of_day_weight),
+                    ("Living citizen population", "${population}", &mut music.population_weight),
+                    ("Completed building count", "${building_count}", &mut music.building_count_weight),
+                ] {
+                    ui.label(name);
+                    ui.monospace(token);
+                    ui.add(egui::DragValue::new(weight).speed(0.01));
+                    ui.end_row();
+                }
+                ui.label("Weighted/clamped result");
+                ui.monospace("${energy}");
+                ui.label("—");
+                ui.end_row();
+            });
+        ui.separator();
+        ui.label("Tidal score template");
+        ui.add(
+            egui::TextEdit::multiline(&mut music.score_template)
+                .code_editor()
+                .desired_rows(24)
+                .desired_width(f32::INFINITY),
+        );
+        ui.small(
+            "Generated voice placeholders such as ${kick}, ${roots}, ${melody_attack}, and ${hat_gain} remain available. Unresolved placeholders are rejected at runtime.",
+        );
     });
 }
 
@@ -12363,6 +12542,8 @@ mod tests {
                 "Buildings",
                 "Roles",
                 "Technology",
+                "Terrain",
+                "Music",
                 "World + Nav",
                 "Validation",
             ]

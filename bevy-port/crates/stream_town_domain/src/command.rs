@@ -82,6 +82,7 @@ pub fn unity_command_usage(input: &str) -> Option<&'static str> {
         "help" => "!help",
         "stdiscord" => "!stdiscord",
         "townstats" => "!townstats",
+        "population" => "!population",
         // These source commands use the validator's `!{command}` fallback.
         "health" => "!health",
         "confirm" => "!confirm",
@@ -188,6 +189,7 @@ pub enum ChatCommand {
     },
     Roles,
     TownStats,
+    Population,
     Info {
         item: StableId,
         instance: Option<u16>,
@@ -646,6 +648,7 @@ impl FromStr for ChatCommand {
                     "health" => no_argument(argument, Self::Health),
                     "roles" => no_argument(argument, Self::Roles),
                     "townstats" => no_argument(argument, Self::TownStats),
+                    "population" => no_argument(argument, Self::Population),
                     "stdiscord" => no_argument(argument, Self::Discord),
                     "buildings" => no_argument(argument, Self::Buildings),
                     "rid" => no_argument(argument, Self::RecruitIds),
@@ -967,6 +970,7 @@ mod tests {
         }
         assert_eq!("!experience".parse(), Ok(ChatCommand::Experience));
         assert_eq!("!exp".parse(), Ok(ChatCommand::Experience));
+        assert_eq!("!population".parse(), Ok(ChatCommand::Population));
         assert_eq!(
             "!build building:house".parse(),
             Ok(ChatCommand::Build(StableId::new("building:house").unwrap()))

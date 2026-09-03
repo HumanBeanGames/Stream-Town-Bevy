@@ -1,6 +1,30 @@
 (
     schema_version: 1,
     nodes: {
+        "tech:native_path_unlock": (
+            position: (
+                x: 7000.0,
+                y: 5000.0,
+            ),
+        ),
+        "tech:native_path_level3": (
+            position: (
+                x: 7000.0,
+                y: 5300.0,
+            ),
+        ),
+        "tech:native_path_level8": (
+            position: (
+                x: 7000.0,
+                y: 5600.0,
+            ),
+        ),
+        "tech:native_path_level13": (
+            position: (
+                x: 7000.0,
+                y: 5900.0,
+            ),
+        ),
         "tech:008e72338ad787f479c718a3b0061ff6": (
             position: (
                 x: 1984.0,
@@ -2190,6 +2214,16 @@
         ),
     },
     groups: {
+        "tech_group:paths": (
+            position: (
+                x: 6800.0,
+                y: 4800.0,
+            ),
+            size: (
+                width: 900.0,
+                height: 1400.0,
+            ),
+        ),
         "tech_group:regeneration": (
             position: (x: -420.0, y: -19020.0),
             size: (width: 1600.0, height: 520.0),

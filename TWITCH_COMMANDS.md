@@ -54,6 +54,7 @@ and `warmwhite`. Hex colours use six digits, such as `#72C8FF`.
 | `!buy <amount> <resource>` | Spend town gold to buy a resource at the authored rate and storage limit. |
 | `!sell <amount> <resource>` | Sell available town stock for gold at the authored rate and tax. |
 | `!townstats` | Show town statistics. |
+| `!population` | List living Twitch players (`P`) and NPC recruits (`R`) separately for every currently available role. |
 
 ## Building catalog and costs
 
@@ -79,17 +80,21 @@ blueprint. Every move resets its 30-second timeout.
 If the town cannot afford the building, the rejection identifies every missing resource and amount.
 Square-footprint buildings can also be rotated after construction through their BID.
 
-### Placing wall lines
+### Placing wall and path lines
 
-Walls deliberately cannot be confirmed immediately after `!build Wall`.
+Walls and constructed paths deliberately cannot be confirmed immediately after `!build Wall` or
+`!build Path`.
 
-1. Move the wall cursor to the first cell and use `!beginplace`.
+1. Move the placement cursor to the first cell and use `!beginplace`.
 2. Move only horizontally or vertically to the other endpoint and use `!endplace`.
-3. Review the complete red/green wall-line preview.
+3. Review the complete red/green line preview.
 4. Use `!confirm` to pay for and place every section, or `!cancel` to discard it.
 
 Calling `!beginplace` or `!endplace` again replaces that endpoint. A diagonal endpoint is rejected,
-and a line that exceeds available resources is not constructed.
+and a line that exceeds available resources is not constructed. Paths cost 150 Wood and 130 Ore
+per cell at level 1, conform to the terrain, remain walkable, and do not consume building capacity.
+Each completed Path level gives citizens on that cell 5% additional movement speed. Path
+technologies form their own branch beginning in Age 1.
 
 ## Building IDs (BIDs)
 
@@ -136,8 +141,9 @@ erase the combat-pressure tradeoff created by their contribution to enemy-wave s
 
 After 30 seconds without any acknowledged command, the broadcast camera can enter its automatic
 director. Votes do not interrupt it. Damage switches the director to the damaged citizen or
-building closest to the TownHall for 15 seconds. Any other ordinary command during an automatic
-shot returns it home and restarts that timer.
+building closest to the TownHall for 15 seconds, with a five-second redirect cooldown that prevents
+simultaneous fights from making the camera strobe between targets. Any other ordinary command during
+an automatic shot returns it home and restarts that timer.
 
 ## Voting, technology, and rulership
 

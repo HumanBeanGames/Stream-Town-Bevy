@@ -16,8 +16,130 @@ pub struct GameConfig {
     pub world: WorldGenConfig,
     #[serde(default)]
     pub time: TimeCycleConfig,
+    #[serde(default)]
+    pub terrain: TerrainAppearanceConfig,
+    #[serde(default)]
+    pub music: AdaptiveMusicConfig,
     pub gameplay: GameplayConfig,
     pub twitch: TwitchConfig,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct SeasonalTerrainPalette {
+    /// Linear multiplier applied to the authored sand/grass terrain shader.
+    pub base_color: [f32; 4],
+    /// Constructed-path tint; alpha is the maximum blend over the terrain.
+    pub path_tint: [f32; 4],
+    /// Traversal-wear tint; alpha is the maximum blend over the authored terrain.
+    pub traversal_tint: [f32; 4],
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainAppearanceConfig {
+    pub spring: SeasonalTerrainPalette,
+    pub summer: SeasonalTerrainPalette,
+    pub autumn: SeasonalTerrainPalette,
+    pub winter: SeasonalTerrainPalette,
+    /// Sustained citizen cell crossings per minute at which wear first becomes visible.
+    pub traversal_fade_start_per_minute: f32,
+    /// Sustained citizen cell crossings per minute at which the tint reaches full strength.
+    pub traversal_full_tint_per_minute: f32,
+    pub traversal_half_life_seconds: f32,
+    pub traversal_decay_pause_seconds: f32,
+    pub traversal_prune_score: f32,
+}
+
+impl Default for TerrainAppearanceConfig {
+    fn default() -> Self {
+        let path_tint = [0.42, 0.44, 0.46, 0.92];
+        let traversal_tint = [0.30, 0.245, 0.14, 0.50];
+        Self {
+            spring: SeasonalTerrainPalette {
+                base_color: [0.86, 1.14, 0.84, 1.0],
+                path_tint,
+                traversal_tint,
+            },
+            summer: SeasonalTerrainPalette {
+                base_color: [1.0, 0.96, 0.78, 1.0],
+                path_tint,
+                traversal_tint,
+            },
+            autumn: SeasonalTerrainPalette {
+                base_color: [1.0, 0.64, 0.30, 1.0],
+                path_tint,
+                traversal_tint,
+            },
+            winter: SeasonalTerrainPalette {
+                base_color: [0.76, 0.88, 1.0, 1.0],
+                path_tint: [0.50, 0.53, 0.56, 0.92],
+                traversal_tint: [0.34, 0.32, 0.27, 0.45],
+            },
+            traversal_fade_start_per_minute: 5.0,
+            traversal_full_tint_per_minute: 50.0,
+            traversal_half_life_seconds: 30.0 * 60.0,
+            traversal_decay_pause_seconds: 5.0,
+            traversal_prune_score: 0.01,
+        }
+    }
+}
+
+/// Authorable mapping from live town state into the Bevy Tidal composition.
+/// The score template can use both its existing generated-voice placeholders
+/// and `${intensity}`, `${season}`, `${time_of_day}`, `${population}`,
+/// `${building_count}`, or `${energy}`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AdaptiveMusicConfig {
+    pub intensity_smoothing_seconds: f32,
+    pub maximum_energy: f32,
+    pub cycles_per_minute_base: f32,
+    pub cycles_per_minute_per_energy: f32,
+    pub intensity_weight: f32,
+    pub season_weight: f32,
+    pub time_of_day_weight: f32,
+    pub population_weight: f32,
+    pub building_count_weight: f32,
+    pub score_template: String,
+}
+
+impl Default for AdaptiveMusicConfig {
+    fn default() -> Self {
+        Self {
+            intensity_smoothing_seconds: 5.0,
+            maximum_energy: 12.0,
+            cycles_per_minute_base: 75.0,
+            cycles_per_minute_per_energy: 5.0,
+            intensity_weight: 1.0,
+            season_weight: 0.0,
+            time_of_day_weight: 0.0,
+            population_weight: 0.0,
+            building_count_weight: 0.0,
+            score_template: concat!(
+                "stack\n",
+                "  [ sound \"${kick}\" # lpf ${kick_brightness} # gain ${kick_gain}\n",
+                "  , struct \"${root_pattern}\" $ ${roots}\n",
+                "      # sound \"superpiano\"\n",
+                "      # legato 0.9\n",
+                "      # attack ${melody_attack}\n",
+                "      # decay 0.02\n",
+                "      # release 0.035\n",
+                "      # lpf ${melody_brightness}\n",
+                "      # gain ${melody_gain}\n",
+                "      # room 0.08\n",
+                "      # roomsize 1\n",
+                "  , struct \"${chord_pattern}\" $ ${chords}\n",
+                "      # sound \"superpiano\"\n",
+                "      # attack ${chord_attack}\n",
+                "      # release 0.4\n",
+                "      # lpf ${chord_brightness}\n",
+                "      # gain ${chord_gain}\n",
+                "      # room 0.20\n",
+                "      # roomsize 2\n",
+                "  , sound \"${hats}\" # lpf ${hat_brightness} # gain ${hat_gain}\n",
+                "  ]",
+            )
+            .to_owned(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -231,6 +353,10 @@ pub enum ConfigError {
     CellSize,
     #[error("resource density must be at most 1000")]
     ResourceDensity,
+    #[error("terrain appearance and traversal-wear settings are invalid")]
+    TerrainAppearance,
+    #[error("adaptive music settings are invalid")]
+    AdaptiveMusic,
     #[error("time cycle settings must define positive day and night periods")]
     TimeCycle,
     #[error("initial agent count must be between 1 and 5000")]
@@ -279,6 +405,8 @@ impl Default for GameConfig {
                 resource_density_per_thousand: 38,
             },
             time: TimeCycleConfig::default(),
+            terrain: TerrainAppearanceConfig::default(),
+            music: AdaptiveMusicConfig::default(),
             gameplay: GameplayConfig {
                 initial_agents: 5,
                 agent_speed_cells_per_second: 4.0,
@@ -369,6 +497,55 @@ impl GameConfig {
         }
         if self.world.resource_density_per_thousand > 1_000 {
             return Err(ConfigError::ResourceDensity);
+        }
+        let terrain_palettes = [
+            self.terrain.spring,
+            self.terrain.summer,
+            self.terrain.autumn,
+            self.terrain.winter,
+        ];
+        if terrain_palettes.iter().any(|palette| {
+            palette
+                .base_color
+                .iter()
+                .chain(&palette.path_tint)
+                .chain(&palette.traversal_tint)
+                .any(|component| !component.is_finite() || *component < 0.0 || *component > 4.0)
+        }) || !self.terrain.traversal_fade_start_per_minute.is_finite()
+            || !self.terrain.traversal_full_tint_per_minute.is_finite()
+            || self.terrain.traversal_fade_start_per_minute < 0.0
+            || self.terrain.traversal_full_tint_per_minute
+                <= self.terrain.traversal_fade_start_per_minute
+            || self.terrain.traversal_full_tint_per_minute > 10_000.0
+            || !self.terrain.traversal_half_life_seconds.is_finite()
+            || self.terrain.traversal_half_life_seconds <= 0.0
+            || !self.terrain.traversal_decay_pause_seconds.is_finite()
+            || self.terrain.traversal_decay_pause_seconds < 0.0
+            || !self.terrain.traversal_prune_score.is_finite()
+            || self.terrain.traversal_prune_score < 0.0
+        {
+            return Err(ConfigError::TerrainAppearance);
+        }
+        let music = &self.music;
+        if !music.intensity_smoothing_seconds.is_finite()
+            || music.intensity_smoothing_seconds <= 0.0
+            || !music.maximum_energy.is_finite()
+            || music.maximum_energy <= 0.0
+            || !music.cycles_per_minute_base.is_finite()
+            || music.cycles_per_minute_base <= 0.0
+            || !music.cycles_per_minute_per_energy.is_finite()
+            || [
+                music.intensity_weight,
+                music.season_weight,
+                music.time_of_day_weight,
+                music.population_weight,
+                music.building_count_weight,
+            ]
+            .iter()
+            .any(|weight| !weight.is_finite())
+            || music.score_template.trim().is_empty()
+        {
+            return Err(ConfigError::AdaptiveMusic);
         }
         let day_milliseconds = u64::from(self.time.seconds_per_day)
             .saturating_mul(u64::from(self.time.daylight_per_thousand));
