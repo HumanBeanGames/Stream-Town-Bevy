@@ -13,7 +13,8 @@ use thiserror::Error;
 use crate::{CURRENT_SIMULATION_SCHEMA, GridPos, StableId, WorldSimulation};
 
 pub const NATIVE_SAVE_VERSION: u32 = 1;
-pub const CURRENT_WORLD_SNAPSHOT_SCHEMA: u32 = 2;
+pub const CURRENT_WORLD_SNAPSHOT_SCHEMA: u32 = 3;
+pub const MAX_TRAVERSAL_WEAR_SCORE: f32 = 12.0;
 pub const NATIVE_SAVE_BACKUP_GENERATIONS: usize = 5;
 const LEGACY_MAGIC: &[u8; 4] = b"STSV";
 
@@ -138,6 +139,8 @@ pub struct WorldSnapshot {
     pub simulation: WorldSimulation,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub resource_nodes: BTreeMap<StableId, u32>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub traversal_wear: BTreeMap<GridPos, f32>,
     #[serde(default)]
     pub legacy_terrain_mesh: Option<SavedTerrainMesh>,
     #[serde(default)]
@@ -203,6 +206,8 @@ pub enum NativeSaveError {
     MissingSimulationState { kind: &'static str, id: StableId },
     #[error("simulation actor {0} has no saved world entity record")]
     MissingSavedActor(StableId),
+    #[error("terrain traversal wear at {position:?} has invalid score {score}")]
+    InvalidTraversalWear { position: GridPos, score: f32 },
     #[error("legacy save header is incomplete")]
     LegacyHeader,
     #[error("file is not a recognized Stream Town save")]
@@ -408,6 +413,14 @@ fn validate_snapshot(snapshot: &WorldSnapshot) -> Result<(), NativeSaveError> {
             simulation_seed: snapshot.simulation.world_seed,
         });
     }
+    for (position, score) in &snapshot.traversal_wear {
+        if !score.is_finite() || *score <= 0.0 || *score > MAX_TRAVERSAL_WEAR_SCORE {
+            return Err(NativeSaveError::InvalidTraversalWear {
+                position: *position,
+                score: *score,
+            });
+        }
+    }
 
     let mut persistent_ids = BTreeSet::new();
     for (key, actor) in &snapshot.simulation.actors {
@@ -504,6 +517,7 @@ mod tests {
             actors: vec![],
             simulation: WorldSimulation::new(seed),
             resource_nodes: BTreeMap::new(),
+            traversal_wear: BTreeMap::new(),
             legacy_terrain_mesh: None,
             legacy_migration: None,
         }
@@ -607,6 +621,39 @@ mod tests {
             validate_snapshot(&invalid).unwrap_err().to_string(),
             "world seed mismatch between snapshot (7) and simulation (8)"
         );
+
+        invalid = snapshot(7);
+        invalid
+            .traversal_wear
+            .insert(GridPos { x: 4, z: 9 }, f32::NAN);
+        assert!(matches!(
+            validate_snapshot(&invalid),
+            Err(NativeSaveError::InvalidTraversalWear { .. })
+        ));
+
+        invalid
+            .traversal_wear
+            .insert(GridPos { x: 4, z: 9 }, MAX_TRAVERSAL_WEAR_SCORE + 0.1);
+        assert!(matches!(
+            validate_snapshot(&invalid),
+            Err(NativeSaveError::InvalidTraversalWear { .. })
+        ));
+    }
+
+    #[test]
+    fn traversal_wear_round_trips_and_old_snapshots_default_to_empty() {
+        let directory = tempdir().unwrap();
+        let store = NativeSaveStore::new(directory.path().join("wear.stbevy"));
+        let mut latest = snapshot(9);
+        latest.schema_version = CURRENT_WORLD_SNAPSHOT_SCHEMA;
+        latest.traversal_wear.insert(GridPos { x: 11, z: 12 }, 6.5);
+        store.write(&latest).unwrap();
+        assert_eq!(store.load().unwrap().traversal_wear, latest.traversal_wear);
+
+        let encoded = ron::to_string(&snapshot(9)).unwrap();
+        assert!(!encoded.contains("traversal_wear"));
+        let decoded: WorldSnapshot = ron::from_str(&encoded).unwrap();
+        assert!(decoded.traversal_wear.is_empty());
     }
 
     #[test]

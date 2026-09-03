@@ -1921,6 +1921,7 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
             actors,
             simulation,
             resource_nodes: BTreeMap::new(),
+            traversal_wear: BTreeMap::new(),
             legacy_terrain_mesh: decoded.terrain_mesh,
             legacy_migration: Some(LegacyMigrationMetadata {
                 source_schema_version,

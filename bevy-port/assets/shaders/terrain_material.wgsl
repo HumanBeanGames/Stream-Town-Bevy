@@ -14,6 +14,8 @@ struct TerrainMaterialUniform {
     grid_scale_offset: vec4<f32>,
     selection_center_extent: vec4<f32>,
     selection_color: vec4<f32>,
+    traversal_grid: vec4<f32>,
+    traversal_dirt_color: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -22,6 +24,10 @@ var<uniform> terrain_material: TerrainMaterialUniform;
 var grid_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102)
 var grid_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(103)
+var traversal_wear_texture: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(104)
+var traversal_wear_sampler: sampler;
 
 @fragment
 fn fragment(
@@ -65,8 +71,17 @@ fn fragment(
         vec4<f32>(vec3<f32>(smoothstep(0.27, 1.86, broad_noise)), 1.0),
         terrain_material.season_tint.w,
     );
+    let wear_cell = in.world_position.xz / terrain_material.traversal_grid.z
+        + (terrain_material.traversal_grid.xy - vec2<f32>(1.0)) * 0.5;
+    let wear_uv = (wear_cell + vec2<f32>(0.5)) / terrain_material.traversal_grid.xy;
+    let wear = textureSample(
+        traversal_wear_texture,
+        traversal_wear_sampler,
+        wear_uv,
+    ).r * terrain_material.traversal_grid.w;
+    let worn_color = mix(authored.rgb, terrain_material.traversal_dirt_color.rgb, wear);
     let terrain_color = vec4<f32>(
-        authored.rgb * terrain_material.season_tint.rgb,
+        worn_color * terrain_material.season_tint.rgb,
         1.0,
     );
     let selection_delta = abs(

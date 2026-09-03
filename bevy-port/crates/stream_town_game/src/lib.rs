@@ -42,6 +42,7 @@ use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     ecs::{query::QueryData, system::SystemParam},
     gltf::{GltfMaterialName, GltfMeshName},
+    image::ImageSampler,
     input::mouse::{MouseScrollUnit, MouseWheel},
     input_focus::{
         FocusCause, InputFocus, InputFocusVisible,
@@ -64,7 +65,8 @@ use bevy::{
     render::mesh::RenderMesh,
     render::render_asset::RenderAssets as GpuRenderAssets,
     render::render_resource::{
-        AsBindGroup, CachedPipelineState, PipelineCache, PrimitiveTopology, ShaderType,
+        AsBindGroup, CachedPipelineState, Extent3d, PipelineCache, PrimitiveTopology, ShaderType,
+        TextureDimension, TextureFormat,
     },
     render::sync_world::MainEntity,
     render::texture::GpuImage,
@@ -95,15 +97,15 @@ use stream_town_domain::{
     ChatCommand, ChimneySmokeDef, ContentCatalog, CustomizationKind, DAYS_PER_SEASON, DisplayMode,
     EnemyCampGenerationDef, EnemyCampState, EnemyModelSetDef, EnemyRunAnimation, FireworksVfxDef,
     FoliageHabitat, GameConfig, GeneratedFoliage, GeneratedWorld, GridPos, HealingBurstVfxDef,
-    HealingChannelVfxDef, LegacyMigrationMetadata, MainMenuSceneReference,
-    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode, NativeSaveStore,
-    ObjectiveEvent, ObjectiveKind, PetDef, PetModelDef, PlayerSettings, PlayerSettingsStore,
-    PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping, PresentationCatalog,
-    RainingFishVfxDef, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction, RuntimeConsoleStatus,
-    RuntimeConsoleStore, SEASON_TRANSITION_SECONDS, SEASONS_PER_YEAR, SavedActor, SavedTerrainMesh,
-    Season, StableId, StationDef, StationUpdateMode, StorageModelDef, StreamUserType,
-    TargetingScoreDef, TownEvent, VfxGradientDef, Weather, WorldGenerationStage, WorldSimulation,
-    WorldSnapshot, foliage_visual_variant, foliage_visual_yaw_milliradians,
+    HealingChannelVfxDef, LegacyMigrationMetadata, MAX_TRAVERSAL_WEAR_SCORE,
+    MainMenuSceneReference, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode,
+    NativeSaveStore, ObjectiveEvent, ObjectiveKind, PetDef, PetModelDef, PlayerSettings,
+    PlayerSettingsStore, PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping,
+    PresentationCatalog, RainingFishVfxDef, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction,
+    RuntimeConsoleStatus, RuntimeConsoleStore, SEASON_TRANSITION_SECONDS, SEASONS_PER_YEAR,
+    SavedActor, SavedTerrainMesh, Season, StableId, StationDef, StationUpdateMode, StorageModelDef,
+    StreamUserType, TargetingScoreDef, TownEvent, VfxGradientDef, Weather, WorldGenerationStage,
+    WorldSimulation, WorldSnapshot, foliage_visual_variant, foliage_visual_yaw_milliradians,
     generate_world_with_content, generate_world_with_content_observed, resource_visual_variant,
 };
 
@@ -148,6 +150,11 @@ const CHIMNEY_ALPHA_STEPS: usize = 8;
 const TERRAIN_CHUNK_CELLS: u16 = 16;
 const OCEAN_PADDING_CELLS: u16 = 128;
 const WATER_SURFACE_LIFT_METRES: f32 = 0.20;
+const TRAVERSAL_WEAR_FADE_START: f32 = 3.0;
+const TRAVERSAL_WEAR_FULL_DIRT: f32 = 9.0;
+const TRAVERSAL_WEAR_HALF_LIFE_SECONDS: f32 = 30.0 * 60.0;
+const TRAVERSAL_WEAR_PRUNE_SCORE: f32 = 0.01;
+const TRAVERSAL_WEAR_DECAY_INTERVAL_SECONDS: f32 = 1.0;
 const TERRAIN_HIGH_DETAIL_RADIUS: f32 = 220.0;
 const TERRAIN_MEDIUM_DETAIL_RADIUS: f32 = 440.0;
 const TERRAIN_LOD_HYSTERESIS: f32 = 36.0;
@@ -486,6 +493,80 @@ struct WorldRuntime {
     generated: GeneratedWorld,
     legacy_terrain_mesh: Option<SavedTerrainMesh>,
     legacy_migration: Option<LegacyMigrationMetadata>,
+}
+
+/// Sparse traffic history. A point is added only when a citizen completes a
+/// move into a different grid cell, and is discarded once exponential decay
+/// makes it visually irrelevant.
+#[derive(Resource)]
+struct TraversalWearRuntime {
+    cells: HashMap<GridPos, f32>,
+    decay_elapsed_seconds: f32,
+    texture_dirty: bool,
+}
+
+impl Default for TraversalWearRuntime {
+    fn default() -> Self {
+        Self {
+            cells: HashMap::new(),
+            decay_elapsed_seconds: 0.0,
+            texture_dirty: true,
+        }
+    }
+}
+
+impl TraversalWearRuntime {
+    fn record(&mut self, position: GridPos) {
+        let score = self.cells.entry(position).or_default();
+        *score = (*score + 1.0).min(MAX_TRAVERSAL_WEAR_SCORE);
+        self.texture_dirty = true;
+    }
+
+    fn decay(&mut self, delta_seconds: f32) {
+        self.decay_elapsed_seconds += delta_seconds.max(0.0);
+        if self.decay_elapsed_seconds < TRAVERSAL_WEAR_DECAY_INTERVAL_SECONDS {
+            return;
+        }
+        if self.cells.is_empty() {
+            self.decay_elapsed_seconds = 0.0;
+            return;
+        }
+        let elapsed = std::mem::take(&mut self.decay_elapsed_seconds);
+        let decay_factor = 0.5_f32.powf(elapsed / TRAVERSAL_WEAR_HALF_LIFE_SECONDS);
+        self.cells.retain(|_, score| {
+            *score *= decay_factor;
+            *score >= TRAVERSAL_WEAR_PRUNE_SCORE
+        });
+        self.texture_dirty = true;
+    }
+
+    fn restore(&mut self, cells: &BTreeMap<GridPos, f32>, width: u16, height: u16) {
+        self.cells = cells
+            .iter()
+            .filter(|(position, score)| {
+                position.x < width
+                    && position.z < height
+                    && score.is_finite()
+                    && **score >= TRAVERSAL_WEAR_PRUNE_SCORE
+            })
+            .map(|(position, score)| (*position, score.min(MAX_TRAVERSAL_WEAR_SCORE)))
+            .collect();
+        self.decay_elapsed_seconds = 0.0;
+        self.texture_dirty = true;
+    }
+
+    fn saved_cells(&self) -> BTreeMap<GridPos, f32> {
+        self.cells
+            .iter()
+            .filter(|(_, score)| score.is_finite() && **score >= TRAVERSAL_WEAR_PRUNE_SCORE)
+            .map(|(position, score)| (*position, score.min(MAX_TRAVERSAL_WEAR_SCORE)))
+            .collect()
+    }
+}
+
+fn traversal_wear_fraction(score: f32) -> f32 {
+    ((score - TRAVERSAL_WEAR_FADE_START) / (TRAVERSAL_WEAR_FULL_DIRT - TRAVERSAL_WEAR_FADE_START))
+        .clamp(0.0, 1.0)
 }
 
 #[derive(Resource)]
@@ -897,6 +978,12 @@ struct SessionStats {
     elapsed_seconds: f64,
     paths_completed: u64,
     commands_processed: u64,
+}
+
+#[derive(SystemParam)]
+struct MovementStats<'w> {
+    session: ResMut<'w, SessionStats>,
+    traversal_wear: ResMut<'w, TraversalWearRuntime>,
 }
 
 #[derive(Resource, Default)]
@@ -1318,6 +1405,12 @@ struct CommandResponseRuntime<'w> {
     acknowledgements: ResMut<'w, CommandAcknowledgementRuntime>,
 }
 
+#[derive(SystemParam)]
+struct CommandSaveRuntime<'w> {
+    save: Res<'w, SaveRuntime>,
+    traversal_wear: Res<'w, TraversalWearRuntime>,
+}
+
 #[derive(Clone, Debug)]
 struct CameraRequest {
     reset: bool,
@@ -1516,6 +1609,8 @@ struct TerrainMaterialUniform {
     grid_scale_offset: Vec4,
     selection_center_extent: Vec4,
     selection_color: Vec4,
+    traversal_grid: Vec4,
+    traversal_dirt_color: Vec4,
 }
 
 #[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
@@ -1525,6 +1620,9 @@ struct TerrainMaterialExtension {
     #[texture(101)]
     #[sampler(102)]
     grid_texture: Option<Handle<Image>>,
+    #[texture(103)]
+    #[sampler(104)]
+    traversal_wear_texture: Option<Handle<Image>>,
 }
 
 impl MaterialExtension for TerrainMaterialExtension {
@@ -1722,6 +1820,13 @@ struct SceneMaterialAssets<'w> {
     cloud: Option<ResMut<'w, Assets<CloudMaterial>>>,
     menu_sky: Option<ResMut<'w, Assets<MenuSkyMaterial>>>,
     godray: Option<ResMut<'w, Assets<GodrayMaterial>>>,
+}
+
+#[derive(SystemParam)]
+struct CoreRenderAssets<'w> {
+    images: Option<ResMut<'w, Assets<Image>>>,
+    meshes: Option<ResMut<'w, Assets<Mesh>>>,
+    materials: Option<ResMut<'w, Assets<StandardMaterial>>>,
 }
 
 #[derive(Clone, Copy, Debug, Reflect, ShaderType)]
@@ -1934,6 +2039,7 @@ struct RenderAssets {
     fish_school_material: Handle<CritterMaterial>,
     projectile_arrow_scene: Option<Handle<bevy::world_serialization::WorldAsset>>,
     ground: Handle<TerrainMaterial>,
+    traversal_wear: Handle<Image>,
     water: Handle<WaterMaterial>,
     menu_water: Handle<WaterMaterial>,
     menu_sky: Handle<MenuSkyMaterial>,
@@ -3019,6 +3125,18 @@ struct PendingFoliageGrounding {
 
 #[derive(Component)]
 struct FoliageRenderBatch(FoliageBatchKey);
+
+type FoliageClearanceQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static GridLocation,
+        Option<&'static FoliageRenderBatch>,
+        Option<&'static PendingFoliageGrounding>,
+        &'static mut Visibility,
+    ),
+    With<FoliageVisual>,
+>;
 
 #[derive(Component)]
 struct Hud;
@@ -4123,6 +4241,7 @@ impl Plugin for StreamTownGamePlugin {
             )
             .init_resource::<SessionStats>()
             .init_resource::<WorldRenderStats>()
+            .init_resource::<TraversalWearRuntime>()
             .init_resource::<CrowdSeparationRuntime>()
             .init_resource::<StationTargetRuntime>()
             .init_resource::<EnemyNavigationRuntime>()
@@ -4667,13 +4786,16 @@ impl Plugin for StreamTownGamePlugin {
                     expire_inactive_building_placements.after(process_injected_commands),
                     sync_building_placers.after(expire_inactive_building_placements),
                     apply_building_placement_ghosts.after(sync_building_placers),
+                    decay_traversal_wear.after(move_agents),
+                    sync_traversal_wear_texture.after(decay_traversal_wear),
                     sync_building_placement_overlays
                         .after(process_injected_commands)
                         .after(apply_building_placement_ghosts),
                     sync_foliage_clearance
                         .after(apply_building_commands)
                         .after(load_input)
-                        .after(move_agents),
+                        .after(decay_traversal_wear)
+                        .after(ground_loaded_foliage_visuals),
                 )
                     .in_set(GameplaySimulationSet)
                     .run_if(in_state(GameState::InGame)),
@@ -5044,8 +5166,7 @@ fn setup_rendering(
     settings: Res<RuntimePlayerSettings>,
     presentation: Res<RuntimePresentation>,
     asset_server: Option<Res<AssetServer>>,
-    meshes: Option<ResMut<Assets<Mesh>>>,
-    materials: Option<ResMut<Assets<StandardMaterial>>>,
+    core_assets: CoreRenderAssets,
     terrain_materials: Option<ResMut<Assets<TerrainMaterial>>>,
     water_materials: Option<ResMut<Assets<WaterMaterial>>>,
     building_materials: Option<ResMut<Assets<BuildingMaterial>>>,
@@ -5057,8 +5178,11 @@ fn setup_rendering(
     flag_materials: Option<ResMut<Assets<FlagMaterial>>>,
 ) {
     let (
-        Some(mut meshes),
-        Some(mut materials),
+        CoreRenderAssets {
+            images: Some(mut images),
+            meshes: Some(mut meshes),
+            materials: Some(mut materials),
+        },
         Some(mut terrain_materials),
         Some(mut water_materials),
         Some(mut building_materials),
@@ -5077,8 +5201,7 @@ fn setup_rendering(
         Some(mut critter_materials),
         Some(mut flag_materials),
     ) = (
-        meshes,
-        materials,
+        core_assets,
         terrain_materials,
         water_materials,
         building_materials,
@@ -5506,6 +5629,10 @@ fn setup_rendering(
     });
     let window_height =
         f32::from(u16::try_from(settings.0.video.height.max(1)).unwrap_or(u16::MAX));
+    let traversal_wear = images.add(traversal_wear_image(
+        config.0.world.width,
+        config.0.world.height,
+    ));
     commands.insert_resource(RenderAssets {
         cube: meshes.add(Cuboid::default()),
         chimney_particle: meshes.add(Sphere::new(0.5).mesh().ico(1).expect("valid icosphere")),
@@ -5530,7 +5657,9 @@ fn setup_rendering(
             &presentation.0,
             &config.0,
             asset_server.as_deref(),
+            Some(traversal_wear.clone()),
         )),
+        traversal_wear,
         water: water_materials.add(water),
         menu_water: water_materials.add(menu_water),
         menu_sky,
@@ -6636,8 +6765,9 @@ fn character_material_from_standard(material: StandardMaterial) -> CharacterMate
 
 fn terrain_material(
     presentation: &PresentationCatalog,
-    _config: &GameConfig,
+    config: &GameConfig,
     asset_server: Option<&AssetServer>,
+    traversal_wear_texture: Option<Handle<Image>>,
 ) -> TerrainMaterial {
     let authored = presentation
         .materials
@@ -6707,10 +6837,38 @@ fn terrain_material(
                 ),
                 selection_center_extent: Vec4::ZERO,
                 selection_color: Vec4::ZERO,
+                traversal_grid: Vec4::new(
+                    f32::from(config.world.width),
+                    f32::from(config.world.height),
+                    config.world.cell_size,
+                    if traversal_wear_texture.is_some() {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                ),
+                traversal_dirt_color: unity_shader_color([0.34, 0.20, 0.075, 1.0]),
             },
             grid_texture,
+            traversal_wear_texture,
         },
     }
+}
+
+fn traversal_wear_image(width: u16, height: u16) -> Image {
+    let mut image = Image::new_fill(
+        Extent3d {
+            width: u32::from(width.max(1)),
+            height: u32::from(height.max(1)),
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        &[0, 0, 0, u8::MAX],
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::default(),
+    );
+    image.sampler = ImageSampler::nearest();
+    image
 }
 
 fn water_material(
@@ -16693,6 +16851,7 @@ fn generate_and_spawn_world(
         selected.0 = None;
         commands.insert_resource(SelectedActor::default());
         commands.insert_resource(RegenerationRoleRuntime::default());
+        commands.insert_resource(TraversalWearRuntime::default());
         *render_stats = WorldRenderStats::default();
         let Some(prepared) = loading.prepared_world.as_mut() else {
             loading.phase = WorldLoadingPhase::Loading;
@@ -24415,7 +24574,7 @@ fn move_agents(
     enemy_navigation: Res<EnemyNavigationRuntime>,
     mut world: ResMut<WorldRuntime>,
     mut simulation: ResMut<SimulationRuntime>,
-    mut stats: ResMut<SessionStats>,
+    mut movement_stats: MovementStats,
     mut render_stats: ResMut<WorldRenderStats>,
     mut recovery: AgentRecoveryRuntime,
     mut regeneration: ResMut<RegenerationRoleRuntime>,
@@ -24429,7 +24588,7 @@ fn move_agents(
     )>,
     buildings: Query<(Entity, &RuntimeBuilding)>,
 ) {
-    stats.elapsed_seconds += time.delta_secs_f64();
+    movement_stats.session.elapsed_seconds += time.delta_secs_f64();
     regeneration.elapsed_seconds += time.delta_secs_f64();
     simulation
         .0
@@ -24795,7 +24954,7 @@ fn move_agents(
             if !agent.path.is_empty() {
                 let completing_started_action = agent.action_started;
                 if !completing_started_action {
-                    stats.paths_completed += 1;
+                    movement_stats.session.paths_completed += 1;
                 }
                 let action_phase = if location.0 == agent.target {
                     let delay = if completing_started_action {
@@ -25145,6 +25304,12 @@ fn move_agents(
         let step = speed * config.0.world.cell_size * time.delta_secs();
         if distance.length_squared() <= step * step {
             transform.translation = target;
+            record_completed_cell_traversal(
+                &mut movement_stats.traversal_wear,
+                &agent.kind,
+                location.0,
+                next,
+            );
             location.0 = next;
             agent.path_index += 1;
             if let Some(actor) = simulation.0.actors.get_mut(&agent.id) {
@@ -25197,6 +25362,17 @@ fn move_agents(
                 axis_corrected.is_some(),
             );
         }
+    }
+}
+
+fn record_completed_cell_traversal(
+    traversal_wear: &mut TraversalWearRuntime,
+    kind: &ActorKind,
+    previous: GridPos,
+    next: GridPos,
+) {
+    if *kind == ActorKind::Player && previous != next {
+        traversal_wear.record(next);
     }
 }
 
@@ -33909,6 +34085,7 @@ fn save_input(
     world: Res<WorldRuntime>,
     stats: Res<SessionStats>,
     simulation: Res<SimulationRuntime>,
+    traversal_wear: Res<TraversalWearRuntime>,
     mut runtime_console: ResMut<RuntimeConsoleRuntime>,
 ) {
     let save_requested = std::mem::take(&mut io.save);
@@ -33916,7 +34093,7 @@ fn save_input(
     if !save_requested && !jump_start_requested {
         return;
     }
-    let snapshot = snapshot_world(&world, &stats, &simulation);
+    let snapshot = snapshot_world(&world, &stats, &simulation, &traversal_wear);
     let destination = if jump_start_requested {
         NativeSaveStore::new(jump_start_snapshot_path(save.store.path()))
     } else {
@@ -33953,6 +34130,7 @@ fn autosave_game(
     world: Res<WorldRuntime>,
     stats: Res<SessionStats>,
     simulation: Res<SimulationRuntime>,
+    traversal_wear: Res<TraversalWearRuntime>,
 ) {
     if player_settings.0.autosave_minutes == 0 {
         settings.autosave_elapsed_seconds = 0.0;
@@ -33964,7 +34142,7 @@ fn autosave_game(
         return;
     }
     settings.autosave_elapsed_seconds = settings.autosave_elapsed_seconds.rem_euclid(interval);
-    let snapshot = snapshot_world(&world, &stats, &simulation);
+    let snapshot = snapshot_world(&world, &stats, &simulation, &traversal_wear);
     match save.store.write(&snapshot) {
         Ok(()) => info!(path = %save.store.path().display(), "autosave written"),
         Err(error) => error!(%error, "autosave failed"),
@@ -33977,14 +34155,17 @@ fn save_on_gameplay_exit(
     world: Option<Res<WorldRuntime>>,
     stats: Option<Res<SessionStats>>,
     simulation: Option<Res<SimulationRuntime>>,
+    traversal_wear: Option<Res<TraversalWearRuntime>>,
 ) {
     if restart.suppress_exit_save {
         return;
     }
-    let (Some(world), Some(stats), Some(simulation)) = (world, stats, simulation) else {
+    let (Some(world), Some(stats), Some(simulation), Some(traversal_wear)) =
+        (world, stats, simulation, traversal_wear)
+    else {
         return;
     };
-    let snapshot = snapshot_world(&world, &stats, &simulation);
+    let snapshot = snapshot_world(&world, &stats, &simulation, &traversal_wear);
     match save.store.write(&snapshot) {
         Ok(()) => info!(path = %save.store.path().display(), "gameplay-exit save written"),
         Err(error) => error!(%error, "gameplay-exit save failed"),
@@ -34006,6 +34187,7 @@ fn load_input(
     mut placers: ResMut<BuildingPlacers>,
     mut stats: ResMut<SessionStats>,
     mut simulation: ResMut<SimulationRuntime>,
+    mut traversal_wear: ResMut<TraversalWearRuntime>,
     mut selected: ResMut<SelectedCell>,
     mut entities: LoadWorldEntities,
     mut automatic_complete: Local<bool>,
@@ -34519,6 +34701,11 @@ fn load_input(
     }
     stats.elapsed_seconds = Duration::from_secs(snapshot.elapsed_seconds).as_secs_f64();
     stats.paths_completed = 0;
+    traversal_wear.restore(
+        &snapshot.traversal_wear,
+        world.generated.navigation.width(),
+        world.generated.navigation.height(),
+    );
     let forked_from_template = source_path != save.store.path();
     if forked_from_template {
         match save.store.write(&snapshot) {
@@ -35669,22 +35856,27 @@ fn sync_foliage_clearance(
     content: Res<RuntimeContent>,
     simulation: Res<SimulationRuntime>,
     world: Res<WorldRuntime>,
+    traversal_wear: Res<TraversalWearRuntime>,
     mut stats: ResMut<WorldRenderStats>,
-    mut foliage: Query<
-        (&GridLocation, Option<&FoliageRenderBatch>, &mut Visibility),
-        With<FoliageVisual>,
-    >,
+    mut foliage: FoliageClearanceQuery,
 ) {
     let regions = foliage_clearance_regions(&content.0, &simulation.0, &world.generated);
     let mut visible_instances = 0;
-    for (location, batch, mut visibility) in &mut foliage {
+    for (location, batch, pending_grounding, mut visibility) in &mut foliage {
         if let Some(batch) = batch {
             debug_assert_eq!(batch.0.chunk_x, location.0.x / FOLIAGE_BATCH_CHUNK_CELLS);
             debug_assert_eq!(batch.0.chunk_z, location.0.z / FOLIAGE_BATCH_CHUNK_CELLS);
         }
-        let should_be_hidden = regions
+        let structure_hidden = regions
             .iter()
             .any(|region| region_contains_grid_position(*region, location.0));
+        let wear_score = traversal_wear
+            .cells
+            .get(&location.0)
+            .copied()
+            .unwrap_or_default();
+        let should_be_hidden =
+            foliage_should_be_hidden(structure_hidden, pending_grounding.is_some(), wear_score);
         if should_be_hidden && !matches!(*visibility, Visibility::Hidden) {
             *visibility = Visibility::Hidden;
         } else if !should_be_hidden && matches!(*visibility, Visibility::Hidden) {
@@ -35695,6 +35887,82 @@ fn sync_foliage_clearance(
         }
     }
     stats.foliage_visible_instances = visible_instances;
+}
+
+fn foliage_should_be_hidden(
+    structure_hidden: bool,
+    pending_grounding: bool,
+    wear_score: f32,
+) -> bool {
+    structure_hidden || pending_grounding || wear_score >= TRAVERSAL_WEAR_FADE_START
+}
+
+fn decay_traversal_wear(time: Res<Time>, mut traversal_wear: ResMut<TraversalWearRuntime>) {
+    traversal_wear.decay(time.delta_secs());
+}
+
+fn sync_traversal_wear_texture(
+    config: Res<RuntimeConfig>,
+    render: Res<RenderAssets>,
+    mut traversal_wear: ResMut<TraversalWearRuntime>,
+    images: Option<ResMut<Assets<Image>>>,
+    terrain_materials: Option<ResMut<Assets<TerrainMaterial>>>,
+) {
+    if !traversal_wear.texture_dirty {
+        return;
+    }
+    let (Some(mut images), Some(mut terrain_materials)) = (images, terrain_materials) else {
+        return;
+    };
+    let width = config.0.world.width.max(1);
+    let height = config.0.world.height.max(1);
+    let Some(mut image) = images.get_mut(&render.traversal_wear) else {
+        return;
+    };
+    if image.width() != u32::from(width) || image.height() != u32::from(height) {
+        *image = traversal_wear_image(width, height);
+    }
+    write_traversal_wear_pixels(&mut image, width, height, &traversal_wear.cells);
+    if let Some(mut material) = terrain_materials.get_mut(&render.ground) {
+        material.extension.parameters.traversal_grid = Vec4::new(
+            f32::from(width),
+            f32::from(height),
+            config.0.world.cell_size,
+            1.0,
+        );
+    }
+    traversal_wear.texture_dirty = false;
+}
+
+fn write_traversal_wear_pixels(
+    image: &mut Image,
+    width: u16,
+    height: u16,
+    cells: &HashMap<GridPos, f32>,
+) {
+    let Some(data) = image.data.as_mut() else {
+        return;
+    };
+    for pixel in data.chunks_exact_mut(4) {
+        pixel.copy_from_slice(&[0, 0, 0, u8::MAX]);
+    }
+    for (position, score) in cells {
+        if position.x >= width || position.z >= height {
+            continue;
+        }
+        let index = (usize::from(position.z) * usize::from(width) + usize::from(position.x)) * 4;
+        let wear = traversal_wear_byte(*score);
+        if let Some(red) = data.get_mut(index) {
+            *red = wear;
+        }
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn traversal_wear_byte(score: f32) -> u8 {
+    // The fraction is clamped to [0, 1], so the rounded value is always in
+    // the complete u8 range before this intentional texture conversion.
+    (traversal_wear_fraction(score) * f32::from(u8::MAX)).round() as u8
 }
 
 fn quarter_turn_rotation(rotation_quarter_turns: i32) -> Quat {
@@ -37630,7 +37898,7 @@ fn process_injected_commands(
     render: Res<RenderAssets>,
     asset_server: Option<Res<AssetServer>>,
     asset_root: Res<RuntimeAssetRoot>,
-    save: Res<SaveRuntime>,
+    command_save: CommandSaveRuntime,
     selected: Res<SelectedCell>,
     cameras: Query<&TownCameraControllerRuntime, With<TownCamera>>,
     mut response: CommandResponseRuntime,
@@ -39141,8 +39409,11 @@ fn process_injected_commands(
                     }),
                 ChatCommand::Save => {
                     require_ruler_or_staff(&simulation.0, &pending)?;
-                    let snapshot = snapshot_world(&world, &stats, &simulation);
-                    save.store
+                    let snapshot =
+                        snapshot_world(&world, &stats, &simulation, &command_save.traversal_wear);
+                    command_save
+                        .save
+                        .store
                         .write(&snapshot)
                         .map(|()| "town saved".to_owned())
                         .map_err(|error| format!("save failed: {error}"))
@@ -39565,6 +39836,7 @@ fn snapshot_world(
     world: &WorldRuntime,
     stats: &SessionStats,
     simulation: &SimulationRuntime,
+    traversal_wear: &TraversalWearRuntime,
 ) -> WorldSnapshot {
     WorldSnapshot {
         schema_version: CURRENT_WORLD_SNAPSHOT_SCHEMA,
@@ -39610,6 +39882,7 @@ fn snapshot_world(
             .iter()
             .map(|resource| (resource.id.clone(), resource.amount))
             .collect(),
+        traversal_wear: traversal_wear.saved_cells(),
         legacy_terrain_mesh: world.legacy_terrain_mesh.clone(),
         legacy_migration: world.legacy_migration.clone(),
     }
@@ -41662,6 +41935,61 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
     use stream_town_domain::generate_world;
+
+    #[test]
+    fn traversal_wear_records_only_completed_citizen_cell_entries() {
+        let mut wear = TraversalWearRuntime::default();
+        let start = GridPos { x: 1, z: 2 };
+        let next = GridPos { x: 2, z: 2 };
+        record_completed_cell_traversal(&mut wear, &ActorKind::Enemy, start, next);
+        record_completed_cell_traversal(&mut wear, &ActorKind::Player, start, start);
+        assert!(wear.cells.is_empty());
+
+        for _ in 0..20 {
+            record_completed_cell_traversal(&mut wear, &ActorKind::Player, start, next);
+        }
+        assert!((wear.cells[&next] - MAX_TRAVERSAL_WEAR_SCORE).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn traversal_wear_fades_from_three_to_nine_and_decays_by_half_life() {
+        assert!(traversal_wear_fraction(2.99).abs() < f32::EPSILON);
+        assert!((traversal_wear_fraction(6.0) - 0.5).abs() < f32::EPSILON);
+        assert!((traversal_wear_fraction(9.0) - 1.0).abs() < f32::EPSILON);
+        assert!((traversal_wear_fraction(12.0) - 1.0).abs() < f32::EPSILON);
+
+        let position = GridPos { x: 4, z: 5 };
+        let pruned = GridPos { x: 5, z: 5 };
+        let mut wear = TraversalWearRuntime::default();
+        wear.cells.insert(position, 12.0);
+        wear.cells.insert(pruned, 0.015);
+        wear.decay(TRAVERSAL_WEAR_HALF_LIFE_SECONDS);
+        assert!((wear.cells[&position] - 6.0).abs() < 0.000_1);
+        assert!(!wear.cells.contains_key(&pruned));
+    }
+
+    #[test]
+    fn traversal_wear_texture_maps_scores_to_their_grid_cells() {
+        let mut image = traversal_wear_image(4, 3);
+        let half = GridPos { x: 1, z: 2 };
+        let full = GridPos { x: 3, z: 0 };
+        let cells = HashMap::from([(half, 6.0), (full, 9.0)]);
+        write_traversal_wear_pixels(&mut image, 4, 3, &cells);
+        let data = image.data.as_ref().expect("wear texture is CPU-backed");
+        let half_index = (usize::from(half.z) * 4 + usize::from(half.x)) * 4;
+        let full_index = (usize::from(full.z) * 4 + usize::from(full.x)) * 4;
+        assert_eq!(data[half_index], 128);
+        assert_eq!(data[full_index], u8::MAX);
+        assert_eq!(data[0], 0);
+    }
+
+    #[test]
+    fn traversal_wear_hides_foliage_without_removing_it() {
+        assert!(!foliage_should_be_hidden(false, false, 2.99));
+        assert!(foliage_should_be_hidden(false, false, 3.0));
+        assert!(foliage_should_be_hidden(true, false, 0.0));
+        assert!(foliage_should_be_hidden(false, true, 0.0));
+    }
 
     fn audio_acceptance_record(wav: &[u8]) -> serde_json::Value {
         assert_eq!(&wav[0..4], b"RIFF");
@@ -44535,6 +44863,7 @@ mod tests {
             legacy_migration: None,
         });
         app.init_resource::<WorldRenderStats>();
+        app.init_resource::<TraversalWearRuntime>();
         app.add_systems(Update, sync_foliage_clearance);
         let building_entity = app
             .world_mut()
@@ -50928,7 +51257,7 @@ mod tests {
             Vec2::splat(config.world.cell_size * PLAYER_SELECTION_OUTLINE_SCALE_CELLS * 0.5,)
         );
 
-        let terrain = terrain_material(&presentation, &config, None);
+        let terrain = terrain_material(&presentation, &config, None, None);
         assert_eq!(
             terrain.extension.parameters.selection_center_extent,
             Vec4::ZERO
@@ -53322,7 +53651,7 @@ mod tests {
                 .sum::<usize>(),
             32
         );
-        let terrain = terrain_material(&presentation, &GameConfig::default(), None);
+        let terrain = terrain_material(&presentation, &GameConfig::default(), None, None);
         assert!(terrain.extension.grid_texture.is_none());
         assert!((terrain.base.perceptual_roughness - 1.0).abs() < f32::EPSILON);
         assert!(terrain.base.metallic.abs() < f32::EPSILON);
