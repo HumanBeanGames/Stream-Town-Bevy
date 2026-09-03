@@ -990,10 +990,12 @@ in-process without TidalCycles, SuperCollider, or a sidecar. Living enemies
 inside the town camera's viewport feed a frame-rate-independent 15-second
 exponential average into the score's externally driven intensity field, which
 raises its tempo, rhythmic density, harmonic tension, brightness, and gain up
-to the authored 12-enemy saturation point. Native score updates are applied only
-at the end of the currently playing Tidal cycle, so the 15-second average cannot
-rewrite a pattern in the middle of a cycle. The player's master/music gain
-remains a live routing control. The reachable town
+to the authored 12-enemy saturation point. The game submits adaptive changes to
+one persistent Tidal track; the library atomically applies the newest pattern,
+tempo, and low-pass values at the next unscheduled cycle boundary while
+preserving musical phase and natural effect tails. Repeated intensity changes
+therefore coalesce instead of restarting or layering the score. The player's
+master/music gain remains a live routing control. The reachable town
 seagull now uses its converted GLB, exact 32-second cross-town flight contract,
 three generated calls on the source's random 1–5 second cadence, and authored
 ambience rolloff. Its converted +X nose axis receives the handedness-corrected

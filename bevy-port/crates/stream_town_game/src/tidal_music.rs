@@ -34,8 +34,7 @@ const HARMONY_CHORDS: [&str; 7] = [
     "<c4'M db3'M fs3'dim g3'7f9 c4'M ab3'M fs3'dim g3'7f9>",
 ];
 
-const SCORE_TEMPLATE: &str = r#"setcps ${cycles_per_second}
-d${track} $ stack
+const SCORE_TEMPLATE: &str = r#"stack
   [ sound "${kick}" # lpf ${kick_brightness} # gain ${kick_gain}
   , struct "${root_pattern}" $ ${roots}
       # sound "gm_harpsichord"
@@ -69,8 +68,13 @@ pub(super) struct IntensitySongInput {
 pub(super) struct TidalMusicRuntime {
     applied_intensity: Option<f64>,
     failed_intensity: Option<f64>,
-    cycle_remaining_seconds: f64,
     diagnostic: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct IntensitySongProgram {
+    expression: String,
+    cycles_per_second: f64,
 }
 
 pub(super) fn tidal_plugin(asset_root: &Path) -> TidalPlugin {
@@ -122,7 +126,6 @@ pub(super) fn update_enemy_music_intensity(
 }
 
 pub(super) fn drive_tidal_music(
-    time: Res<Time>,
     controller: Option<Res<TidalController>>,
     backend: Option<Res<TidalBackendStatus>>,
     audio: Option<Res<NativeAudioStatus>>,
@@ -131,7 +134,6 @@ pub(super) fn drive_tidal_music(
     player_settings: Res<RuntimePlayerSettings>,
     mut runtime: ResMut<TidalMusicRuntime>,
 ) {
-    runtime.cycle_remaining_seconds -= time.delta_secs_f64();
     let (Some(controller), Some(backend), Some(audio), Some(routing)) =
         (controller, backend, audio, routing)
     else {
@@ -148,25 +150,17 @@ pub(super) fn drive_tidal_music(
 
     routing.set_master_gain(player_music_gain(&player_settings.0));
     let requested_intensity = input.intensity.clamp(0.0, MAX_SONG_INTENSITY);
-    let cycle_boundary_due = runtime.cycle_remaining_seconds <= 0.0;
     if !intensity_program_needs_update(
         runtime.applied_intensity,
         runtime.failed_intensity,
         requested_intensity,
-        cycle_boundary_due,
     ) {
-        if cycle_boundary_due && let Some(applied_intensity) = runtime.applied_intensity {
-            runtime.cycle_remaining_seconds = next_cycle_remaining_seconds(
-                runtime.cycle_remaining_seconds,
-                intensity_cycle_seconds(applied_intensity),
-            );
-        }
         return;
     }
 
-    match intensity_song_program(requested_intensity, MUSIC_TRACK)
-        .and_then(|program| controller.send(program))
-    {
+    match intensity_song_program(requested_intensity).and_then(|program| {
+        controller.transition(MUSIC_TRACK, program.expression, program.cycles_per_second)
+    }) {
         Ok(()) => {
             if runtime.applied_intensity.is_none() {
                 info!(
@@ -176,13 +170,10 @@ pub(super) fn drive_tidal_music(
             }
             runtime.applied_intensity = Some(requested_intensity);
             runtime.failed_intensity = None;
-            runtime.cycle_remaining_seconds = intensity_cycle_seconds(requested_intensity);
             runtime.diagnostic = None;
         }
         Err(error) => {
             runtime.failed_intensity = Some(requested_intensity);
-            runtime.cycle_remaining_seconds =
-                intensity_cycle_seconds(runtime.applied_intensity.unwrap_or(requested_intensity));
             report_once(
                 &mut runtime,
                 format!("Could not apply the Stream Town intensity score: {error}"),
@@ -201,7 +192,6 @@ pub(super) fn stop_tidal_music(
     } else {
         runtime.applied_intensity = None;
         runtime.failed_intensity = None;
-        runtime.cycle_remaining_seconds = 0.0;
     }
     *input = IntensitySongInput::default();
 }
@@ -245,13 +235,9 @@ fn intensity_program_needs_update(
     applied: Option<f64>,
     failed: Option<f64>,
     requested: f64,
-    cycle_boundary_due: bool,
 ) -> bool {
     if applied.is_none() && failed.is_none() {
         return true;
-    }
-    if !cycle_boundary_due {
-        return false;
     }
     if failed.is_some() {
         return true;
@@ -262,20 +248,6 @@ fn intensity_program_needs_update(
 
 fn intensity_cycles_per_second(intensity: f64) -> f64 {
     (75.0 + intensity.clamp(0.0, MAX_SONG_INTENSITY) * 5.0) / 240.0
-}
-
-fn intensity_cycle_seconds(intensity: f64) -> f64 {
-    intensity_cycles_per_second(intensity).recip()
-}
-
-fn next_cycle_remaining_seconds(remaining_seconds: f64, cycle_seconds: f64) -> f64 {
-    let cycle_seconds = cycle_seconds.max(f64::EPSILON);
-    let overshoot = (-remaining_seconds).max(0.0) % cycle_seconds;
-    if overshoot <= f64::EPSILON {
-        cycle_seconds
-    } else {
-        cycle_seconds - overshoot
-    }
 }
 
 fn tidal_is_ready(
@@ -311,7 +283,6 @@ fn silence_music(controller: &TidalController, runtime: &mut TidalMusicRuntime) 
     }
     runtime.applied_intensity = None;
     runtime.failed_intensity = None;
-    runtime.cycle_remaining_seconds = 0.0;
 }
 
 fn report_once(runtime: &mut TidalMusicRuntime, diagnostic: String) {
@@ -326,7 +297,7 @@ fn player_music_gain(settings: &PlayerSettings) -> f32 {
 }
 
 /// Renders the complete score from its externally supplied intensity.
-fn intensity_song_program(intensity: f64, track: u64) -> Result<String, String> {
+fn intensity_song_program(intensity: f64) -> Result<IntensitySongProgram, String> {
     if !intensity.is_finite() {
         return Err("The downstream song intensity must be finite".to_owned());
     }
@@ -380,11 +351,6 @@ fn intensity_song_program(intensity: f64, track: u64) -> Result<String, String> 
 
     let values = [
         (
-            "cycles_per_second",
-            format_number(intensity_cycles_per_second(intensity)),
-        ),
-        ("track", track.to_string()),
-        (
             "kick",
             sound_pattern(&euclidean_steps(slow_hits, 4, 0), "bd"),
         ),
@@ -413,7 +379,10 @@ fn intensity_song_program(intensity: f64, track: u64) -> Result<String, String> 
         ("hat_brightness", format_number(hat_brightness)),
         ("hat_gain", format_number(hat_gain)),
     ];
-    render_score_template(&values)
+    Ok(IntensitySongProgram {
+        expression: render_score_template(&values)?,
+        cycles_per_second: intensity_cycles_per_second(intensity),
+    })
 }
 
 fn render_score_template(values: &[(&str, String)]) -> Result<String, String> {
@@ -480,9 +449,9 @@ mod tests {
         app.add_plugins(TidalPlugin::default());
         let controller = app.world().resource::<TidalController>();
         for intensity in [0.0, 0.5, 1.0, 3.0, 6.0, 9.0, 12.0, 100.0] {
-            let program = intensity_song_program(intensity, MUSIC_TRACK).unwrap();
+            let program = intensity_song_program(intensity).unwrap();
             controller
-                .send(program)
+                .transition(MUSIC_TRACK, program.expression, program.cycles_per_second)
                 .unwrap_or_else(|error| panic!("intensity {intensity} did not parse: {error}"));
         }
     }
@@ -499,35 +468,40 @@ mod tests {
     }
 
     #[test]
-    fn score_updates_only_at_cycle_boundaries_without_losing_external_precision() {
-        assert!(intensity_program_needs_update(None, None, 0.0, false));
-        assert!(!intensity_program_needs_update(Some(1.0), None, 2.0, false,));
-        assert!(!intensity_program_needs_update(Some(1.0), None, 1.1, true,));
-        assert!(intensity_program_needs_update(Some(1.0), None, 1.3, true,));
-        assert!(intensity_program_needs_update(
-            Some(1.0),
-            Some(1.3),
-            1.3,
-            true,
-        ));
+    fn score_submissions_retain_external_precision_and_are_thresholded() {
+        assert!(intensity_program_needs_update(None, None, 0.0));
+        assert!(!intensity_program_needs_update(Some(1.0), None, 1.1));
+        assert!(intensity_program_needs_update(Some(1.0), None, 1.3));
+        assert!(intensity_program_needs_update(Some(1.0), Some(1.3), 1.3));
     }
 
     #[test]
-    fn cycle_boundary_accumulator_carries_frame_overshoot() {
-        let cycle = intensity_cycle_seconds(0.0);
-        assert!((cycle - 3.2).abs() < 1.0e-10);
-        assert!((next_cycle_remaining_seconds(-0.2, cycle) - 3.0).abs() < 1.0e-10);
-        assert!((next_cycle_remaining_seconds(0.0, cycle) - cycle).abs() < 1.0e-10);
+    fn authored_tempo_still_spans_the_intensity_range() {
+        assert!((intensity_cycles_per_second(0.0).recip() - 3.2).abs() < 1.0e-10);
+        assert!((intensity_cycles_per_second(12.0) - 0.5625).abs() < 1.0e-10);
     }
 
     #[test]
-    fn composition_uses_native_equivalents_for_supplied_strudel_features() {
-        let program = intensity_song_program(6.0, MUSIC_TRACK).unwrap();
-        assert!(program.starts_with("setcps "));
-        assert!(program.contains("slowcat [n"));
-        assert!(!program.contains("setcpm"));
-        assert!(!program.contains("wchooseCycles"));
-        assert!(!program.contains("${"));
+    fn composition_is_one_transitionable_native_expression() {
+        let program = intensity_song_program(6.0).unwrap();
+        assert!(program.expression.starts_with("stack"));
+        assert!(program.expression.contains("slowcat [n"));
+        assert!(!program.expression.contains("setcps"));
+        assert!(!program.expression.contains("d1"));
+        assert!(!program.expression.contains("wchooseCycles"));
+        assert!(!program.expression.contains("${"));
+    }
+
+    #[test]
+    fn intensity_changes_every_authored_low_pass_filter() {
+        let quiet = intensity_song_program(0.0).unwrap().expression;
+        let intense = intensity_song_program(12.0).unwrap().expression;
+        for cutoff in ["lpf 500.000000", "lpf 1200.000000", "lpf 1100.000000"] {
+            assert!(quiet.contains(cutoff), "quiet score omitted {cutoff}");
+        }
+        for cutoff in ["lpf 2200.000000", "lpf 5000.000000", "lpf 4000.000000"] {
+            assert!(intense.contains(cutoff), "intense score omitted {cutoff}");
+        }
     }
 
     #[test]
@@ -544,10 +518,10 @@ mod tests {
         let mut settings = PlayerSettings::default();
         settings.audio.master = 0.5;
         settings.audio.music = 0.4;
-        let before = intensity_song_program(4.0, MUSIC_TRACK).unwrap();
+        let before = intensity_song_program(4.0).unwrap();
         settings.audio.master = 0.1;
         settings.audio.music = 0.2;
-        let after = intensity_song_program(4.0, MUSIC_TRACK).unwrap();
+        let after = intensity_song_program(4.0).unwrap();
         assert_eq!(before, after);
         assert!((player_music_gain(&settings) - 0.02).abs() < f32::EPSILON);
     }
