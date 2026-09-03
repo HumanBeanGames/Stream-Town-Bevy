@@ -10054,6 +10054,7 @@ fn spawn_main_menu_baked_foliage(
                 ) * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
             )
             .with_scale(scale),
+        Visibility::Hidden,
     ));
     if let Some(material) = material {
         insert_main_menu_material(&mut entity, material, render);
@@ -18093,20 +18094,7 @@ fn resolve_foliage_visual(
         }
         .from_asset(variant.asset_path.clone()),
     );
-    let centre = grid_to_world_on_surface(foliage.position, config, world);
-    let visible_water_height =
-        f32::from(config.world.water_level_centimetres) * 0.01 + WATER_SURFACE_LIFT_METRES;
-    if foliage.habitat == FoliageHabitat::Land && centre.y <= visible_water_height {
-        return None;
-    }
-    let horizontal_offset = locational_visual_offset(
-        world.seed,
-        &foliage.id,
-        foliage.position,
-        foliage.offset_milli_cells,
-        config.world.cell_size,
-    );
-    let offset = Vec3::new(horizontal_offset.x, 0.0, horizontal_offset.y);
+    let ground_position = resolved_foliage_ground_position(world, config, foliage)?;
     // This is also a primitive-label load, so `resource_visual_scale` restores
     // the glTF scene node's centimetre conversion before authored BaseScale.
     let scale = Vec3::from_array(variant.base_scale)
@@ -18146,7 +18134,7 @@ fn resolve_foliage_visual(
         suppress_self_shadows,
         visibility_end,
         position: foliage.position,
-        transform: Transform::from_translation(centre + offset)
+        transform: Transform::from_translation(ground_position)
             .with_rotation(
                 Quat::from_rotation_y(f32::from(foliage.yaw_milliradians) / 1_000.0)
                     * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
@@ -18208,7 +18196,10 @@ fn spawn_foliage_visual(
             surface_height: visual.transform.translation.y,
         },
         visual.transform,
-        Visibility::Inherited,
+        // Do not render a mesh at its source pivot while Bevy is still
+        // calculating its bounds. The grounding pass reveals it only after
+        // its lowest transformed point has been placed on the terrain.
+        Visibility::Hidden,
         bevy::camera::visibility::VisibilityRange {
             start_margin: 0.0..0.0,
             end_margin: (visual.visibility_end - FOLIAGE_VISIBILITY_FADE)..visual.visibility_end,
@@ -18223,9 +18214,15 @@ fn spawn_foliage_visual(
 
 fn ground_loaded_foliage_visuals(
     mut commands: Commands,
-    mut foliage: Query<(Entity, &PendingFoliageGrounding, &Aabb, &mut Transform)>,
+    mut foliage: Query<(
+        Entity,
+        &PendingFoliageGrounding,
+        &Aabb,
+        &mut Transform,
+        &mut Visibility,
+    )>,
 ) {
-    for (entity, pending, bounds, mut transform) in &mut foliage {
+    for (entity, pending, bounds, mut transform, mut visibility) in &mut foliage {
         let minimum_y = transformed_bounds_minimum_y(
             Vec3::from(bounds.center),
             Vec3::from(bounds.half_extents),
@@ -18234,6 +18231,7 @@ fn ground_loaded_foliage_visuals(
         );
         if minimum_y.is_finite() {
             transform.translation.y = pending.surface_height - minimum_y;
+            *visibility = Visibility::Inherited;
             commands
                 .entity(entity)
                 .try_remove::<PendingFoliageGrounding>();
@@ -41528,6 +41526,101 @@ fn terrain_corner_height(world: &GeneratedWorld, corner_x: u16, corner_z: u16) -
     average * 0.01
 }
 
+/// Samples the same two triangles emitted by `generated_terrain_chunk_mesh` at
+/// full detail. Decorative objects must use this rendered surface rather than
+/// a navigation cell's raw height: terrain vertices average adjacent cells,
+/// and the object's deterministic X/Z offset can move it across a slope.
+fn terrain_surface_height_at_world(
+    world: &GeneratedWorld,
+    config: &GameConfig,
+    world_x: f32,
+    world_z: f32,
+) -> Option<f32> {
+    let width = world.navigation.width();
+    let height = world.navigation.height();
+    let cell_size = config.world.cell_size;
+    if width == 0
+        || height == 0
+        || !cell_size.is_finite()
+        || cell_size <= 0.0
+        || !world_x.is_finite()
+        || !world_z.is_finite()
+    {
+        return None;
+    }
+
+    let grid_x = world_x / cell_size + f32::from(width.saturating_sub(1)) * 0.5;
+    let grid_z = world_z / cell_size + f32::from(height.saturating_sub(1)) * 0.5;
+    let max_x = f32::from(width.saturating_sub(1));
+    let max_z = f32::from(height.saturating_sub(1));
+    if grid_x < 0.0 || grid_z < 0.0 || grid_x > max_x || grid_z > max_z {
+        return None;
+    }
+
+    let grid_x = grid_x.clamp(0.0, max_x);
+    let grid_z = grid_z.clamp(0.0, max_z);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let x0 = grid_x.floor() as u16;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let z0 = grid_z.floor() as u16;
+    let x1 = x0.saturating_add(1).min(width - 1);
+    let z1 = z0.saturating_add(1).min(height - 1);
+    let fraction_x = grid_x - f32::from(x0);
+    let fraction_z = grid_z - f32::from(z0);
+
+    let top_left = terrain_corner_height(world, x0, z0);
+    if x0 == x1 && z0 == z1 {
+        return Some(top_left);
+    }
+    let top_right = terrain_corner_height(world, x1, z0);
+    if z0 == z1 {
+        return Some(fraction_x.mul_add(top_right - top_left, top_left));
+    }
+    let bottom_left = terrain_corner_height(world, x0, z1);
+    if x0 == x1 {
+        return Some(fraction_z.mul_add(bottom_left - top_left, top_left));
+    }
+    let bottom_right = terrain_corner_height(world, x1, z1);
+
+    if fraction_x + fraction_z <= 1.0 {
+        Some(fraction_x.mul_add(
+            top_right - top_left,
+            fraction_z.mul_add(bottom_left - top_left, top_left),
+        ))
+    } else {
+        Some((1.0 - fraction_z).mul_add(
+            top_right - bottom_right,
+            (1.0 - fraction_x).mul_add(bottom_left - bottom_right, bottom_right),
+        ))
+    }
+}
+
+fn resolved_foliage_ground_position(
+    world: &GeneratedWorld,
+    config: &GameConfig,
+    foliage: &GeneratedFoliage,
+) -> Option<Vec3> {
+    let mut position = grid_to_world(foliage.position, config);
+    let offset = locational_visual_offset(
+        world.seed,
+        &foliage.id,
+        foliage.position,
+        foliage.offset_milli_cells,
+        config.world.cell_size,
+    );
+    position.x += offset.x;
+    position.z += offset.y;
+    position.y = terrain_surface_height_at_world(world, config, position.x, position.z)?;
+
+    let visible_water_height =
+        f32::from(config.world.water_level_centimetres) * 0.01 + WATER_SURFACE_LIFT_METRES;
+    match foliage.habitat {
+        FoliageHabitat::Land if position.y <= visible_water_height => None,
+        FoliageHabitat::Underwater if position.y >= visible_water_height => None,
+        FoliageHabitat::Land | FoliageHabitat::Underwater => Some(position),
+    }
+}
+
 fn terrain_vertex_color(elevation: f32, config: &GameConfig) -> [f32; 4] {
     let water = f32::from(config.world.water_level_centimetres) * 0.01;
     if elevation <= water {
@@ -42976,6 +43069,147 @@ mod tests {
         let surface = 7.0;
         let translation_y = surface - minimum;
         assert!((translation_y + minimum - surface).abs() < 0.0001);
+    }
+
+    #[test]
+    fn foliage_remains_hidden_until_grounding_is_complete() {
+        let mut app = App::new();
+        app.add_systems(Update, ground_loaded_foliage_visuals);
+        let bounds = Aabb::from_min_max(Vec3::new(-0.5, 0.0, -0.25), Vec3::new(0.5, 4.0, 0.25));
+        let rotation = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+        let scale = Vec3::splat(2.0);
+        let surface = 7.0;
+        let entity = app
+            .world_mut()
+            .spawn((
+                PendingFoliageGrounding {
+                    surface_height: surface,
+                },
+                bounds,
+                Transform::from_rotation(rotation).with_scale(scale),
+                Visibility::Hidden,
+            ))
+            .id();
+
+        app.update();
+
+        let grounded = app.world().entity(entity);
+        assert!(grounded.get::<PendingFoliageGrounding>().is_none());
+        assert_eq!(grounded.get::<Visibility>(), Some(&Visibility::Inherited));
+        let transform = grounded.get::<Transform>().unwrap();
+        let minimum = transformed_bounds_minimum_y(
+            Vec3::from(bounds.center),
+            Vec3::from(bounds.half_extents),
+            transform.rotation,
+            transform.scale,
+        );
+        assert!((transform.translation.y + minimum - surface).abs() < 0.0001);
+    }
+
+    #[test]
+    fn foliage_surface_height_matches_the_rendered_terrain_triangles() {
+        let mut config = GameConfig::default();
+        config.world.width = 2;
+        config.world.height = 2;
+        config.world.cell_size = 2.0;
+        let world = GeneratedWorld {
+            seed: 1,
+            generator_version: 1,
+            navigation: stream_town_domain::NavGrid::new(
+                2,
+                2,
+                vec![false; 4],
+                vec![0, 100, 300, 900],
+            )
+            .unwrap(),
+            resources: Vec::new(),
+            foliage: Vec::new(),
+            deterministic_hash: String::new(),
+        };
+
+        for (x, z, expected) in [
+            (-1.0, -1.0, 0.0),
+            (1.0, -1.0, 0.5),
+            (-1.0, 1.0, 1.5),
+            (1.0, 1.0, 3.25),
+            (-0.5, -0.5, 0.5),
+            (0.5, 0.5, 2.125),
+        ] {
+            let actual = terrain_surface_height_at_world(&world, &config, x, z).unwrap();
+            assert!(
+                (actual - expected).abs() < 0.0001,
+                "surface at ({x}, {z}) was {actual}, expected {expected}"
+            );
+        }
+        assert!(terrain_surface_height_at_world(&world, &config, 1.01, 0.0).is_none());
+    }
+
+    #[test]
+    fn foliage_habitat_is_checked_after_offset_at_the_visible_surface() {
+        let mut config = GameConfig::default();
+        config.world.width = 3;
+        config.world.height = 3;
+        config.world.cell_size = 2.0;
+        config.world.water_level_centimetres = 5;
+        let foliage = |habitat| GeneratedFoliage {
+            id: StableId::new(match habitat {
+                FoliageHabitat::Land => "foliage:test:land",
+                FoliageHabitat::Underwater => "foliage:test:underwater",
+            })
+            .unwrap(),
+            layer: StableId::new("foliage:test").unwrap(),
+            habitat,
+            position: GridPos { x: 1, z: 1 },
+            offset_milli_cells: [0, 0],
+            variant: 0,
+            yaw_milliradians: 0,
+            scale_milli: 1_000,
+        };
+        let flat_world = |height_centimetres| GeneratedWorld {
+            seed: 7,
+            generator_version: 1,
+            navigation: stream_town_domain::NavGrid::new(
+                3,
+                3,
+                vec![false; 9],
+                vec![height_centimetres; 9],
+            )
+            .unwrap(),
+            resources: Vec::new(),
+            foliage: Vec::new(),
+            deterministic_hash: String::new(),
+        };
+
+        let dry_world = flat_world(100);
+        let land =
+            resolved_foliage_ground_position(&dry_world, &config, &foliage(FoliageHabitat::Land))
+                .unwrap();
+        assert!((land.y - 1.0).abs() < 0.0001);
+        assert!(
+            resolved_foliage_ground_position(
+                &dry_world,
+                &config,
+                &foliage(FoliageHabitat::Underwater),
+            )
+            .is_none()
+        );
+
+        let submerged_world = flat_world(-100);
+        let underwater = resolved_foliage_ground_position(
+            &submerged_world,
+            &config,
+            &foliage(FoliageHabitat::Underwater),
+        )
+        .unwrap();
+        assert!((underwater.y + 1.0).abs() < 0.0001);
+        assert!(
+            resolved_foliage_ground_position(
+                &submerged_world,
+                &config,
+                &foliage(FoliageHabitat::Land),
+            )
+            .is_none()
+        );
     }
 
     #[test]
