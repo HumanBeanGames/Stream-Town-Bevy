@@ -657,6 +657,16 @@ movement turns smoothly at the authored five-radians-per-second rate, action
 states face their actor, resource, or building target, and gathering keeps
 Unity's explicit immediate snap toward the resource.
 
+Citizen A*, enemy flow fields, and hierarchical enemy refinement all share
+eight-direction movement with 10/14 cardinal/diagonal costs. A diagonal is
+available only when both adjoining cardinal cells are open, preventing actors
+from clipping across resource and building corners. Unstuck recovery tracks
+both repeated route failures and five seconds without meaningful world-space
+progress on an otherwise valid route; recovered actors choose distinct open
+Town Hall approaches. Regeneration revalidates live actor occupancy when a
+tree or bush is planted, so delayed planting cannot create a blocker beneath a
+citizen.
+
 The vertical slice renders the deterministic 200x200 navigation height field as
 a single continuous 636,804-vertex voxel-style terrain mesh, a water surface at
 the authored level, an Avian
@@ -953,6 +963,11 @@ native GPU instancing, and deterministic local crowd
 separation changes only presentation transforms, never navigation or saves.
 `cargo run -p xtask -- stress --agents 300 --ticks 3600` performs the matching
 one-minute-at-60-Hz CPU soak while repeatedly mutating dirty navigation cells.
+Runtime resource synchronization indexes live stable IDs once per update and
+only changes presentation visibility when its value actually changes; depleted
+resource visuals are not loaded and are despawned after depletion. Enemy-field
+cache validation uses the navigation grid's incrementally maintained topology
+fingerprint instead of rescanning all 40,000 cells each frame.
 Windows builds pin wgpu to the self-contained DX12 path. This avoids the
 driver-specific Vulkan swapchain failures observed on the reference machine.
 Bevy 0.19's motion-blur pass is disabled on Windows because its varying loop

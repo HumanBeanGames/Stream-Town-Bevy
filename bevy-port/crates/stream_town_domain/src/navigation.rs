@@ -24,6 +24,8 @@ pub struct NavGrid {
     height: u16,
     blocked: Vec<bool>,
     height_centimetres: Vec<i16>,
+    #[serde(default)]
+    topology_signature: u64,
     #[serde(skip)]
     dirty_regions: Vec<DirtyRegion>,
 }
@@ -79,11 +81,14 @@ impl NavGrid {
         if blocked.len() != expected || height_centimetres.len() != expected {
             return Err(NavigationError::BufferSize);
         }
+        let topology_signature =
+            calculate_topology_signature(width, height, &blocked, &height_centimetres);
         Ok(Self {
             width,
             height,
             blocked,
             height_centimetres,
+            topology_signature,
             dirty_regions: Vec::new(),
         })
     }
@@ -115,6 +120,32 @@ impl NavGrid {
             .map(|index| self.height_centimetres[index])
     }
 
+    /// Constant-time fingerprint of the complete navigation topology.
+    ///
+    /// This lets runtime navigation caches detect occupancy changes without
+    /// rescanning every terrain cell each rendered frame.
+    #[must_use]
+    pub fn topology_signature(&self) -> u64 {
+        if self.topology_signature == 0 {
+            calculate_topology_signature(
+                self.width,
+                self.height,
+                &self.blocked,
+                &self.height_centimetres,
+            )
+        } else {
+            self.topology_signature
+        }
+    }
+
+    /// Returns every traversable cardinal and diagonal step with its movement
+    /// cost. Diagonals require both adjoining cardinal cells to remain open, so
+    /// actors cannot cut through the corner of a building or resource node.
+    #[must_use]
+    pub fn walkable_neighbours(&self, position: GridPos) -> [Option<(GridPos, u32)>; 8] {
+        self.walkable_neighbours_with(position, &|candidate| self.is_walkable(candidate))
+    }
+
     pub fn set_blocked(
         &mut self,
         region: DirtyRegion,
@@ -123,15 +154,34 @@ impl NavGrid {
         if !self.contains(region.min) || !self.contains(region.max) {
             return Err(NavigationError::OutsideGrid);
         }
+        if self.topology_signature == 0 {
+            self.topology_signature = calculate_topology_signature(
+                self.width,
+                self.height,
+                &self.blocked,
+                &self.height_centimetres,
+            );
+        }
+        let mut changed = false;
         for z in region.min.z..=region.max.z {
             for x in region.min.x..=region.max.x {
                 let index = self
                     .index(GridPos { x, z })
                     .expect("validated grid position");
+                if self.blocked[index] == blocked {
+                    continue;
+                }
+                self.topology_signature ^=
+                    topology_cell_token(index, self.blocked[index], self.height_centimetres[index]);
                 self.blocked[index] = blocked;
+                self.topology_signature ^=
+                    topology_cell_token(index, self.blocked[index], self.height_centimetres[index]);
+                changed = true;
             }
         }
-        self.dirty_regions.push(region);
+        if changed {
+            self.dirty_regions.push(region);
+        }
         Ok(())
     }
 
@@ -175,7 +225,7 @@ impl NavGrid {
         let mut costs = HashMap::<GridPos, u32>::from([(start, 0)]);
         open.push(OpenNode {
             position: start,
-            estimated_total: manhattan(start, goal) * 10,
+            estimated_total: octile_distance(start, goal),
             cost: 0,
         });
 
@@ -186,23 +236,18 @@ impl NavGrid {
             if current.cost > costs[&current.position] {
                 continue;
             }
-            for neighbour in
-                Self::neighbour_candidates(current.position).filter(|position| walkable(*position))
+            for (neighbour, step_cost) in self
+                .walkable_neighbours_with(current.position, &walkable)
+                .into_iter()
+                .flatten()
             {
-                let height_delta =
-                    (i32::from(self.height_at(neighbour).expect("neighbour is in bounds"))
-                        - i32::from(
-                            self.height_at(current.position)
-                                .expect("current is in bounds"),
-                        ))
-                    .unsigned_abs();
-                let next_cost = current.cost + 10 + height_delta / 100;
+                let next_cost = current.cost + step_cost;
                 if next_cost < *costs.get(&neighbour).unwrap_or(&u32::MAX) {
                     costs.insert(neighbour, next_cost);
                     came_from.insert(neighbour, current.position);
                     open.push(OpenNode {
                         position: neighbour,
-                        estimated_total: next_cost + manhattan(neighbour, goal) * 10,
+                        estimated_total: next_cost + octile_distance(neighbour, goal),
                         cost: next_cost,
                     });
                 }
@@ -216,31 +261,94 @@ impl NavGrid {
             .then(|| usize::from(position.z) * usize::from(self.width) + usize::from(position.x))
     }
 
-    fn neighbour_candidates(position: GridPos) -> impl Iterator<Item = GridPos> {
-        let candidates = [
-            position
-                .x
-                .checked_sub(1)
-                .map(|x| GridPos { x, z: position.z }),
-            position
-                .x
-                .checked_add(1)
-                .map(|x| GridPos { x, z: position.z }),
-            position
-                .z
-                .checked_sub(1)
-                .map(|z| GridPos { x: position.x, z }),
-            position
-                .z
-                .checked_add(1)
-                .map(|z| GridPos { x: position.x, z }),
-        ];
-        candidates.into_iter().flatten()
+    fn walkable_neighbours_with(
+        &self,
+        position: GridPos,
+        walkable: &impl Fn(GridPos) -> bool,
+    ) -> [Option<(GridPos, u32)>; 8] {
+        neighbour_candidates(position).map(|candidate| {
+            let (neighbour, base_cost) = candidate?;
+            if !walkable(neighbour) {
+                return None;
+            }
+            if base_cost == 14 {
+                let horizontal = GridPos {
+                    x: neighbour.x,
+                    z: position.z,
+                };
+                let vertical = GridPos {
+                    x: position.x,
+                    z: neighbour.z,
+                };
+                if !walkable(horizontal) || !walkable(vertical) {
+                    return None;
+                }
+            }
+            let height_delta = (i32::from(self.height_at(neighbour)?)
+                - i32::from(self.height_at(position)?))
+            .unsigned_abs();
+            Some((neighbour, base_cost + height_delta / 100))
+        })
     }
 }
 
-fn manhattan(left: GridPos, right: GridPos) -> u32 {
-    u32::from(left.x.abs_diff(right.x)) + u32::from(left.z.abs_diff(right.z))
+fn neighbour_candidates(position: GridPos) -> [Option<(GridPos, u32)>; 8] {
+    [
+        offset(position, -1, 0).map(|position| (position, 10)),
+        offset(position, 1, 0).map(|position| (position, 10)),
+        offset(position, 0, -1).map(|position| (position, 10)),
+        offset(position, 0, 1).map(|position| (position, 10)),
+        offset(position, -1, -1).map(|position| (position, 14)),
+        offset(position, 1, -1).map(|position| (position, 14)),
+        offset(position, -1, 1).map(|position| (position, 14)),
+        offset(position, 1, 1).map(|position| (position, 14)),
+    ]
+}
+
+fn offset(position: GridPos, x: i32, z: i32) -> Option<GridPos> {
+    let x = i32::from(position.x).checked_add(x)?;
+    let z = i32::from(position.z).checked_add(z)?;
+    (x >= 0 && z >= 0 && x <= i32::from(u16::MAX) && z <= i32::from(u16::MAX)).then(|| GridPos {
+        x: u16::try_from(x).expect("checked grid x fits u16"),
+        z: u16::try_from(z).expect("checked grid z fits u16"),
+    })
+}
+
+fn octile_distance(left: GridPos, right: GridPos) -> u32 {
+    let x = u32::from(left.x.abs_diff(right.x));
+    let z = u32::from(left.z.abs_diff(right.z));
+    let diagonal = x.min(z);
+    diagonal * 14 + (x.max(z) - diagonal) * 10
+}
+
+fn topology_cell_token(index: usize, blocked: bool, height_centimetres: i16) -> u64 {
+    let height = u64::from(u16::from_le_bytes(height_centimetres.to_le_bytes()));
+    let mut value = u64::try_from(index).unwrap_or(u64::MAX)
+        ^ (height << 32)
+        ^ (u64::from(blocked) << 63)
+        ^ 0x9e37_79b9_7f4a_7c15;
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+fn calculate_topology_signature(
+    width: u16,
+    height: u16,
+    blocked: &[bool],
+    height_centimetres: &[i16],
+) -> u64 {
+    blocked
+        .iter()
+        .copied()
+        .zip(height_centimetres.iter().copied())
+        .enumerate()
+        .fold(
+            (u64::from(width) << 48) ^ (u64::from(height) << 32) ^ 0xa076_1d64_78bd_642f,
+            |signature, (index, (blocked, height))| {
+                signature ^ topology_cell_token(index, blocked, height)
+            },
+        )
 }
 
 fn reconstruct_path(
@@ -305,6 +413,68 @@ mod tests {
         assert!(path.contains(&gate));
         assert_eq!(path.first(), Some(&start));
         assert_eq!(path.last(), Some(&goal));
+    }
+
+    #[test]
+    fn open_ground_paths_use_diagonal_steps() {
+        let grid = grid();
+        let path = grid
+            .find_path(GridPos { x: 1, z: 1 }, GridPos { x: 6, z: 6 })
+            .unwrap();
+        assert_eq!(path.len(), 6);
+        assert!(path.windows(2).all(|step| {
+            step[0].x.abs_diff(step[1].x) == 1 && step[0].z.abs_diff(step[1].z) == 1
+        }));
+    }
+
+    #[test]
+    fn diagonal_steps_do_not_cut_blocked_corners() {
+        let mut grid = grid();
+        for position in [GridPos { x: 2, z: 1 }, GridPos { x: 1, z: 2 }] {
+            grid.set_blocked(
+                DirtyRegion {
+                    min: position,
+                    max: position,
+                },
+                true,
+            )
+            .unwrap();
+        }
+        let path = grid
+            .find_path(GridPos { x: 1, z: 1 }, GridPos { x: 2, z: 2 })
+            .unwrap();
+        assert!(
+            path.len() > 2,
+            "blocked corner must not be crossed directly"
+        );
+    }
+
+    #[test]
+    fn topology_signature_changes_only_with_occupancy() {
+        let mut grid = grid();
+        let initial = grid.topology_signature();
+        let position = GridPos { x: 3, z: 4 };
+        grid.set_blocked(
+            DirtyRegion {
+                min: position,
+                max: position,
+            },
+            false,
+        )
+        .unwrap();
+        assert_eq!(grid.topology_signature(), initial);
+        assert!(grid.take_dirty_regions().is_empty());
+
+        grid.set_blocked(
+            DirtyRegion {
+                min: position,
+                max: position,
+            },
+            true,
+        )
+        .unwrap();
+        assert_ne!(grid.topology_signature(), initial);
+        assert_eq!(grid.take_dirty_regions().len(), 1);
     }
 
     #[test]

@@ -811,7 +811,7 @@ impl EnemyNavigationField {
         }
         let mut open = BinaryHeap::from([EnemyPathOpenNode {
             position: start,
-            estimated_total: grid_manhattan_distance(start, goal).saturating_mul(10),
+            estimated_total: grid_octile_distance(start, goal),
             cost: 0,
         }]);
         let mut previous = HashMap::<GridPos, GridPos>::new();
@@ -830,24 +830,20 @@ impl EnemyNavigationField {
             if current.cost > costs[&current.position] {
                 continue;
             }
-            for neighbour in
-                navigation_neighbours(current.position, navigation.width(), navigation.height())
-                    .into_iter()
-                    .flatten()
-                    .filter(|position| allowed(*position))
+            for (neighbour, step_cost) in navigation
+                .walkable_neighbours(current.position)
+                .into_iter()
+                .flatten()
+                .filter(|(position, _)| allowed(*position))
             {
-                let height_delta = (i32::from(navigation.height_at(neighbour)?)
-                    - i32::from(navigation.height_at(current.position)?))
-                .unsigned_abs();
-                let next_cost = current.cost.saturating_add(10 + height_delta / 100);
+                let next_cost = current.cost.saturating_add(step_cost);
                 if next_cost < *costs.get(&neighbour).unwrap_or(&u32::MAX) {
                     costs.insert(neighbour, next_cost);
                     previous.insert(neighbour, current.position);
                     open.push(EnemyPathOpenNode {
                         position: neighbour,
-                        estimated_total: next_cost.saturating_add(
-                            grid_manhattan_distance(neighbour, goal).saturating_mul(10),
-                        ),
+                        estimated_total: next_cost
+                            .saturating_add(grid_octile_distance(neighbour, goal)),
                         cost: next_cost,
                     });
                 }
@@ -1181,14 +1177,76 @@ struct BuildingPlacement {
     inactivity_seconds: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct MovementProgress {
+    last_position: Vec2,
+    last_path_index: usize,
+    target: GridPos,
+    stalled_seconds: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct NavigationFailureState {
+    path_failure_seconds: f32,
+    movement: Option<MovementProgress>,
+}
+
 #[derive(Resource, Default)]
-struct PathFailureRuntime(BTreeMap<StableId, f32>);
+struct PathFailureRuntime(BTreeMap<StableId, NavigationFailureState>);
 
 impl PathFailureRuntime {
     fn record_failure(&mut self, actor: &StableId, delta_seconds: f32) -> bool {
-        let elapsed = self.0.entry(actor.clone()).or_default();
-        *elapsed += delta_seconds.max(0.0);
-        *elapsed >= 5.0
+        let state = self.0.entry(actor.clone()).or_default();
+        state.path_failure_seconds += delta_seconds.max(0.0);
+        state.path_failure_seconds >= 5.0
+    }
+
+    fn clear_path_failure(&mut self, actor: &StableId) {
+        if let Some(state) = self.0.get_mut(actor) {
+            state.path_failure_seconds = 0.0;
+        }
+    }
+
+    fn record_movement(
+        &mut self,
+        actor: &StableId,
+        position: Vec2,
+        path_index: usize,
+        target: GridPos,
+        delta_seconds: f32,
+        minimum_progress: f32,
+    ) -> bool {
+        let state = self.0.entry(actor.clone()).or_default();
+        let Some(progress) = state.movement.as_mut() else {
+            state.movement = Some(MovementProgress {
+                last_position: position,
+                last_path_index: path_index,
+                target,
+                stalled_seconds: 0.0,
+            });
+            return false;
+        };
+        if progress.target != target
+            || progress.last_path_index != path_index
+            || progress.last_position.distance_squared(position)
+                >= minimum_progress * minimum_progress
+        {
+            *progress = MovementProgress {
+                last_position: position,
+                last_path_index: path_index,
+                target,
+                stalled_seconds: 0.0,
+            };
+            return false;
+        }
+        progress.stalled_seconds += delta_seconds.max(0.0);
+        progress.stalled_seconds >= 5.0
+    }
+
+    fn clear_movement(&mut self, actor: &StableId) {
+        if let Some(state) = self.0.get_mut(actor) {
+            state.movement = None;
+        }
     }
 
     fn clear(&mut self, actor: &StableId) {
@@ -16874,18 +16932,21 @@ fn generate_and_spawn_world(
         {
             if !isolate_animation {
                 let resource = &generated.resources[end];
-                let position = generated_resource_world_position(resource, &config.0, generated);
-                spawn_resource_visual(
-                    &mut commands,
-                    &content.0,
-                    &presentation.0,
-                    &render,
-                    asset_server.as_deref(),
-                    &asset_root.0,
-                    resource,
-                    position,
-                    &config.0,
-                );
+                if resource.amount > 0 {
+                    let position =
+                        generated_resource_world_position(resource, &config.0, generated);
+                    spawn_resource_visual(
+                        &mut commands,
+                        &content.0,
+                        &presentation.0,
+                        &render,
+                        asset_server.as_deref(),
+                        &asset_root.0,
+                        resource,
+                        position,
+                        &config.0,
+                    );
+                }
             }
             end += 1;
         }
@@ -18476,27 +18537,14 @@ fn connected_actor_positions(
                 break;
             }
         }
-        let neighbors = [
-            position
-                .x
-                .checked_add(1)
-                .filter(|x| *x < world.navigation.width())
-                .map(|x| GridPos { x, z: position.z }),
-            position
-                .x
-                .checked_sub(1)
-                .map(|x| GridPos { x, z: position.z }),
-            position
-                .z
-                .checked_add(1)
-                .filter(|z| *z < world.navigation.height())
-                .map(|z| GridPos { x: position.x, z }),
-            position
-                .z
-                .checked_sub(1)
-                .map(|z| GridPos { x: position.x, z }),
-        ];
-        queue.extend(neighbors.into_iter().flatten());
+        queue.extend(
+            world
+                .navigation
+                .walkable_neighbours(position)
+                .into_iter()
+                .flatten()
+                .map(|(neighbour, _)| neighbour),
+        );
     }
     positions
 }
@@ -19865,14 +19913,7 @@ fn enemy_navigation_signature(
 
     let mut hash = fold_u64(0xcbf2_9ce4_8422_2325, u64::from(navigation.width()));
     hash = fold_u64(hash, u64::from(navigation.height()));
-    for z in 0..navigation.height() {
-        for x in 0..navigation.width() {
-            let position = GridPos { x, z };
-            hash = fold_u64(hash, u64::from(navigation.is_walkable(position)));
-            let height = navigation.height_at(position).unwrap_or_default();
-            hash = fold_u64(hash, u64::from(u16::from_le_bytes(height.to_le_bytes())));
-        }
-    }
+    hash = fold_u64(hash, navigation.topology_signature());
     for building in buildings {
         hash = fold_u64(hash, stable_id_hash(&building.id));
         hash = fold_u64(hash, building.town_hall_distance);
@@ -19883,31 +19924,11 @@ fn enemy_navigation_signature(
     hash
 }
 
-fn navigation_neighbours(position: GridPos, width: u16, height: u16) -> [Option<GridPos>; 4] {
-    [
-        position
-            .x
-            .checked_sub(1)
-            .map(|x| GridPos { x, z: position.z }),
-        position
-            .x
-            .checked_add(1)
-            .filter(|x| *x < width)
-            .map(|x| GridPos { x, z: position.z }),
-        position
-            .z
-            .checked_sub(1)
-            .map(|z| GridPos { x: position.x, z }),
-        position
-            .z
-            .checked_add(1)
-            .filter(|z| *z < height)
-            .map(|z| GridPos { x: position.x, z }),
-    ]
-}
-
-fn grid_manhattan_distance(left: GridPos, right: GridPos) -> u32 {
-    u32::from(left.x.abs_diff(right.x)) + u32::from(left.z.abs_diff(right.z))
+fn grid_octile_distance(left: GridPos, right: GridPos) -> u32 {
+    let x = u32::from(left.x.abs_diff(right.x));
+    let z = u32::from(left.z.abs_diff(right.z));
+    let diagonal = x.min(z);
+    diagonal * 14 + (x.max(z) - diagonal) * 10
 }
 
 fn build_enemy_navigation_field(
@@ -19937,14 +19958,13 @@ fn build_enemy_navigation_field(
             component_by_cell[index(start)] = component;
             let mut queue = VecDeque::from([start]);
             while let Some(current) = queue.pop_front() {
-                for neighbour in navigation_neighbours(current, width, height)
+                for (neighbour, _) in navigation
+                    .walkable_neighbours(current)
                     .into_iter()
                     .flatten()
                 {
                     let neighbour_index = index(neighbour);
-                    if navigation.is_walkable(neighbour)
-                        && component_by_cell[neighbour_index] == BLOCKED_COMPONENT
-                    {
+                    if component_by_cell[neighbour_index] == BLOCKED_COMPONENT {
                         component_by_cell[neighbour_index] = component;
                         queue.push_back(neighbour);
                     }
@@ -20004,7 +20024,8 @@ fn build_enemy_navigation_field(
         }
         let component = component_by_cell[current_index];
         let goal = goal_by_cell[current_index].expect("queued route cells have a goal");
-        for neighbour in navigation_neighbours(current.position, width, height)
+        for (neighbour, step_cost) in navigation
+            .walkable_neighbours(current.position)
             .into_iter()
             .flatten()
         {
@@ -20012,10 +20033,7 @@ fn build_enemy_navigation_field(
             if component_by_cell[neighbour_index] != component {
                 continue;
             }
-            let height_delta = (i32::from(navigation.height_at(neighbour).unwrap_or_default())
-                - i32::from(navigation.height_at(current.position).unwrap_or_default()))
-            .unsigned_abs();
-            let next_cost = current.cost.saturating_add(10 + height_delta / 100);
+            let next_cost = current.cost.saturating_add(step_cost);
             if next_cost < route_costs[neighbour_index] {
                 route_costs[neighbour_index] = next_cost;
                 next_by_cell[neighbour_index] = Some(current.position);
@@ -20044,16 +20062,10 @@ fn build_enemy_navigation_field(
                 component,
             };
             cluster_edge_sets.entry(current_cluster).or_default();
-            for neighbour in [
-                x.checked_add(1)
-                    .filter(|next| *next < width)
-                    .map(|next| GridPos { x: next, z }),
-                z.checked_add(1)
-                    .filter(|next| *next < height)
-                    .map(|next| GridPos { x, z: next }),
-            ]
-            .into_iter()
-            .flatten()
+            for (neighbour, _) in navigation
+                .walkable_neighbours(current)
+                .into_iter()
+                .flatten()
             {
                 let neighbour_component = component_by_cell[index(neighbour)];
                 if neighbour_component != component {
@@ -20816,17 +20828,112 @@ fn cell_is_clear_of_buildings(
     })
 }
 
+struct RegenerationSpatialIndex {
+    resources: HashSet<GridPos>,
+    trees: HashSet<GridPos>,
+    actors: HashSet<GridPos>,
+}
+
+impl RegenerationSpatialIndex {
+    fn new(world: &GeneratedWorld, simulation: &WorldSimulation) -> Self {
+        Self {
+            resources: world
+                .resources
+                .iter()
+                .filter(|resource| resource.amount > 0)
+                .map(|resource| resource.position)
+                .collect(),
+            trees: world
+                .resources
+                .iter()
+                .filter(|resource| {
+                    resource.amount > 0 && resource.target_kind.as_str() == "target:tree"
+                })
+                .map(|resource| resource.position)
+                .collect(),
+            actors: simulation
+                .actors
+                .values()
+                .filter(|actor| actor.alive)
+                .map(|actor| actor.position)
+                .collect(),
+        }
+    }
+}
+
+fn cell_is_clear_of_trees_indexed(
+    trees: &HashSet<GridPos>,
+    position: GridPos,
+    minimum_distance: u16,
+) -> bool {
+    let minimum_squared = u64::from(minimum_distance) * u64::from(minimum_distance);
+    let radius = i32::from(minimum_distance.saturating_sub(1));
+    (-radius..=radius).all(|z| {
+        (-radius..=radius).all(|x| {
+            let distance_squared = i64::from(x) * i64::from(x) + i64::from(z) * i64::from(z);
+            distance_squared >= i64::try_from(minimum_squared).unwrap_or(i64::MAX)
+                || offset_grid_unbounded(position, x, z).is_none_or(|cell| !trees.contains(&cell))
+        })
+    })
+}
+
+#[cfg(test)]
 fn cell_is_clear_of_trees(
     world: &GeneratedWorld,
     position: GridPos,
     minimum_distance: u16,
 ) -> bool {
-    let minimum_squared = u64::from(minimum_distance) * u64::from(minimum_distance);
-    world.resources.iter().all(|resource| {
-        resource.amount == 0
-            || resource.target_kind.as_str() != "target:tree"
-            || grid_distance_squared(resource.position, position) >= minimum_squared
+    let trees = world
+        .resources
+        .iter()
+        .filter(|resource| resource.amount > 0 && resource.target_kind.as_str() == "target:tree")
+        .map(|resource| resource.position)
+        .collect::<HashSet<_>>();
+    cell_is_clear_of_trees_indexed(&trees, position, minimum_distance)
+}
+
+fn offset_grid_unbounded(position: GridPos, x: i32, z: i32) -> Option<GridPos> {
+    let x = i32::from(position.x).checked_add(x)?;
+    let z = i32::from(position.z).checked_add(z)?;
+    (x >= 0 && z >= 0 && x <= i32::from(u16::MAX) && z <= i32::from(u16::MAX)).then(|| GridPos {
+        x: u16::try_from(x).expect("checked grid x fits u16"),
+        z: u16::try_from(z).expect("checked grid z fits u16"),
     })
+}
+
+fn nearest_resource_distance_capped(
+    resources: &HashSet<GridPos>,
+    position: GridPos,
+    maximum_squared: u64,
+) -> u64 {
+    let radius = i32::try_from(maximum_squared.isqrt()).unwrap_or(i32::MAX);
+    let mut nearest = maximum_squared;
+    for z in -radius..=radius {
+        for x in -radius..=radius {
+            let distance = u64::try_from(i64::from(x) * i64::from(x) + i64::from(z) * i64::from(z))
+                .unwrap_or(u64::MAX);
+            if distance >= nearest {
+                continue;
+            }
+            if offset_grid_unbounded(position, x, z).is_some_and(|cell| resources.contains(&cell)) {
+                nearest = distance;
+            }
+        }
+    }
+    nearest
+}
+
+fn valid_regeneration_cell_indexed(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    spatial: &RegenerationSpatialIndex,
+    position: GridPos,
+) -> bool {
+    world.navigation.is_walkable(position)
+        && !spatial.resources.contains(&position)
+        && !spatial.actors.contains(&position)
+        && cell_is_clear_of_buildings(content, simulation, world, position, 1)
 }
 
 fn valid_regeneration_cell(
@@ -20835,9 +20942,13 @@ fn valid_regeneration_cell(
     world: &GeneratedWorld,
     position: GridPos,
 ) -> bool {
-    world.navigation.is_walkable(position)
-        && !active_resource_at(world, position)
-        && cell_is_clear_of_buildings(content, simulation, world, position, 1)
+    valid_regeneration_cell_indexed(
+        content,
+        simulation,
+        world,
+        &RegenerationSpatialIndex::new(world, simulation),
+        position,
+    )
 }
 
 fn planting_approach(
@@ -20909,6 +21020,7 @@ fn forester_planting_cell(
     hut: GridPos,
     from: GridPos,
 ) -> Option<(GridPos, GridPos)> {
+    let spatial = RegenerationSpatialIndex::new(world, simulation);
     let mut recent = runtime
         .recently_fallen_trees
         .iter()
@@ -20936,7 +21048,7 @@ fn forester_planting_cell(
             let Some(candidate) = offset_grid(fallen, x, z, world) else {
                 continue;
             };
-            if valid_regeneration_cell(content, simulation, world, candidate)
+            if valid_regeneration_cell_indexed(content, simulation, world, &spatial, candidate)
                 && let Some(approach) =
                     planting_approach(content, simulation, world, candidate, from)
             {
@@ -20955,7 +21067,11 @@ fn forester_planting_cell(
                 .skip(1)
                 .filter_map(|(x, z)| offset_grid(tree.position, x, z, world))
         })
-        .filter(|candidate| valid_regeneration_cell(content, simulation, world, *candidate))
+        .filter(|candidate| {
+            valid_regeneration_cell_indexed(content, simulation, world, &spatial, *candidate)
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect::<Vec<_>>();
     beside_trees.sort_by_key(|candidate| {
         (
@@ -20978,7 +21094,9 @@ fn forester_planting_cell(
     let mut fallback = (-radius..=radius)
         .flat_map(|z| (-radius..=radius).map(move |x| (x, z)))
         .filter_map(|(x, z)| offset_grid(hut, x, z, world))
-        .filter(|candidate| valid_regeneration_cell(content, simulation, world, *candidate))
+        .filter(|candidate| {
+            valid_regeneration_cell_indexed(content, simulation, world, &spatial, *candidate)
+        })
         .filter(|candidate| cell_is_clear_of_buildings(content, simulation, world, *candidate, 3))
         .collect::<Vec<_>>();
     fallback.sort_by_key(|candidate| {
@@ -21004,23 +21122,21 @@ fn tender_planting_cell(
     hut: GridPos,
     from: GridPos,
 ) -> Option<(GridPos, GridPos)> {
+    let spatial = RegenerationSpatialIndex::new(world, simulation);
     let radius = 24_i32;
     let mut fields = (-radius..=radius)
         .flat_map(|z| (-radius..=radius).map(move |x| (x, z)))
         .filter_map(|(x, z)| offset_grid(hut, x, z, world))
-        .filter(|candidate| valid_regeneration_cell(content, simulation, world, *candidate))
+        .filter(|candidate| {
+            valid_regeneration_cell_indexed(content, simulation, world, &spatial, *candidate)
+        })
         .filter(|candidate| cell_is_clear_of_buildings(content, simulation, world, *candidate, 10))
-        .filter(|candidate| cell_is_clear_of_trees(world, *candidate, 5))
+        .filter(|candidate| cell_is_clear_of_trees_indexed(&spatial.trees, *candidate, 5))
         .filter(|candidate| !reserved.contains(candidate))
         .collect::<Vec<_>>();
-    fields.sort_by_key(|candidate| {
-        let nearest_resource = world
-            .resources
-            .iter()
-            .filter(|resource| resource.amount > 0)
-            .map(|resource| grid_distance_squared(resource.position, *candidate))
-            .min()
-            .unwrap_or(u64::MAX);
+    fields.sort_by_cached_key(|candidate| {
+        let nearest_resource =
+            nearest_resource_distance_capped(&spatial.resources, *candidate, 100);
         let coordinate = u64::from(candidate.x) | (u64::from(candidate.z) << 16);
         (
             // Once a cell has ten tiles of open field around it, actor-specific
@@ -21255,14 +21371,15 @@ fn complete_regeneration_goal(
     let level = regeneration_role_level(actor);
     match goal {
         AgentGoal::PlantTree(position) => {
-            let planted = spawn_regenerated_resource(
-                runtime,
-                world,
-                content,
-                "resource:wood",
-                "target:tree",
-                *position,
-            );
+            let planted = valid_regeneration_cell(content, simulation, world, *position)
+                && spawn_regenerated_resource(
+                    runtime,
+                    world,
+                    content,
+                    "resource:wood",
+                    "target:tree",
+                    *position,
+                );
             if let Some(interval) = regeneration_role_interval_seconds(&actor.role, level) {
                 runtime
                     .workers
@@ -21273,14 +21390,15 @@ fn complete_regeneration_goal(
             planted
         }
         AgentGoal::PlantBush(position) => {
-            let planted = spawn_regenerated_resource(
-                runtime,
-                world,
-                content,
-                "resource:food",
-                "target:bush",
-                *position,
-            );
+            let planted = valid_regeneration_cell(content, simulation, world, *position)
+                && spawn_regenerated_resource(
+                    runtime,
+                    world,
+                    content,
+                    "resource:food",
+                    "target:bush",
+                    *position,
+                );
             if let Some(interval) = regeneration_role_interval_seconds(&actor.role, level) {
                 let worker = runtime.workers.entry(actor_id.clone()).or_default();
                 worker.next_ready_seconds = runtime.elapsed_seconds + interval;
@@ -24109,6 +24227,53 @@ fn predictive_speed_factors(
     factors
 }
 
+#[allow(clippy::too_many_arguments)]
+fn return_agent_to_town_hall(
+    content: &ContentCatalog,
+    simulation: &mut WorldSimulation,
+    config: &GameConfig,
+    world: &GeneratedWorld,
+    occupied: &mut BTreeMap<GridPos, StableId>,
+    agent: &mut Agent,
+    location: &mut GridLocation,
+    animation: &AgentAnimation,
+    transform: &mut Transform,
+) {
+    let town_hall = restored_town_hall_position(content, simulation, config);
+    let anchor = nearest_walkable(world, town_hall).unwrap_or(town_hall);
+    let spawn = connected_actor_positions(world, anchor, town_hall, 64)
+        .into_iter()
+        .find(|position| {
+            occupied
+                .get(position)
+                .is_none_or(|owner| owner == &agent.id)
+        })
+        .unwrap_or(anchor);
+    if occupied.get(&location.0) == Some(&agent.id) {
+        occupied.remove(&location.0);
+    }
+    occupied.insert(spawn, agent.id.clone());
+    if let Some(actor) = simulation.actors.get_mut(&agent.id) {
+        actor.position = spawn;
+        actor.preferred_target = None;
+    }
+    let mut world_position = grid_to_world_on_surface(spawn, config, world);
+    if !animation.native {
+        world_position.y += animation.base_scale.y * 0.5;
+    }
+    transform.translation = world_position;
+    location.0 = spawn;
+    agent.origin = spawn;
+    agent.target = spawn;
+    agent.goal = AgentGoal::Wander;
+    agent.path.clear();
+    agent.path_index = 0;
+    agent.action_started = false;
+    agent.action_cooldown_seconds = 0.0;
+    agent.repath_remaining_seconds = 0.0;
+    agent.previous_wander_origin = None;
+}
+
 #[allow(clippy::type_complexity)]
 fn move_agents(
     mut commands: Commands,
@@ -24172,7 +24337,7 @@ fn move_agents(
     }
     let mut resource_reservations = BTreeMap::new();
     let mut target_assignment_counts: BTreeMap<StableId, u32> = BTreeMap::new();
-    let occupied_approaches = simulation
+    let mut occupied_approaches = simulation
         .0
         .actors
         .values()
@@ -24714,30 +24879,19 @@ fn move_agents(
                 );
             }
             if planned_path.is_some() {
-                path_failures.clear(&agent.id);
+                path_failures.clear_path_failure(&agent.id);
             } else if path_failures.record_failure(&agent.id, time.delta_secs()) {
-                let town_hall = restored_town_hall_position(&content.0, &simulation.0, &config.0);
-                let spawn = nearest_walkable(&world.generated, town_hall).unwrap_or(town_hall);
-                if let Some(actor) = simulation.0.actors.get_mut(&agent.id) {
-                    actor.position = spawn;
-                    actor.preferred_target = None;
-                }
-                let mut world_position =
-                    grid_to_world_on_surface(spawn, &config.0, &world.generated);
-                if !animation.native {
-                    world_position.y += animation.base_scale.y * 0.5;
-                }
-                transform.translation = world_position;
-                location.0 = spawn;
-                agent.origin = spawn;
-                agent.target = spawn;
-                agent.goal = AgentGoal::Wander;
-                agent.path.clear();
-                agent.path_index = 0;
-                agent.action_started = false;
-                agent.action_cooldown_seconds = 0.0;
-                agent.repath_remaining_seconds = 0.0;
-                agent.previous_wander_origin = None;
+                return_agent_to_town_hall(
+                    &content.0,
+                    &mut simulation.0,
+                    &config.0,
+                    &world.generated,
+                    &mut occupied_approaches,
+                    &mut agent,
+                    &mut location,
+                    animation,
+                    &mut transform,
+                );
                 path_failures.clear(&agent.id);
                 warn!(actor = %agent.id, "automatically returned an endlessly unpathable actor to the Town Hall");
                 continue;
@@ -24762,6 +24916,7 @@ fn move_agents(
             agent.path_index = usize::from(agent.path.len() > 1);
         }
         let Some(next) = agent.path.get(agent.path_index).copied() else {
+            path_failures.clear_movement(&agent.id);
             continue;
         };
         let mut target =
@@ -24782,6 +24937,29 @@ fn move_agents(
             }
         } else {
             transform.translation += distance.normalize_or_zero() * step;
+        }
+        if path_failures.record_movement(
+            &agent.id,
+            Vec2::new(transform.translation.x, transform.translation.z),
+            agent.path_index,
+            agent.target,
+            time.delta_secs(),
+            config.0.world.cell_size * 0.05,
+        ) {
+            return_agent_to_town_hall(
+                &content.0,
+                &mut simulation.0,
+                &config.0,
+                &world.generated,
+                &mut occupied_approaches,
+                &mut agent,
+                &mut location,
+                animation,
+                &mut transform,
+            );
+            path_failures.clear(&agent.id);
+            warn!(actor = %agent.id, "automatically returned an immobilized actor to the Town Hall");
+            continue;
         }
         let action_facing = !agent_is_moving(&agent)
             && rotate_agent_toward_action(
@@ -25006,7 +25184,7 @@ fn sync_resource_nodes(
     asset_root: Res<RuntimeAssetRoot>,
     simulation: Res<SimulationRuntime>,
     world: Res<WorldRuntime>,
-    mut resources: Query<(&ResourceNode, &GridLocation, &mut Visibility)>,
+    mut resources: Query<(Entity, &ResourceNode, &GridLocation, &mut Visibility)>,
 ) {
     if !world.is_changed() && !simulation.is_changed() {
         return;
@@ -25020,30 +25198,39 @@ fn sync_resource_nodes(
             building_region(camp.position, archetype.footprint, &world.generated)
         })
         .collect::<Vec<_>>();
-    let mut spawned_ids = BTreeSet::new();
-    for (node, location, mut visibility) in &mut resources {
+    let live_ids = world
+        .generated
+        .resources
+        .iter()
+        .filter(|resource| resource.amount > 0)
+        .map(|resource| resource.id.as_str())
+        .collect::<HashSet<_>>();
+    let mut spawned_ids = HashSet::with_capacity(resources.iter().len());
+    for (entity, node, location, mut visibility) in &mut resources {
+        if !live_ids.contains(node.id.as_str()) {
+            commands.entity(entity).despawn();
+            continue;
+        }
         spawned_ids.insert(node.id.clone());
-        let available = world
-            .generated
-            .resources
+        let available = !camp_regions
             .iter()
-            .find(|resource| resource.id == node.id)
-            .is_some_and(|resource| resource.amount > 0)
-            && !camp_regions
-                .iter()
-                .any(|region| region_contains_grid_position(*region, location.0));
-        *visibility = if available {
+            .any(|region| region_contains_grid_position(*region, location.0));
+        let desired = if available {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         };
+        if *visibility != desired {
+            *visibility = desired;
+        }
     }
-    for resource in world
-        .generated
-        .resources
-        .iter()
-        .filter(|resource| resource.amount > 0 && !spawned_ids.contains(&resource.id))
-    {
+    for resource in world.generated.resources.iter().filter(|resource| {
+        live_ids.contains(resource.id.as_str())
+            && !spawned_ids.contains(&resource.id)
+            && !camp_regions
+                .iter()
+                .any(|region| region_contains_grid_position(*region, resource.position))
+    }) {
         let position = generated_resource_world_position(resource, &config.0, &world.generated);
         spawn_resource_visual(
             &mut commands,
@@ -35232,26 +35419,13 @@ fn enemy_camp_town_reachable_cells(
     let mut reachable = HashSet::from([town_hall_approach]);
     let mut open = VecDeque::from([town_hall_approach]);
     while let Some(position) = open.pop_front() {
-        let neighbours = [
-            position
-                .x
-                .checked_sub(1)
-                .map(|x| GridPos { x, z: position.z }),
-            position
-                .x
-                .checked_add(1)
-                .map(|x| GridPos { x, z: position.z }),
-            position
-                .z
-                .checked_sub(1)
-                .map(|z| GridPos { x: position.x, z }),
-            position
-                .z
-                .checked_add(1)
-                .map(|z| GridPos { x: position.x, z }),
-        ];
-        for neighbour in neighbours.into_iter().flatten() {
-            if world.navigation.is_walkable(neighbour) && reachable.insert(neighbour) {
+        for (neighbour, _) in world
+            .navigation
+            .walkable_neighbours(position)
+            .into_iter()
+            .flatten()
+        {
+            if reachable.insert(neighbour) {
                 open.push_back(neighbour);
             }
         }
@@ -51662,6 +51836,20 @@ mod tests {
             10,
         ));
         assert!(cell_is_clear_of_trees(&world, field, 5));
+
+        // A destination may have been empty when selected and become occupied
+        // while the tender walks there. Completion must revalidate the live
+        // actor occupancy instead of growing a blocking bush under a citizen.
+        simulation.actors.get_mut(&second_actor).unwrap().position = field;
+        assert!(!complete_regeneration_goal(
+            &simulation,
+            &mut world,
+            &content,
+            &mut runtime,
+            &actor,
+            &AgentGoal::PlantBush(field),
+        ));
+        simulation.actors.get_mut(&second_actor).unwrap().position = from;
         assert!(complete_regeneration_goal(
             &simulation,
             &mut world,
@@ -54704,6 +54892,21 @@ mod tests {
     }
 
     #[test]
+    fn valid_route_without_world_progress_triggers_unstuck() {
+        let actor = StableId::new("actor:movement_failure").unwrap();
+        let target = GridPos { x: 8, z: 8 };
+        let mut failures = PathFailureRuntime::default();
+        assert!(!failures.record_movement(&actor, Vec2::ZERO, 1, target, 0.0, 0.1));
+        assert!(!failures.record_movement(&actor, Vec2::ZERO, 1, target, 4.99, 0.1));
+        assert!(failures.record_movement(&actor, Vec2::ZERO, 1, target, 0.01, 0.1));
+
+        // Meaningful displacement resets the stall window even if the actor is
+        // still working toward the same path waypoint.
+        assert!(!failures.record_movement(&actor, Vec2::X, 1, target, 4.99, 0.1));
+        assert!(!failures.record_movement(&actor, Vec2::X, 1, target, 0.0, 0.1));
+    }
+
+    #[test]
     fn player_name_presets_are_deterministic_and_catalogued() {
         let actor = StableId::new("twitch:colour_test").unwrap();
         let color = preset_player_name_color(44, &actor);
@@ -54918,10 +55121,13 @@ mod tests {
                 .iter()
                 .all(|position| navigation.is_walkable(*position))
         );
-        assert!(
-            route
-                .windows(2)
-                .all(|cells| grid_manhattan_distance(cells[0], cells[1]) == 1)
-        );
+        assert!(route.windows(2).all(|cells| {
+            let x = cells[0].x.abs_diff(cells[1].x);
+            let z = cells[0].z.abs_diff(cells[1].z);
+            x <= 1 && z <= 1 && x + z > 0
+        }));
+        assert!(route.windows(2).any(|cells| {
+            cells[0].x.abs_diff(cells[1].x) == 1 && cells[0].z.abs_diff(cells[1].z) == 1
+        }));
     }
 }
