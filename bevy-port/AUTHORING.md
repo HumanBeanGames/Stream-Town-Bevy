@@ -63,7 +63,13 @@ access or refresh tokens to RON.
   technology records.
 - Buildings provides template-based creation, an interactive logical placement
   footprint editor with rotate/row/column controls and atomic model/runtime
-  synchronization, visual GLB inspection,
+  synchronization, visual GLB inspection, and an optional physical-navigation
+  footprint measured in thirds of a placement cell. Placement and exclusion
+  always use the logical footprint. When the navigation override is absent,
+  ordinary buildings inset their blocker by one fine cell on every side;
+  wall, gate, and path connectivity is derived by the runtime. Explicit
+  overrides are intended for fully solid military structures and the compact
+  central blockers used by storage buildings and the Windmill.
   construction and level costs, storage, role capacity, passive production,
   station and target settings, projectiles, and model hierarchy bindings. Every
   stable reference is chosen from the loaded catalog.

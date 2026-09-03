@@ -15,6 +15,7 @@ struct TerrainMaterialUniform {
     selection_center_extent: vec4<f32>,
     selection_color: vec4<f32>,
     traversal_grid: vec4<f32>,
+    path_grid: vec4<f32>,
     traversal_dirt_color: vec4<f32>,
     constructed_path_color: vec4<f32>,
 }
@@ -89,11 +90,14 @@ fn fragment(
         terrain_material.traversal_dirt_color.rgb,
         wear * terrain_material.traversal_dirt_color.a,
     );
+    let path_cell = in.world_position.xz / terrain_material.path_grid.z
+        + (terrain_material.path_grid.xy - vec2<f32>(1.0)) * 0.5;
+    let path_uv = (path_cell + vec2<f32>(0.5)) / terrain_material.path_grid.xy;
     let path_level = textureSample(
         path_surface_texture,
         path_surface_sampler,
-        wear_uv,
-    ).r * 255.0;
+        path_uv,
+    ).r * 255.0 * terrain_material.path_grid.w;
     let path_mask = select(0.0, 1.0, path_level >= 0.5);
     // Staggered stones and a narrow mortar line are generated directly in
     // terrain space, so paving conforms to slopes without another mesh.

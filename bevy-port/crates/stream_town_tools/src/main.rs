@@ -5551,6 +5551,47 @@ fn buildings_tab(
                     "Shared logical placement footprint",
                     64,
                 );
+                let mut custom_navigation = draft.value.navigation_footprint_thirds.is_some();
+                if columns[0]
+                    .checkbox(
+                        &mut custom_navigation,
+                        "Override physical navigation footprint",
+                    )
+                    .changed()
+                {
+                    draft.value.navigation_footprint_thirds = custom_navigation.then(|| {
+                        default_navigation_footprint_thirds(draft.value.footprint)
+                    });
+                }
+                if let Some(navigation) = draft.value.navigation_footprint_thirds.as_mut() {
+                    let maximum = draft.value.footprint.map(|axis| axis.saturating_mul(3));
+                    columns[0].label("Physical footprint (third-cell navigation units)");
+                    columns[0].horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut navigation[0])
+                                .range(1..=maximum[0])
+                                .prefix("Width "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut navigation[1])
+                                .range(1..=maximum[1])
+                                .prefix("Depth "),
+                        );
+                    });
+                    navigation[0] = navigation[0].clamp(1, maximum[0]);
+                    navigation[1] = navigation[1].clamp(1, maximum[1]);
+                    columns[0].small(format!(
+                        "Occupies {:.2} × {:.2} placement cells, centered inside the placement/exclusion footprint.",
+                        f32::from(navigation[0]) / 3.0,
+                        f32::from(navigation[1]) / 3.0,
+                    ));
+                } else {
+                    let inferred = default_navigation_footprint_thirds(draft.value.footprint);
+                    columns[0].small(format!(
+                        "Default physical footprint: {} × {} third-cells (one unit inset per side).",
+                        inferred[0], inferred[1],
+                    ));
+                }
                 columns[0].small(
                     "Changing the model adopts its authored footprint. Applying saves this value to both the building and model archetype atomically.",
                 );
@@ -10856,6 +10897,10 @@ fn footprint_editor(
         ));
     });
     *footprint != previous
+}
+
+fn default_navigation_footprint_thirds(placement: [u16; 2]) -> [u16; 2] {
+    placement.map(|axis| axis.saturating_mul(3).saturating_sub(2).max(1))
 }
 
 fn draw_footprint_grid(ui: &mut egui::Ui, footprint: [u16; 2], desired: egui::Vec2) {

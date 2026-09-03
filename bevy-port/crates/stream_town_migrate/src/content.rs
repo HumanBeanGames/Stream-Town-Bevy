@@ -318,6 +318,7 @@ fn convert_export(
                 display_name: building_name,
                 archetype: archetype.clone(),
                 footprint: *footprint,
+                navigation_footprint_thirds: None,
                 cost,
                 placeable: required_bool(asset, "Placeable")?,
                 can_level: required_bool(asset, "CanLevel")?,

@@ -151,6 +151,10 @@ const TERRAIN_CHUNK_CELLS: u16 = 16;
 const OCEAN_PADDING_CELLS: u16 = 128;
 const WATER_SURFACE_LIFT_METRES: f32 = 0.20;
 const TRAVERSAL_WEAR_DECAY_INTERVAL_SECONDS: f32 = 1.0;
+/// Navigation alone is subdivided into thirds; authored placement, saves, terrain
+/// generation, resource generation, and gameplay ranges remain in town cells.
+const NAVIGATION_SUBDIVISIONS: u16 = 3;
+const NAVIGATION_TERRAIN_MIN_HEIGHT_CENTIMETRES: i16 = 45;
 const TERRAIN_HIGH_DETAIL_RADIUS: f32 = 220.0;
 const TERRAIN_MEDIUM_DETAIL_RADIUS: f32 = 440.0;
 const TERRAIN_LOD_HYSTERESIS: f32 = 36.0;
@@ -492,6 +496,12 @@ struct WorldRuntime {
     legacy_migration: Option<LegacyMigrationMetadata>,
 }
 
+#[derive(Resource, Default)]
+struct FineNavigationRuntime {
+    grid: Option<stream_town_domain::NavGrid>,
+    applied_signature: u64,
+}
+
 /// Sparse traffic history. A point is added only when a citizen completes a
 /// move into a different grid cell, and is discarded once exponential decay
 /// makes it visually irrelevant.
@@ -813,7 +823,9 @@ struct EnemyNavigationField {
     cluster_edges: BTreeMap<EnemyClusterNode, Vec<EnemyClusterNode>>,
 }
 
-const ENEMY_NAVIGATION_CLUSTER_SIZE: u16 = 8;
+// Preserve the original eight-town-cell HPA* cluster size on the navigation-only
+// grid, which has three samples per town cell.
+const ENEMY_NAVIGATION_CLUSTER_SIZE: u16 = 8 * NAVIGATION_SUBDIVISIONS;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct EnemyClusterNode {
@@ -1048,6 +1060,7 @@ struct MovementStats<'w> {
     session: ResMut<'w, SessionStats>,
     traversal_wear: ResMut<'w, TraversalWearRuntime>,
     path_surfaces: Res<'w, PathSurfaceRuntime>,
+    fine_navigation: Res<'w, FineNavigationRuntime>,
 }
 
 #[derive(Resource, Default)]
@@ -1674,6 +1687,7 @@ struct TerrainMaterialUniform {
     selection_center_extent: Vec4,
     selection_color: Vec4,
     traversal_grid: Vec4,
+    path_grid: Vec4,
     traversal_dirt_color: Vec4,
     constructed_path_color: Vec4,
 }
@@ -3105,6 +3119,8 @@ struct Agent {
     goal: AgentGoal,
     spawn: GridPos,
     origin: GridPos,
+    /// Current location in the navigation-only grid (three units per town cell).
+    navigation_position: GridPos,
     path: Vec<GridPos>,
     path_index: usize,
     target: GridPos,
@@ -4314,6 +4330,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<WorldRenderStats>()
             .init_resource::<TraversalWearRuntime>()
             .init_resource::<PathSurfaceRuntime>()
+            .init_resource::<FineNavigationRuntime>()
             .init_resource::<CrowdSeparationRuntime>()
             .init_resource::<StationTargetRuntime>()
             .init_resource::<EnemyNavigationRuntime>()
@@ -4636,6 +4653,7 @@ impl Plugin for StreamTownGamePlugin {
                     (
                         reset_crowd_separation,
                         refresh_station_target_runtime,
+                        sync_fine_navigation,
                         refresh_enemy_navigation,
                         move_agents.after(correct_player_rig_axis),
                         apply_crowd_separation,
@@ -6929,6 +6947,12 @@ fn terrain_material(
                     } else {
                         0.0
                     },
+                ),
+                path_grid: Vec4::new(
+                    f32::from(config.world.width.saturating_mul(NAVIGATION_SUBDIVISIONS)),
+                    f32::from(config.world.height.saturating_mul(NAVIGATION_SUBDIVISIONS)),
+                    config.world.cell_size / f32::from(NAVIGATION_SUBDIVISIONS),
+                    1.0,
                 ),
                 // Alpha controls the maximum contribution over the authored
                 // terrain. Keep paths legible without replacing the grass and
@@ -17737,6 +17761,7 @@ fn generate_and_spawn_world(
                 goal: AgentGoal::Wander,
                 spawn: position,
                 origin: position,
+                navigation_position: placement_to_navigation_centre(position),
                 path: Vec::new(),
                 path_index: 0,
                 target,
@@ -20118,6 +20143,7 @@ fn next_agent_goal(
         &station_targets,
         actor_id,
         current,
+        placement_to_navigation_centre(current),
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -20147,6 +20173,7 @@ fn next_agent_goal_with_reservations(
         &station_targets,
         actor_id,
         current,
+        placement_to_navigation_centre(current),
         reservations,
         target_assignments,
         &BTreeMap::new(),
@@ -20247,6 +20274,7 @@ fn enemy_route_buildings(
     content: &ContentCatalog,
     simulation: &WorldSimulation,
     world: &GeneratedWorld,
+    navigation: &stream_town_domain::NavGrid,
 ) -> Vec<EnemyRouteBuilding> {
     let town_hall = StableId::new("building:townhall").expect("static building ID");
     let town_hall_position = simulation
@@ -20266,7 +20294,11 @@ fn enemy_route_buildings(
                 building.position,
                 rotated_footprint(definition.footprint, building.rotation_quarter_turns),
                 town_hall_position,
-            );
+            )
+            .into_iter()
+            .map(placement_to_navigation_centre)
+            .filter(|approach| navigation.is_walkable(*approach))
+            .collect::<Vec<_>>();
             (!approaches.is_empty()).then(|| EnemyRouteBuilding {
                 id: building.id.clone(),
                 town_hall_distance: grid_distance_squared(
@@ -20488,10 +20520,14 @@ fn refresh_enemy_navigation(
     world: Res<WorldRuntime>,
     simulation: Res<SimulationRuntime>,
     content: Res<RuntimeContent>,
+    fine_navigation: Res<FineNavigationRuntime>,
     mut runtime: ResMut<EnemyNavigationRuntime>,
 ) {
-    let buildings = enemy_route_buildings(&content.0, &simulation.0, &world.generated);
-    let signature = enemy_navigation_signature(&world.generated.navigation, &buildings);
+    let Some(navigation) = fine_navigation.grid.as_ref() else {
+        return;
+    };
+    let buildings = enemy_route_buildings(&content.0, &simulation.0, &world.generated, navigation);
+    let signature = enemy_navigation_signature(navigation, &buildings);
     let completed = runtime
         .task
         .as_mut()
@@ -20517,7 +20553,7 @@ fn refresh_enemy_navigation(
         return;
     }
 
-    let navigation = world.generated.navigation.clone();
+    let navigation = navigation.clone();
     if runtime.field.is_none() {
         runtime.field = Some(build_enemy_navigation_field(
             signature, navigation, buildings,
@@ -20546,6 +20582,7 @@ fn next_agent_goal_with_station_runtime(
     station_targets: &StationTargetRuntime,
     actor_id: &StableId,
     current: GridPos,
+    current_navigation: GridPos,
     reservations: &BTreeMap<StableId, StableId>,
     target_assignments: &BTreeMap<StableId, u32>,
     occupied_approaches: &BTreeMap<GridPos, StableId>,
@@ -20847,13 +20884,13 @@ fn next_agent_goal_with_station_runtime(
             // seal it off, attack the reachable building closest to it instead
             // of repeatedly requesting an impossible A* path and idling.
             let route = enemy_navigation
-                .and_then(|navigation| navigation.destination(current))
+                .and_then(|navigation| navigation.destination(current_navigation))
                 .and_then(|(building, approach)| {
                     simulation
                         .buildings
                         .get(building)
                         .filter(|building| building.health > 0)
-                        .map(|building| (building.id.clone(), approach))
+                        .map(|building| (building.id.clone(), navigation_to_placement(approach)))
                 })
                 .or_else(|| {
                     if enemy_navigation.is_none() {
@@ -21240,37 +21277,6 @@ impl RegenerationSpatialIndex {
     }
 }
 
-fn cell_is_clear_of_trees_indexed(
-    trees: &HashSet<GridPos>,
-    position: GridPos,
-    minimum_distance: u16,
-) -> bool {
-    let minimum_squared = u64::from(minimum_distance) * u64::from(minimum_distance);
-    let radius = i32::from(minimum_distance.saturating_sub(1));
-    (-radius..=radius).all(|z| {
-        (-radius..=radius).all(|x| {
-            let distance_squared = i64::from(x) * i64::from(x) + i64::from(z) * i64::from(z);
-            distance_squared >= i64::try_from(minimum_squared).unwrap_or(i64::MAX)
-                || offset_grid_unbounded(position, x, z).is_none_or(|cell| !trees.contains(&cell))
-        })
-    })
-}
-
-#[cfg(test)]
-fn cell_is_clear_of_trees(
-    world: &GeneratedWorld,
-    position: GridPos,
-    minimum_distance: u16,
-) -> bool {
-    let trees = world
-        .resources
-        .iter()
-        .filter(|resource| resource.amount > 0 && resource.target_kind.as_str() == "target:tree")
-        .map(|resource| resource.position)
-        .collect::<HashSet<_>>();
-    cell_is_clear_of_trees_indexed(&trees, position, minimum_distance)
-}
-
 fn offset_grid_unbounded(position: GridPos, x: i32, z: i32) -> Option<GridPos> {
     let x = i32::from(position.x).checked_add(x)?;
     let z = i32::from(position.z).checked_add(z)?;
@@ -21510,23 +21516,18 @@ fn tender_planting_cell(
             valid_regeneration_cell_indexed(content, simulation, world, &spatial, *candidate)
         })
         .filter(|candidate| cell_is_clear_of_buildings(content, simulation, world, *candidate, 10))
-        .filter(|candidate| cell_is_clear_of_trees_indexed(&spatial.trees, *candidate, 5))
+        .filter(|candidate| {
+            let nearest_tree = nearest_resource_distance_capped(&spatial.trees, *candidate, 37);
+            (9..=36).contains(&nearest_tree)
+        })
         .filter(|candidate| !reserved.contains(candidate))
         .collect::<Vec<_>>();
     fields.sort_by_cached_key(|candidate| {
-        let nearest_resource =
-            nearest_resource_distance_capped(&spatial.resources, *candidate, 100);
         let coordinate = u64::from(candidate.x) | (u64::from(candidate.z) << 16);
-        (
-            // Once a cell has ten tiles of open field around it, actor-specific
-            // variation is more valuable than sending every tender to the same
-            // globally-farthest point.
-            std::cmp::Reverse(nearest_resource.min(100)),
-            seagull_hash(
-                world.seed ^ stable_id_hash(actor),
-                coordinate ^ (u64::from(sequence) << 32),
-                0x5445_4E44_4552,
-            ),
+        seagull_hash(
+            world.seed ^ stable_id_hash(actor),
+            coordinate ^ (u64::from(sequence) << 32),
+            0x5445_4E44_4552,
         )
     });
     fields.into_iter().find_map(|candidate| {
@@ -24332,6 +24333,24 @@ fn completed_player_gate_cells(
         .collect()
 }
 
+fn completed_player_gate_navigation_cells(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+) -> HashSet<GridPos> {
+    let gate_id = StableId::new("building:gate").expect("static ID");
+    let Some(gate) = content.buildings.get(&gate_id) else {
+        return HashSet::new();
+    };
+    simulation
+        .buildings
+        .values()
+        .filter(|building| building.complete && building.archetype == gate.archetype)
+        .flat_map(|building| {
+            linear_navigation_cells(content, simulation, building, &gate_id).into_iter()
+        })
+        .collect()
+}
+
 #[cfg(test)]
 fn agent_path(
     navigation: &stream_town_domain::NavGrid,
@@ -24365,7 +24384,31 @@ fn try_agent_path(
     path.ok()
 }
 
-fn try_agent_path_for_goal(
+fn try_fine_agent_path(
+    navigation: &stream_town_domain::NavGrid,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    kind: &ActorKind,
+    start: GridPos,
+    placement_goal: GridPos,
+) -> Option<Vec<GridPos>> {
+    let goal = placement_to_navigation_centre(placement_goal);
+    let mut exceptions = if *kind == ActorKind::Player {
+        completed_player_gate_navigation_cells(content, simulation)
+    } else {
+        HashSet::new()
+    };
+    // A topology change can leave an actor standing in a newly blocked fine
+    // cell. Let it leave that cell instead of waiting for the unstuck timeout.
+    if navigation.contains(start) && !navigation.is_walkable(start) {
+        exceptions.insert(start);
+    }
+    navigation
+        .find_path_with_exceptions(start, goal, &exceptions)
+        .ok()
+}
+
+fn try_fine_agent_path_for_goal(
     navigation: &stream_town_domain::NavGrid,
     content: &ContentCatalog,
     simulation: &WorldSimulation,
@@ -24373,8 +24416,9 @@ fn try_agent_path_for_goal(
     kind: &ActorKind,
     goal_kind: &AgentGoal,
     start: GridPos,
-    goal: GridPos,
+    placement_goal: GridPos,
 ) -> Option<Vec<GridPos>> {
+    let goal = placement_to_navigation_centre(placement_goal);
     if *kind == ActorKind::Enemy
         && let AgentGoal::AttackBuilding(building) = goal_kind
         && let Some(path) = enemy_navigation.and_then(|field| field.path_to(start, building, goal))
@@ -24387,7 +24431,7 @@ fn try_agent_path_for_goal(
     {
         return Some(path);
     }
-    try_agent_path(navigation, content, simulation, kind, start, goal)
+    try_fine_agent_path(navigation, content, simulation, kind, start, placement_goal)
 }
 
 fn agent_action_facing_grid(
@@ -24504,8 +24548,8 @@ fn agent_path_world_target(
     world: &GeneratedWorld,
     config: &GameConfig,
 ) -> Vec3 {
-    let mut target = grid_to_world_on_surface(next, config, world);
-    if next != agent.target {
+    let mut target = navigation_to_world_on_surface(next, config, world);
+    if next != placement_to_navigation_centre(agent.target) {
         return target;
     }
     let AgentGoal::Gather(resource_id) = &agent.goal else {
@@ -24553,9 +24597,10 @@ fn actor_movement_speed_on_path(
     simulation: &WorldSimulation,
     paths: &PathSurfaceRuntime,
     actor_id: &StableId,
+    navigation_position: GridPos,
 ) -> f32 {
     let speed = actor_movement_speed(config, content, simulation, actor_id);
-    let Some(actor) = simulation
+    let Some(_actor) = simulation
         .actors
         .get(actor_id)
         .filter(|actor| actor.role.as_str() != "role:enemy")
@@ -24567,7 +24612,7 @@ fn actor_movement_speed_on_path(
             + f32::from(
                 paths
                     .levels
-                    .get(&actor.position)
+                    .get(&navigation_position)
                     .copied()
                     .unwrap_or_default(),
             ) * 0.05)
@@ -24672,6 +24717,7 @@ fn return_agent_to_town_hall(
     transform.translation = world_position;
     location.0 = spawn;
     agent.origin = spawn;
+    agent.navigation_position = placement_to_navigation_centre(spawn);
     agent.target = spawn;
     agent.goal = AgentGoal::Wander;
     agent.path.clear();
@@ -24743,6 +24789,9 @@ fn move_agents(
     if let Some(weather) = debug_weather_override() {
         simulation.0.weather = weather;
     }
+    let Some(navigation) = movement_stats.fine_navigation.grid.as_ref() else {
+        return;
+    };
     let mut resource_reservations = BTreeMap::new();
     let mut target_assignment_counts: BTreeMap<StableId, u32> = BTreeMap::new();
     let mut occupied_approaches = simulation
@@ -24827,7 +24876,7 @@ fn move_agents(
         .filter_map(|(_, agent, _, _, transform, _)| {
             let next = agent.path.get(agent.path_index).copied()?;
             let position = Vec2::new(transform.translation.x, transform.translation.z);
-            let target = grid_to_world_on_surface(next, &config.0, &world.generated);
+            let target = navigation_to_world_on_surface(next, &config.0, &world.generated);
             let direction = Vec2::new(target.x - position.x, target.z - position.y);
             let speed = actor_movement_speed_on_path(
                 &config.0,
@@ -24835,6 +24884,7 @@ fn move_agents(
                 &simulation.0,
                 &movement_stats.path_surfaces,
                 &agent.id,
+                agent.navigation_position,
             ) * config.0.world.cell_size;
             Some((
                 agent.id.clone(),
@@ -24962,6 +25012,7 @@ fn move_agents(
                 transform.translation = world_position;
                 location.0 = actor_position;
                 agent.origin = actor_position;
+                agent.navigation_position = placement_to_navigation_centre(actor_position);
                 agent.target =
                     deterministic_wander_target(&world.generated, &agent.id, actor_position);
                 agent.path.clear();
@@ -25011,6 +25062,7 @@ fn move_agents(
             transform.translation = world_position;
             location.0 = spawn;
             agent.origin = spawn;
+            agent.navigation_position = placement_to_navigation_centre(spawn);
             agent.target = deterministic_wander_target(&world.generated, &agent.id, spawn);
             agent.action_cooldown_seconds = 0.0;
             agent.action_started = false;
@@ -25061,6 +25113,7 @@ fn move_agents(
                     &station_targets,
                     &agent.id,
                     location.0,
+                    agent.navigation_position,
                     &resource_reservations,
                     &target_assignment_counts,
                     &occupied_approaches,
@@ -25266,6 +25319,7 @@ fn move_agents(
                         &station_targets,
                         &agent.id,
                         location.0,
+                        agent.navigation_position,
                         &planning_reservations,
                         &target_assignment_counts,
                         &occupied_approaches,
@@ -25275,14 +25329,14 @@ fn move_agents(
                 if candidate_goal == AgentGoal::Wander {
                     break (candidate_goal, candidate_target, None);
                 }
-                if let Some(path) = try_agent_path_for_goal(
-                    &world.generated.navigation,
+                if let Some(path) = try_fine_agent_path_for_goal(
+                    navigation,
                     &content.0,
                     &simulation.0,
                     enemy_navigation.field.as_ref(),
                     &agent.kind,
                     &candidate_goal,
-                    location.0,
+                    agent.navigation_position,
                     candidate_target,
                 ) {
                     break (candidate_goal, candidate_target, Some(path));
@@ -25363,14 +25417,14 @@ fn move_agents(
                 target
             };
             if planned_path.is_none() {
-                planned_path = try_agent_path_for_goal(
-                    &world.generated.navigation,
+                planned_path = try_fine_agent_path_for_goal(
+                    navigation,
                     &content.0,
                     &simulation.0,
                     enemy_navigation.field.as_ref(),
                     &agent.kind,
                     &goal,
-                    location.0,
+                    agent.navigation_position,
                     target,
                 );
             }
@@ -25411,7 +25465,7 @@ fn move_agents(
                 construction_approaches.insert(target, agent.id.clone());
             }
             agent.target = target;
-            agent.path = planned_path.unwrap_or_else(|| vec![location.0]);
+            agent.path = planned_path.unwrap_or_else(|| vec![agent.navigation_position]);
             agent.path_index = usize::from(agent.path.len() > 1);
         }
         let Some(next) = agent.path.get(agent.path_index).copied() else {
@@ -25430,21 +25484,25 @@ fn move_agents(
             &simulation.0,
             &movement_stats.path_surfaces,
             &agent.id,
+            agent.navigation_position,
         ) * predictive_factors.get(&agent.id).copied().unwrap_or(1.0);
         let step = speed * config.0.world.cell_size * time.delta_secs();
         if distance.length_squared() <= step * step {
             transform.translation = target;
+            let previous_placement = location.0;
+            agent.navigation_position = next;
+            let next_placement = navigation_to_placement(next);
             record_completed_cell_traversal(
                 &mut movement_stats.traversal_wear,
                 &config.0.terrain,
                 &agent.kind,
-                location.0,
-                next,
+                previous_placement,
+                next_placement,
             );
-            location.0 = next;
+            location.0 = next_placement;
             agent.path_index += 1;
             if let Some(actor) = simulation.0.actors.get_mut(&agent.id) {
-                actor.position = next;
+                actor.position = next_placement;
             }
         } else {
             transform.translation += distance.normalize_or_zero() * step;
@@ -25484,7 +25542,8 @@ fn move_agents(
                 axis_corrected.is_some(),
             );
         if !action_facing && let Some(facing_grid) = agent.path.get(agent.path_index).copied() {
-            let facing_target = grid_to_world_on_surface(facing_grid, &config.0, &world.generated);
+            let facing_target =
+                navigation_to_world_on_surface(facing_grid, &config.0, &world.generated);
             rotate_agent_toward(
                 &mut transform,
                 facing_target,
@@ -34848,6 +34907,7 @@ fn load_input(
                 goal: AgentGoal::Wander,
                 spawn: position,
                 origin: position,
+                navigation_position: placement_to_navigation_centre(position),
                 path: Vec::new(),
                 path_index: 0,
                 target: deterministic_wander_target(&world.generated, &saved.id, position),
@@ -35965,14 +36025,340 @@ fn building_navigation_region(
     rotation_quarter_turns: i32,
     world: &GeneratedWorld,
 ) -> Option<stream_town_domain::DirtyRegion> {
-    // Unity updates A* from a BoxCollider whose X/Z dimensions exactly match
-    // the authored footprint. The surrounding cells are the intended walkway;
-    // insetting the blocked region let actors cross the models themselves.
+    // The coarse grid remains the authoritative placement and exclusion map.
+    // Physical movement uses `FineNavigationRuntime`, where the independently
+    // authored footprint can be inset without weakening placement validation.
     building_region(
         position,
         rotated_footprint(definition.footprint, rotation_quarter_turns),
         world,
     )
+}
+
+fn placement_to_navigation_centre(position: GridPos) -> GridPos {
+    GridPos {
+        x: position
+            .x
+            .saturating_mul(NAVIGATION_SUBDIVISIONS)
+            .saturating_add(NAVIGATION_SUBDIVISIONS / 2),
+        z: position
+            .z
+            .saturating_mul(NAVIGATION_SUBDIVISIONS)
+            .saturating_add(NAVIGATION_SUBDIVISIONS / 2),
+    }
+}
+
+fn navigation_to_placement(position: GridPos) -> GridPos {
+    GridPos {
+        x: position.x / NAVIGATION_SUBDIVISIONS,
+        z: position.z / NAVIGATION_SUBDIVISIONS,
+    }
+}
+
+fn navigation_to_world_on_surface(
+    position: GridPos,
+    config: &GameConfig,
+    world: &GeneratedWorld,
+) -> Vec3 {
+    let half = f32::from(NAVIGATION_SUBDIVISIONS / 2);
+    let subdivision = f32::from(NAVIGATION_SUBDIVISIONS);
+    let logical_x = (f32::from(position.x) - half) / subdivision;
+    let logical_z = (f32::from(position.z) - half) / subdivision;
+    let mut result = Vec3::new(
+        (logical_x - f32::from(config.world.width.saturating_sub(1)) * 0.5)
+            * config.world.cell_size,
+        0.0,
+        (logical_z - f32::from(config.world.height.saturating_sub(1)) * 0.5)
+            * config.world.cell_size,
+    );
+    result.y = terrain_surface_height_at_world(world, config, result.x, result.z)
+        .unwrap_or_else(|| terrain_height(world, navigation_to_placement(position)));
+    result
+}
+
+fn default_navigation_footprint_thirds(placement: [u16; 2]) -> [u16; 2] {
+    placement.map(|axis| {
+        axis.saturating_mul(NAVIGATION_SUBDIVISIONS)
+            .saturating_sub(2)
+            .max(1)
+    })
+}
+
+fn linear_neighbour_value(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    state: &BuildingState,
+    building_id: &StableId,
+) -> u8 {
+    let connects = |other: &BuildingState| {
+        content.buildings.iter().any(|(id, definition)| {
+            definition.archetype == other.archetype
+                && if building_id.as_str() == "building:path" {
+                    id.as_str() == "building:path"
+                } else {
+                    matches!(id.as_str(), "building:wall" | "building:gate")
+                }
+        })
+    };
+    simulation
+        .buildings
+        .values()
+        .filter(|other| other.id != state.id && connects(other))
+        .fold(0_u8, |value, other| {
+            value
+                | match (
+                    i32::from(other.position.x) - i32::from(state.position.x),
+                    i32::from(other.position.z) - i32::from(state.position.z),
+                ) {
+                    (1, 0) => 8,
+                    (-1, 0) => 2,
+                    (0, 1) => 16,
+                    (0, -1) => 4,
+                    _ => 0,
+                }
+        })
+}
+
+fn linear_navigation_cells(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    state: &BuildingState,
+    building_id: &StableId,
+) -> Vec<GridPos> {
+    let centre = placement_to_navigation_centre(state.position);
+    let mut connections = linear_neighbour_value(content, simulation, state, building_id);
+    let horizontal = connections & (2 | 8) != 0;
+    let vertical = connections & (4 | 16) != 0;
+    if horizontal ^ vertical {
+        // A line endpoint still spans its full placement cell, avoiding a one-third
+        // gap between a wall/gate and the next non-linear obstruction.
+        connections |= if horizontal { 2 | 8 } else { 4 | 16 };
+    } else if connections == 0 {
+        // An isolated segment has no neighbours from which to infer its axis,
+        // so retain the direction selected by the placement command.
+        connections = if state.rotation_quarter_turns.rem_euclid(2) == 0 {
+            4 | 16
+        } else {
+            2 | 8
+        };
+    }
+    let mut cells = vec![centre];
+    if connections & 2 != 0 {
+        cells.push(GridPos {
+            x: centre.x.saturating_sub(1),
+            z: centre.z,
+        });
+    }
+    if connections & 8 != 0 {
+        cells.push(GridPos {
+            x: centre.x.saturating_add(1),
+            z: centre.z,
+        });
+    }
+    if connections & 4 != 0 {
+        cells.push(GridPos {
+            x: centre.x,
+            z: centre.z.saturating_sub(1),
+        });
+    }
+    if connections & 16 != 0 {
+        cells.push(GridPos {
+            x: centre.x,
+            z: centre.z.saturating_add(1),
+        });
+    }
+    cells.sort_unstable();
+    cells.dedup();
+    cells
+}
+
+fn rectangular_navigation_cells(
+    position: GridPos,
+    placement: [u16; 2],
+    navigation: [u16; 2],
+    rotation_quarter_turns: i32,
+) -> Vec<GridPos> {
+    let placement = rotated_footprint(placement, rotation_quarter_turns);
+    let navigation = rotated_footprint(navigation, rotation_quarter_turns);
+    let full = placement.map(|axis| axis.saturating_mul(NAVIGATION_SUBDIVISIONS));
+    let offset = [
+        full[0].saturating_sub(navigation[0]) / 2,
+        full[1].saturating_sub(navigation[1]) / 2,
+    ];
+    let origin = GridPos {
+        x: position
+            .x
+            .saturating_mul(NAVIGATION_SUBDIVISIONS)
+            .saturating_add(offset[0]),
+        z: position
+            .z
+            .saturating_mul(NAVIGATION_SUBDIVISIONS)
+            .saturating_add(offset[1]),
+    };
+    (0..navigation[1])
+        .flat_map(|z| {
+            (0..navigation[0]).map(move |x| GridPos {
+                x: origin.x.saturating_add(x),
+                z: origin.z.saturating_add(z),
+            })
+        })
+        .collect()
+}
+
+fn building_fine_navigation_cells(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    state: &BuildingState,
+    building_id: &StableId,
+    definition: &BuildingDef,
+) -> Vec<GridPos> {
+    if matches!(building_id.as_str(), "building:wall" | "building:gate") {
+        return linear_navigation_cells(content, simulation, state, building_id);
+    }
+    let navigation = definition
+        .navigation_footprint_thirds
+        .unwrap_or_else(|| default_navigation_footprint_thirds(definition.footprint));
+    rectangular_navigation_cells(
+        state.position,
+        definition.footprint,
+        navigation,
+        state.rotation_quarter_turns,
+    )
+}
+
+fn fine_navigation_signature(world: &GeneratedWorld, simulation: &WorldSimulation) -> u64 {
+    let mut signature = world.navigation.topology_signature() ^ 0x6a09_e667_f3bc_c909;
+    for building in simulation.buildings.values() {
+        signature = signature
+            .wrapping_mul(0x0000_0100_0000_01b3)
+            .wrapping_add(stable_id_hash(&building.id))
+            .wrapping_add(u64::from(building.position.x) << 16)
+            .wrapping_add(u64::from(building.position.z))
+            .wrapping_add(
+                u64::from(u32::from_ne_bytes(
+                    building.rotation_quarter_turns.to_ne_bytes(),
+                )) << 32,
+            );
+    }
+    signature
+}
+
+fn build_fine_navigation(
+    config: &GameConfig,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+) -> Result<stream_town_domain::NavGrid, stream_town_domain::NavigationError> {
+    let width = config
+        .world
+        .width
+        .checked_mul(NAVIGATION_SUBDIVISIONS)
+        .ok_or(stream_town_domain::NavigationError::BufferSize)?;
+    let height = config
+        .world
+        .height
+        .checked_mul(NAVIGATION_SUBDIVISIONS)
+        .ok_or(stream_town_domain::NavigationError::BufferSize)?;
+    let mut blocked = Vec::with_capacity(usize::from(width) * usize::from(height));
+    let mut heights = Vec::with_capacity(blocked.capacity());
+    for z in 0..height {
+        for x in 0..width {
+            let placement = navigation_to_placement(GridPos { x, z });
+            let terrain_height = world.navigation.height_at(placement).unwrap_or_default();
+            heights.push(terrain_height);
+            blocked.push(terrain_height < NAVIGATION_TERRAIN_MIN_HEIGHT_CENTIMETRES);
+        }
+    }
+    let index = |position: GridPos| {
+        (position.x < width && position.z < height)
+            .then(|| usize::from(position.z) * usize::from(width) + usize::from(position.x))
+    };
+    let spawn = GridPos {
+        x: config.world.width / 2,
+        z: config.world.height / 2,
+    };
+    for z in 0..NAVIGATION_SUBDIVISIONS {
+        for x in 0..NAVIGATION_SUBDIVISIONS {
+            let position = GridPos {
+                x: spawn
+                    .x
+                    .saturating_mul(NAVIGATION_SUBDIVISIONS)
+                    .saturating_add(x),
+                z: spawn
+                    .z
+                    .saturating_mul(NAVIGATION_SUBDIVISIONS)
+                    .saturating_add(z),
+            };
+            if let Some(index) = index(position) {
+                blocked[index] = false;
+            }
+        }
+    }
+    for resource in world
+        .resources
+        .iter()
+        .filter(|resource| resource.amount > 0 && resource.target_kind.as_str() != "target:fish")
+    {
+        if let Some(index) = index(placement_to_navigation_centre(resource.position)) {
+            blocked[index] = true;
+        }
+    }
+    for state in simulation.buildings.values() {
+        let Some((building_id, definition)) = content
+            .buildings
+            .iter()
+            .find(|(_, definition)| definition.archetype == state.archetype)
+        else {
+            continue;
+        };
+        if !building_blocks_navigation(definition) {
+            continue;
+        }
+        for position in
+            building_fine_navigation_cells(content, simulation, state, building_id, definition)
+        {
+            if let Some(index) = index(position) {
+                blocked[index] = true;
+            }
+        }
+    }
+    for camp in simulation.enemy_camps.values() {
+        let Some(archetype) = content.archetypes.get(&camp.archetype) else {
+            continue;
+        };
+        let footprint = [archetype.footprint[0].min(3), archetype.footprint[1].min(3)];
+        for position in rectangular_navigation_cells(
+            camp.position,
+            footprint,
+            footprint.map(|axis| axis.saturating_mul(NAVIGATION_SUBDIVISIONS)),
+            0,
+        ) {
+            if let Some(index) = index(position) {
+                blocked[index] = true;
+            }
+        }
+    }
+    stream_town_domain::NavGrid::new(width, height, blocked, heights)
+}
+
+fn sync_fine_navigation(
+    config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    world: Res<WorldRuntime>,
+    mut runtime: ResMut<FineNavigationRuntime>,
+) {
+    let signature = fine_navigation_signature(&world.generated, &simulation.0);
+    if runtime.grid.is_some() && runtime.applied_signature == signature {
+        return;
+    }
+    match build_fine_navigation(&config.0, &content.0, &simulation.0, &world.generated) {
+        Ok(grid) => {
+            runtime.grid = Some(grid);
+            runtime.applied_signature = signature;
+        }
+        Err(error) => error!(%error, "failed to build the navigation-only third-cell grid"),
+    }
 }
 
 fn enemy_camp_navigation_region(
@@ -36151,6 +36537,11 @@ fn path_surface_signature(
             .wrapping_add(stable_id_hash(&building.id))
             .wrapping_add(u64::from(building.position.x) << 16)
             .wrapping_add(u64::from(building.position.z))
+            .wrapping_add(
+                u64::from(u32::from_ne_bytes(
+                    building.rotation_quarter_turns.to_ne_bytes(),
+                )) << 8,
+            )
             .wrapping_add(u64::from(building.level) << 40);
     }
     signature
@@ -36163,9 +36554,20 @@ fn sync_path_surface_texture(
     render: Res<RenderAssets>,
     mut runtime: ResMut<PathSurfaceRuntime>,
     images: Option<ResMut<Assets<Image>>>,
+    mut terrain_materials: Option<ResMut<Assets<TerrainMaterial>>>,
 ) {
-    let width = config.0.world.width.max(1);
-    let height = config.0.world.height.max(1);
+    let width = config
+        .0
+        .world
+        .width
+        .saturating_mul(NAVIGATION_SUBDIVISIONS)
+        .max(1);
+    let height = config
+        .0
+        .world
+        .height
+        .saturating_mul(NAVIGATION_SUBDIVISIONS)
+        .max(1);
     let signature = path_surface_signature(&content.0, &simulation.0, width, height);
     if runtime.initialized && runtime.applied_signature == signature {
         return;
@@ -36179,10 +36581,11 @@ fn sync_path_surface_texture(
     if image.width() != u32::from(width) || image.height() != u32::from(height) {
         *image = traversal_wear_image(width, height);
     }
+    let path_id = StableId::new("building:path").expect("static path ID");
     let path_archetype = content
         .0
         .buildings
-        .get(&StableId::new("building:path").expect("static path ID"))
+        .get(&path_id)
         .map(|definition| &definition.archetype);
     let Some(data) = image.data.as_mut() else {
         return;
@@ -36195,20 +36598,31 @@ fn sync_path_surface_texture(
         building.complete
             && path_archetype.is_some_and(|archetype| *archetype == building.archetype)
     }) {
-        if building.position.x >= width || building.position.z >= height {
-            continue;
+        for position in linear_navigation_cells(&content.0, &simulation.0, building, &path_id) {
+            if position.x >= width || position.z >= height {
+                continue;
+            }
+            let index =
+                (usize::from(position.z) * usize::from(width) + usize::from(position.x)) * 4;
+            if let Some(level) = data.get_mut(index) {
+                *level = u8::try_from(building.level.min(u16::from(u8::MAX))).unwrap_or(u8::MAX);
+            }
+            runtime
+                .levels
+                .entry(position)
+                .and_modify(|level| *level = (*level).max(building.level))
+                .or_insert(building.level);
         }
-        let index = (usize::from(building.position.z) * usize::from(width)
-            + usize::from(building.position.x))
-            * 4;
-        if let Some(level) = data.get_mut(index) {
-            *level = u8::try_from(building.level.min(u16::from(u8::MAX))).unwrap_or(u8::MAX);
-        }
-        runtime
-            .levels
-            .entry(building.position)
-            .and_modify(|level| *level = (*level).max(building.level))
-            .or_insert(building.level);
+    }
+    if let Some(materials) = terrain_materials.as_mut()
+        && let Some(mut material) = materials.get_mut(&render.ground)
+    {
+        material.extension.parameters.path_grid = Vec4::new(
+            f32::from(width),
+            f32::from(height),
+            config.0.world.cell_size / f32::from(NAVIGATION_SUBDIVISIONS),
+            1.0,
+        );
     }
     runtime.applied_signature = signature;
     runtime.initialized = true;
@@ -36694,7 +37108,11 @@ fn enemy_spawn_position(
                         )
                         .is_some()
                     },
-                    |field| field.destination(candidate).is_some(),
+                    |field| {
+                        field
+                            .destination(placement_to_navigation_centre(candidate))
+                            .is_some()
+                    },
                 );
                 if world.navigation.is_walkable(candidate) && reaches_town {
                     return candidate;
@@ -36845,6 +37263,7 @@ fn spawn_runtime_enemy_entity(
             goal: AgentGoal::Wander,
             spawn: position,
             origin: position,
+            navigation_position: placement_to_navigation_centre(position),
             path: Vec::new(),
             path_index: 0,
             target: deterministic_wander_target(world, id, position),
@@ -37690,6 +38109,7 @@ fn recruit_npcs(
                 goal: AgentGoal::Wander,
                 spawn: position,
                 origin: position,
+                navigation_position: placement_to_navigation_centre(position),
                 path: Vec::new(),
                 path_index: 0,
                 target,
@@ -38272,6 +38692,7 @@ fn process_injected_commands(
                                     goal: AgentGoal::Wander,
                                     spawn: position,
                                     origin: position,
+                                    navigation_position: placement_to_navigation_centre(position),
                                     path: Vec::new(),
                                     path_index: 0,
                                     target,
@@ -40952,6 +41373,7 @@ fn cleanup_world(
         commands.entity(entity).try_despawn();
     }
     commands.remove_resource::<WorldRuntime>();
+    commands.insert_resource(FineNavigationRuntime::default());
     commands.remove_resource::<SimulationRuntime>();
     commands.remove_resource::<WorldRevealRuntime>();
     commands.remove_resource::<GameplayReady>();
@@ -42424,12 +42846,19 @@ mod tests {
         let mut simulation = WorldSimulation::new(7);
         assert!(simulation.join_player(citizen.clone(), position));
         let base = actor_movement_speed(&config, &content, &simulation, &citizen);
+        let navigation_position = placement_to_navigation_centre(position);
         let paths = PathSurfaceRuntime {
-            levels: HashMap::from([(position, 3)]),
+            levels: HashMap::from([(navigation_position, 3)]),
             ..default()
         };
-        let accelerated =
-            actor_movement_speed_on_path(&config, &content, &simulation, &paths, &citizen);
+        let accelerated = actor_movement_speed_on_path(
+            &config,
+            &content,
+            &simulation,
+            &paths,
+            &citizen,
+            navigation_position,
+        );
         assert!((accelerated - base * 1.15).abs() < 0.000_1);
     }
 
@@ -42797,6 +43226,7 @@ mod tests {
                     goal: AgentGoal::Wander,
                     spawn: GridPos { x: 10, z: 10 },
                     origin: GridPos { x: 10, z: 10 },
+                    navigation_position: placement_to_navigation_centre(GridPos { x: 10, z: 10 }),
                     path: Vec::new(),
                     path_index: 0,
                     target: GridPos { x: 10, z: 10 },
@@ -42921,6 +43351,7 @@ mod tests {
                     goal: AgentGoal::Wander,
                     spawn: position,
                     origin: position,
+                    navigation_position: placement_to_navigation_centre(position),
                     path: Vec::new(),
                     path_index: 0,
                     target: position,
@@ -43075,6 +43506,7 @@ mod tests {
                 goal: AgentGoal::Wander,
                 spawn: position,
                 origin: position,
+                navigation_position: placement_to_navigation_centre(position),
                 path: Vec::new(),
                 path_index: 0,
                 target: position,
@@ -43817,6 +44249,7 @@ mod tests {
                 goal: AgentGoal::Wander,
                 spawn: GridPos { x: 2, z: 2 },
                 origin: GridPos { x: 2, z: 2 },
+                navigation_position: placement_to_navigation_centre(GridPos { x: 2, z: 2 }),
                 path: Vec::new(),
                 path_index: 0,
                 target: GridPos { x: 2, z: 2 },
@@ -45920,6 +46353,7 @@ mod tests {
             goal: AgentGoal::Deposit,
             spawn: position,
             origin: position,
+            navigation_position: placement_to_navigation_centre(position),
             path: vec![position],
             path_index: 1,
             target: position,
@@ -46554,6 +46988,7 @@ mod tests {
             goal,
             spawn: GridPos { x: 10, z: 10 },
             origin: GridPos { x: 10, z: 10 },
+            navigation_position: placement_to_navigation_centre(GridPos { x: 10, z: 10 }),
             path: vec![GridPos { x: 10, z: 10 }],
             path_index: 1,
             target: GridPos { x: 10, z: 10 },
@@ -47725,6 +48160,7 @@ mod tests {
             &station_targets,
             &actor_id,
             current,
+            placement_to_navigation_centre(current),
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -47755,6 +48191,7 @@ mod tests {
             &station_targets,
             &actor_id,
             current,
+            placement_to_navigation_centre(current),
             &retry_reservations,
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -48837,7 +49274,7 @@ mod tests {
     }
 
     #[test]
-    fn building_navigation_uses_the_authored_unity_collider_footprints() {
+    fn coarse_building_occupancy_preserves_authored_placement_footprints() {
         let content = embedded_content();
         let world = GeneratedWorld {
             seed: 1,
@@ -48872,6 +49309,149 @@ mod tests {
         let camp = enemy_camp_navigation_region(origin, [7, 6], &world).unwrap();
         assert_eq!(camp.min, GridPos { x: 10, z: 9 });
         assert_eq!(camp.max, GridPos { x: 12, z: 11 });
+    }
+
+    #[test]
+    fn fine_navigation_decouples_physical_obstructions_from_placement_cells() {
+        let mut config = GameConfig::default();
+        config.world.width = 24;
+        config.world.height = 24;
+        let content = embedded_content();
+        for building in ["foodstorage", "orestorage", "woodstorage", "windmill"] {
+            let definition =
+                &content.buildings[&StableId::new(format!("building:{building}")).unwrap()];
+            assert_eq!(definition.footprint, [2, 2]);
+            assert_eq!(definition.navigation_footprint_thirds, Some([4, 4]));
+        }
+        let house = &content.buildings[&StableId::new("building:house").unwrap()];
+        assert_eq!(house.footprint, [2, 3]);
+        assert_eq!(house.navigation_footprint_thirds, None);
+        let tower = &content.buildings[&StableId::new("building:tower").unwrap()];
+        assert_eq!(tower.footprint, [1, 1]);
+        assert_eq!(tower.navigation_footprint_thirds, Some([3, 3]));
+        let mut world = GeneratedWorld {
+            seed: 7,
+            generator_version: 1,
+            navigation: stream_town_domain::NavGrid::new(
+                24,
+                24,
+                vec![false; 24 * 24],
+                vec![100; 24 * 24],
+            )
+            .unwrap(),
+            resources: vec![stream_town_domain::GeneratedResource {
+                id: StableId::new("resource:fine-grid-test").unwrap(),
+                kind: StableId::new("resource:wood").unwrap(),
+                target_kind: StableId::new("target:tree").unwrap(),
+                position: GridPos { x: 8, z: 8 },
+                offset_milli_cells: [0, 0],
+                generation_occupancy: [0, 0],
+                amount: 100,
+            }],
+            foliage: Vec::new(),
+            deterministic_hash: String::new(),
+        };
+        // Fine navigation is rebuilt from terrain plus authored physical
+        // footprints, not from the coarse placement occupancy.
+        world
+            .navigation
+            .set_blocked(
+                stream_town_domain::DirtyRegion {
+                    min: GridPos { x: 8, z: 8 },
+                    max: GridPos { x: 8, z: 8 },
+                },
+                true,
+            )
+            .unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        let mut add_building = |runtime_id: &str, building_id: &str, position: GridPos| {
+            let definition = &content.buildings[&StableId::new(building_id).unwrap()];
+            let id = StableId::new(runtime_id).unwrap();
+            simulation.buildings.insert(
+                id.clone(),
+                BuildingState {
+                    id,
+                    archetype: definition.archetype.clone(),
+                    position,
+                    rotation_quarter_turns: 0,
+                    level: 1,
+                    health: 100,
+                    complete: true,
+                },
+            );
+        };
+        add_building(
+            "building:runtime_house",
+            "building:house",
+            GridPos { x: 2, z: 2 },
+        );
+        add_building(
+            "building:runtime_storage",
+            "building:orestorage",
+            GridPos { x: 2, z: 10 },
+        );
+        add_building(
+            "building:runtime_tower",
+            "building:tower",
+            GridPos { x: 10, z: 2 },
+        );
+        add_building(
+            "building:runtime_wall_a",
+            "building:wall",
+            GridPos { x: 15, z: 5 },
+        );
+        add_building(
+            "building:runtime_wall_b",
+            "building:wall",
+            GridPos { x: 16, z: 5 },
+        );
+        add_building(
+            "building:runtime_gate",
+            "building:gate",
+            GridPos { x: 17, z: 5 },
+        );
+
+        let navigation = build_fine_navigation(&config, &content, &simulation, &world).unwrap();
+        assert_eq!((navigation.width(), navigation.height()), (72, 72));
+
+        // A 2x3 house uses the central 4x7 fine cells, leaving one third-cell
+        // of physical clearance around every placement edge.
+        assert!(navigation.is_walkable(GridPos { x: 6, z: 6 }));
+        assert!(!navigation.is_walkable(GridPos { x: 7, z: 7 }));
+        assert!(!navigation.is_walkable(GridPos { x: 10, z: 13 }));
+        assert!(navigation.is_walkable(GridPos { x: 11, z: 14 }));
+
+        // Explicit exceptions remain exact: storage is 4x4, tower is a solid
+        // 3x3 placement cell, and a resource blocks only its central third.
+        assert!(!navigation.is_walkable(GridPos { x: 7, z: 31 }));
+        assert!(!navigation.is_walkable(GridPos { x: 10, z: 34 }));
+        assert!(navigation.is_walkable(GridPos { x: 6, z: 30 }));
+        assert!(!navigation.is_walkable(GridPos { x: 30, z: 6 }));
+        assert!(!navigation.is_walkable(GridPos { x: 32, z: 8 }));
+        assert!(!navigation.is_walkable(GridPos { x: 25, z: 25 }));
+        assert!(navigation.is_walkable(GridPos { x: 24, z: 25 }));
+
+        let gate_cells = completed_player_gate_navigation_cells(&content, &simulation);
+        assert_eq!(gate_cells.len(), 3);
+        assert!(
+            gate_cells
+                .iter()
+                .all(|position| !navigation.is_walkable(*position))
+        );
+        let wall_a = linear_navigation_cells(
+            &content,
+            &simulation,
+            &simulation.buildings[&StableId::new("building:runtime_wall_a").unwrap()],
+            &StableId::new("building:wall").unwrap(),
+        );
+        let wall_b = linear_navigation_cells(
+            &content,
+            &simulation,
+            &simulation.buildings[&StableId::new("building:runtime_wall_b").unwrap()],
+            &StableId::new("building:wall").unwrap(),
+        );
+        assert!(wall_a.contains(&GridPos { x: 47, z: 16 }));
+        assert!(wall_b.contains(&GridPos { x: 48, z: 16 }));
     }
 
     #[test]
@@ -52238,6 +52818,7 @@ mod tests {
             goal: AgentGoal::Construct(building_id),
             spawn: origin,
             origin,
+            navigation_position: placement_to_navigation_centre(origin),
             path: vec![origin],
             path_index: 1,
             target: origin,
@@ -53675,8 +54256,14 @@ mod tests {
             - ore_before;
         assert!((3..=5).contains(&ore_added));
 
-        let (_, content, mut world, mut simulation, mut runtime, actor, _) =
+        let (_, content, mut world, mut simulation, mut runtime, actor, hut) =
             regeneration_role_fixture("tender", "greenhouse");
+        let mut tree = world
+            .resources
+            .iter()
+            .find(|resource| resource.target_kind.as_str() == "target:tree")
+            .cloned()
+            .expect("generated fixture contains a tree template");
         let cleared = world
             .resources
             .iter_mut()
@@ -53698,6 +54285,28 @@ mod tests {
                 )
                 .unwrap();
         }
+        let tree_position = (-18_i32..=18)
+            .flat_map(|z| (-18_i32..=18).map(move |x| (x, z)))
+            .filter(|(x, z)| x.abs().max(z.abs()) >= 12)
+            .filter_map(|(x, z)| offset_grid(hut, x, z, &world))
+            .find(|position| {
+                world.navigation.is_walkable(*position)
+                    && cell_is_clear_of_buildings(&content, &simulation, &world, *position, 10)
+            })
+            .expect("fixture has a clear tree position near the greenhouse");
+        tree.position = tree_position;
+        tree.amount = 100;
+        world.resources.push(tree);
+        world
+            .navigation
+            .set_blocked(
+                stream_town_domain::DirtyRegion {
+                    min: tree_position,
+                    max: tree_position,
+                },
+                true,
+            )
+            .unwrap();
         let from = simulation.actors[&actor].position;
         let (goal, _) =
             regeneration_agent_goal(&content, &simulation, &world, &mut runtime, &actor, from)
@@ -53754,7 +54363,11 @@ mod tests {
             field,
             10,
         ));
-        assert!(cell_is_clear_of_trees(&world, field, 5));
+        let tree_distance = grid_distance_squared(field, tree_position);
+        assert!(
+            (9..=36).contains(&tree_distance),
+            "tender berries must be between three and six cells from a tree"
+        );
 
         // A destination may have been empty when selected and become occupied
         // while the tender walks there. Completion must revalidate the live
@@ -56739,14 +57352,17 @@ mod tests {
 
         let content = embedded_content();
         let house = &content.buildings[&StableId::new("building:house").unwrap()];
-        assert_eq!(house.footprint[0], house.footprint[1]);
+        assert_eq!(house.footprint, [2, 3]);
+        assert_eq!(rotated_footprint(house.footprint, 1), [3, 2]);
+        let square = &content.buildings[&StableId::new("building:stonemason").unwrap()];
+        assert_eq!(square.footprint, [2, 2]);
         let runtime_id = StableId::new("building:rotation_test").unwrap();
         let mut simulation = WorldSimulation::new(1);
         simulation.buildings.insert(
             runtime_id.clone(),
             BuildingState {
                 id: runtime_id.clone(),
-                archetype: house.archetype.clone(),
+                archetype: square.archetype.clone(),
                 position: GridPos { x: 8, z: 8 },
                 rotation_quarter_turns: 0,
                 level: 1,
@@ -56756,7 +57372,7 @@ mod tests {
         );
         assert_eq!(
             rotate_building_instance(&content, &mut simulation, &runtime_id, -1),
-            Ok((house.display_name.clone(), 270))
+            Ok((square.display_name.clone(), 270))
         );
         assert_eq!(simulation.buildings[&runtime_id].rotation_quarter_turns, -1);
     }

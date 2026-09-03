@@ -66,6 +66,7 @@ cargo run -p stream_town_migrate -- convert-main-menu-reference ../generated/mai
 cargo run -p stream_town_migrate -- bake-main-menu-scene generated/main-menu-scene.ron --config assets/config/game.ron --content assets/content/catalog.ron --out assets/content/main_menu_scene.ron
 cargo run -p stream_town_migrate -- import-save StreamTownSave.stsave --out generated/imported.stbevy --config assets/config/game.ron
 cargo run -p stream_town_migrate -- export-world-oracle StreamTownSave.stsave --out generated/unity-world-oracle.json
+cargo run -p xtask -- reset-town-for-fine-navigation --save .stream-town/saves/<Town>.stbevy --resources 300000 --prune-save-directory
 cargo run -p xtask -- package-windows --output dist
 ```
 
@@ -247,6 +248,17 @@ it in a `.history` directory, removes enemy actors and stale raid tracking,
 writes through the normal rotating save store, and reload-validates both the
 result and a clean replacement `.bak`. Automatic recovery therefore cannot
 silently restore the purged enemies.
+
+`reset-town-for-fine-navigation` is the deliberately destructive one-time town
+reset used when adopting the subdivided navigation layout. It regenerates
+terrain resources from the town's own seed, retains only the Town Hall,
+unlocked technologies, and Twitch citizens, removes recruits, and restores the
+requested starting resource quantity. Player roles remain when the surviving
+building capacities permit them; otherwise they receive a deterministic basic
+role. With `--prune-save-directory`, the target must be a direct child of its
+save directory: every other town and every old recovery generation there is
+deleted, then a fresh `.bak` of the validated reset state is created. Stop the
+game and make an external copy first unless that deletion is intentional.
 Legacy Unity saves are never modified by migration tools. `import-save` is an
 optional one-time compatibility command only. The production generator never
 loads a Unity save: `export-world-oracle` emits sanitized counts and position
@@ -631,6 +643,19 @@ stations, selection, combat targeting, and legacy-imported transforms.
 Actor restore uses the same player-only completed-gate exception as live pathing.
 When a saved actor must otherwise move off a blocked cell, the relocated grid
 position is written to both the ECS agent and authoritative simulation state.
+Placement and building-exclusion rules continue to use whole authored cells,
+while physical navigation uses a separate grid with three subdivisions per
+axis. Ordinary building blockers are inset by one navigation unit on every
+side: for example, a 2x3 House keeps its 2x3 placement footprint but blocks the
+central 4x7 fine cells. Food, ore, and wood storage plus the Windmill use 2x2
+placement and central 4x4 blockers. Towers and the other military structures
+remain fully solid. Resources reserve one placement cell but block only its
+central fine cell so actors can squeeze between adjacent nodes. Connected
+walls and gates derive 1x3 straight blockers and the corresponding corner/T/
+cross shapes; gates remove those blockers for citizens but retain them for
+enemies. Paths use the same fine connected shapes for rendering and movement
+bonuses without blocking either side. Movement and A* permit diagonals only
+when both adjacent cardinal fine cells are open.
 The shipping Fish God event is also live: its configurable channel-point reward
 ID and `!praise` feed the same deterministic command path, with Unity's one-in-ten
 summon chance, 20-praise requirement, 300-second timeout, 1,000-food reward, and

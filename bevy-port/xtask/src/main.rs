@@ -11,9 +11,10 @@ use image::{DynamicImage, RgbImage, imageops::FilterType};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
-    ActorKind, ContentCatalog, DirtyRegion, GameConfig, GridPos, NATIVE_SAVE_BACKUP_GENERATIONS,
-    NativeSaveStore, PlayerSettings, PresentationCatalog, SHIPPING_SECONDS_PER_DAY,
-    TechnologyGraphLayout, generate_world_with_content,
+    ActorKind, BuildingState, ContentCatalog, DirtyRegion, GameConfig, GridPos,
+    NATIVE_SAVE_BACKUP_GENERATIONS, NativeSaveStore, PlayerSettings, PresentationCatalog,
+    SHIPPING_SECONDS_PER_DAY, SavedActor, StableId, TechnologyGraphLayout, WorldSimulation,
+    WorldSnapshot, generate_world_with_content,
 };
 use walkdir::WalkDir;
 
@@ -57,6 +58,16 @@ enum Command {
     PurgeSaveEnemies {
         #[arg(long)]
         save: std::path::PathBuf,
+    },
+    /// Rebuild a town from its seed while retaining technology and Twitch citizens.
+    ResetTownForFineNavigation {
+        #[arg(long)]
+        save: std::path::PathBuf,
+        #[arg(long, default_value_t = 300_000)]
+        resources: u32,
+        /// Delete every other save and old backup in the target save directory.
+        #[arg(long)]
+        prune_save_directory: bool,
     },
 }
 
@@ -121,7 +132,324 @@ fn main() -> Result<()> {
             update_baseline,
         } => visual_acceptance(&capture_dir, &scenario, update_baseline),
         Command::PurgeSaveEnemies { save } => purge_save_enemies(&save),
+        Command::ResetTownForFineNavigation {
+            save,
+            resources,
+            prune_save_directory,
+        } => reset_town_for_fine_navigation(&save, resources, prune_save_directory),
     }
+}
+
+fn reset_town_for_fine_navigation(
+    path: &Path,
+    resource_amount: u32,
+    prune_save_directory: bool,
+) -> Result<()> {
+    if !path.is_file() {
+        bail!("save does not exist: {}", path.display());
+    }
+    let config: GameConfig = ron::from_str(
+        &fs::read_to_string("assets/config/game.ron").context("failed to read game config")?,
+    )?;
+    config.validate()?;
+    let content: ContentCatalog = ron::from_str(
+        &fs::read_to_string("assets/content/catalog.ron")
+            .context("failed to read content catalog")?,
+    )?;
+    content.validate()?;
+
+    let store = NativeSaveStore::new(path);
+    let snapshot = store
+        .load()
+        .with_context(|| format!("failed to validate save {}", path.display()))?;
+    let previous_buildings = snapshot.simulation.buildings.len();
+    let previous_actors = snapshot.simulation.actors.len();
+    let reset = reset_snapshot_for_fine_navigation(snapshot, &config, &content, resource_amount)?;
+    let retained_players = reset.simulation.actors.len();
+    let regenerated_resources = reset.resource_nodes.len();
+    store
+        .write(&reset)
+        .with_context(|| format!("failed to write reset save {}", path.display()))?;
+    let verified = NativeSaveStore::new(path)
+        .load()
+        .with_context(|| format!("reset save did not reload: {}", path.display()))?;
+    if verified != reset {
+        bail!("reset save changed during write/reload validation");
+    }
+    if prune_save_directory {
+        prune_reset_save_directory(path)?;
+        // Seed a recovery generation containing the reset state, never the old town.
+        fs::copy(path, store.backup_path())
+            .with_context(|| format!("failed to seed clean reset backup for {}", path.display()))?;
+        NativeSaveStore::new(store.backup_path())
+            .load()
+            .context("clean reset backup did not reload")?;
+    }
+    println!(
+        "Reset {} from seed {}: buildings {} -> 1, actors {} -> {} players, regenerated {} resources, each town resource = {}{}",
+        path.display(),
+        reset.world_seed,
+        previous_buildings,
+        previous_actors,
+        retained_players,
+        regenerated_resources,
+        resource_amount,
+        if prune_save_directory {
+            "; pruned other saves and replaced old backups with one clean reset backup"
+        } else {
+            ""
+        },
+    );
+    Ok(())
+}
+
+fn reset_snapshot_for_fine_navigation(
+    mut snapshot: WorldSnapshot,
+    config: &GameConfig,
+    content: &ContentCatalog,
+    resource_amount: u32,
+) -> Result<WorldSnapshot> {
+    let mut regenerated_config = config.clone();
+    regenerated_config.world.seed = snapshot.world_seed;
+    let generated = generate_world_with_content(&regenerated_config.world, content);
+    let old_simulation = snapshot.simulation;
+    let unlocked_technology = old_simulation.unlocked_technology.clone();
+    let building_costs_enabled = old_simulation.building_costs_enabled;
+    let role_limits_enabled = old_simulation.role_limits_enabled;
+    let old_ruler = old_simulation.current_ruler.clone();
+    let old_ruler_previous_role = old_simulation.ruler_previous_role.clone();
+    let saved_actors = snapshot
+        .actors
+        .into_iter()
+        .map(|actor| (actor.id.clone(), actor))
+        .collect::<BTreeMap<_, _>>();
+    let mut players = old_simulation
+        .actors
+        .into_values()
+        .filter(|actor| actor.login_name.is_some() || actor.id.as_str().starts_with("twitch:"))
+        .collect::<Vec<_>>();
+    players.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let town_hall_id = StableId::new("building:townhall").expect("static town hall ID");
+    let town_hall_definition = content
+        .buildings
+        .get(&town_hall_id)
+        .context("content has no Town Hall")?;
+    let town_hall_centre = GridPos {
+        x: (regenerated_config.world.width / 2 + 4)
+            .min(regenerated_config.world.width.saturating_sub(2)),
+        z: regenerated_config.world.height / 2,
+    };
+    let town_hall_position = GridPos {
+        x: town_hall_centre
+            .x
+            .saturating_sub(town_hall_definition.footprint[0] / 2),
+        z: town_hall_centre
+            .z
+            .saturating_sub(town_hall_definition.footprint[1] / 2),
+    };
+    let mut town_hall = old_simulation
+        .buildings
+        .get(&town_hall_id)
+        .cloned()
+        .unwrap_or_else(|| BuildingState {
+            id: town_hall_id.clone(),
+            archetype: town_hall_definition.archetype.clone(),
+            position: town_hall_position,
+            rotation_quarter_turns: 0,
+            level: 1,
+            health: 100,
+            complete: true,
+        });
+    town_hall.position = town_hall_position;
+    town_hall.rotation_quarter_turns = 0;
+    town_hall.complete = true;
+    town_hall.health = town_hall.health.max(1);
+
+    let mut simulation = WorldSimulation::new(snapshot.world_seed);
+    simulation.unlocked_technology = unlocked_technology;
+    simulation.building_costs_enabled = building_costs_enabled;
+    simulation.role_limits_enabled = role_limits_enabled;
+    simulation.buildings.insert(town_hall_id.clone(), town_hall);
+    for resource in ["food", "gold", "ore", "wood"] {
+        simulation.town_resources.insert(
+            StableId::new(format!("resource:{resource}")).expect("static resource ID"),
+            resource_amount,
+        );
+    }
+
+    let hall_max = GridPos {
+        x: town_hall_position
+            .x
+            .saturating_add(town_hall_definition.footprint[0].saturating_sub(1)),
+        z: town_hall_position
+            .z
+            .saturating_add(town_hall_definition.footprint[1].saturating_sub(1)),
+    };
+    let mut spawn_cells = (0..generated.navigation.height())
+        .flat_map(|z| (0..generated.navigation.width()).map(move |x| GridPos { x, z }))
+        .filter(|position| generated.navigation.is_walkable(*position))
+        .filter(|position| {
+            position.x < town_hall_position.x
+                || position.x > hall_max.x
+                || position.z < town_hall_position.z
+                || position.z > hall_max.z
+        })
+        .collect::<Vec<_>>();
+    spawn_cells.sort_by_key(|position| {
+        (
+            u64::from(position.x.abs_diff(town_hall_centre.x)).pow(2)
+                + u64::from(position.z.abs_diff(town_hall_centre.z)).pow(2),
+            position.z,
+            position.x,
+        )
+    });
+    if spawn_cells.len() < players.len() {
+        bail!("generated town has too few walkable player spawn cells");
+    }
+
+    let fallback_roles = ["builder", "gatherer", "logger", "miner"]
+        .map(|role| StableId::new(format!("role:{role}")).expect("static fallback role ID"));
+    let mut role_counts = BTreeMap::<StableId, u32>::new();
+    let mut reset_saved_actors = Vec::with_capacity(players.len());
+    for (index, mut actor) in players.into_iter().enumerate() {
+        if !reset_role_is_available(content, &simulation, &actor.role, &role_counts) {
+            let start = usize::try_from(stable_string_hash(actor.id.as_str()) % 4).unwrap_or(0);
+            actor.role = (0..fallback_roles.len())
+                .map(|offset| &fallback_roles[(start + offset) % fallback_roles.len()])
+                .find(|role| reset_role_is_available(content, &simulation, role, &role_counts))
+                .cloned()
+                .unwrap_or_else(|| fallback_roles[0].clone());
+        }
+        role_counts
+            .entry(actor.role.clone())
+            .and_modify(|count| *count = count.saturating_add(1))
+            .or_insert(1);
+        let position = spawn_cells[index];
+        actor.position = position;
+        actor.last_building_position = None;
+        actor.building_rotation_quarter_turns = 0;
+        actor.health = actor.max_health.max(1);
+        actor.alive = true;
+        actor.respawn_remaining_seconds = None;
+        actor.inventory.clear();
+        actor.station = Some(town_hall_id.clone());
+        actor.preferred_target = None;
+        let saved = saved_actors
+            .get(&actor.id)
+            .cloned()
+            .with_context(|| format!("player {} has no saved render record", actor.id))?;
+        reset_saved_actors.push(SavedActor {
+            grid_position: position,
+            height_centimetres: generated.navigation.height_at(position).unwrap_or_default(),
+            health: actor.health,
+            kind: ActorKind::Player,
+            ..saved
+        });
+        simulation.actors.insert(actor.id.clone(), actor);
+    }
+    simulation.current_ruler = old_ruler.filter(|id| simulation.actors.contains_key(id));
+    simulation.ruler_previous_role = simulation
+        .current_ruler
+        .as_ref()
+        .and(old_ruler_previous_role);
+
+    snapshot.generator_version = generated.generator_version;
+    snapshot.world_hash = generated.deterministic_hash;
+    snapshot.elapsed_seconds = 0;
+    snapshot.actors = reset_saved_actors;
+    snapshot.simulation = simulation;
+    snapshot.resource_nodes = generated
+        .resources
+        .into_iter()
+        .map(|resource| (resource.id, resource.amount))
+        .collect();
+    snapshot.traversal_wear.clear();
+    snapshot.legacy_terrain_mesh = None;
+    snapshot.legacy_migration = None;
+    Ok(snapshot)
+}
+
+fn reset_role_is_available(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    role: &StableId,
+    counts: &BTreeMap<StableId, u32>,
+) -> bool {
+    let Some(definition) = content.roles.get(role) else {
+        return false;
+    };
+    if role.as_str() == "role:enemy"
+        || !simulation.role_limits_enabled
+        || !definition.has_user_limit
+    {
+        return role.as_str() != "role:enemy";
+    }
+    let building_slots = simulation
+        .buildings
+        .values()
+        .filter(|building| building.complete)
+        .filter_map(|building| {
+            content
+                .buildings
+                .values()
+                .find(|definition| definition.archetype == building.archetype)
+                .map(|definition| (definition, building.level))
+        })
+        .flat_map(|(building, level)| {
+            building
+                .role_slots
+                .iter()
+                .filter(move |slots| slots.role == *role)
+                .map(move |slots| {
+                    u32::from(slots.base_amount).saturating_add(
+                        u32::from(slots.increment_amount)
+                            .saturating_mul(u32::from(level.saturating_sub(1))),
+                    )
+                })
+        })
+        .fold(0_u32, u32::saturating_add);
+    let capacity = u32::from(definition.base_max_users).saturating_add(building_slots);
+    counts.get(role).copied().unwrap_or_default() < capacity
+}
+
+fn stable_string_hash(value: &str) -> u64 {
+    value
+        .as_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+}
+
+fn prune_reset_save_directory(save: &Path) -> Result<()> {
+    let parent = save.parent().context("save has no parent directory")?;
+    let canonical_parent = parent
+        .canonicalize()
+        .with_context(|| format!("failed to resolve save directory {}", parent.display()))?;
+    let canonical_save = save
+        .canonicalize()
+        .with_context(|| format!("failed to resolve reset save {}", save.display()))?;
+    if canonical_save.parent() != Some(canonical_parent.as_path()) {
+        bail!("reset save is not directly inside its declared save directory");
+    }
+    for entry in fs::read_dir(&canonical_parent)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path == canonical_save {
+            continue;
+        }
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            fs::remove_dir_all(&path).with_context(|| {
+                format!("failed to remove old save directory {}", path.display())
+            })?;
+        } else {
+            fs::remove_file(&path)
+                .with_context(|| format!("failed to remove old save file {}", path.display()))?;
+        }
+    }
+    Ok(())
 }
 
 fn purge_save_enemies(path: &Path) -> Result<()> {
@@ -1465,6 +1793,7 @@ fn stress(agents: u32, ticks: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use stream_town_domain::CURRENT_WORLD_SNAPSHOT_SCHEMA;
 
     fn glb_with_nodes(names: &[&str]) -> Vec<u8> {
         let mut json = serde_json::to_vec(&serde_json::json!({
@@ -1501,5 +1830,93 @@ mod tests {
         let mut corrupt = glb_with_nodes(&["Enemy_SkeleSword"]);
         corrupt[4] = 1;
         assert!(glb_node_names_from_bytes(&corrupt).is_err());
+    }
+
+    #[test]
+    fn fine_navigation_town_reset_preserves_only_requested_progress() {
+        let config = GameConfig::default();
+        let content: ContentCatalog =
+            ron::from_str(include_str!("../../assets/content/catalog.ron")).unwrap();
+        let generated = generate_world_with_content(&config.world, &content);
+        let mut simulation = WorldSimulation::new(generated.seed);
+        let player = StableId::new("twitch:reset_test").unwrap();
+        let recruit = StableId::new("npc:reset_test").unwrap();
+        let position = GridPos { x: 12, z: 12 };
+        assert!(simulation.join_player(player.clone(), position));
+        assert!(simulation.join_player(recruit.clone(), position));
+        simulation.actors.get_mut(&player).unwrap().login_name = Some("reset_test".to_owned());
+        simulation.actors.get_mut(&player).unwrap().role = StableId::new("role:priest").unwrap();
+        simulation.actors.get_mut(&recruit).unwrap().role = StableId::new("role:miner").unwrap();
+        let technology = StableId::new("tech:retained_test").unwrap();
+        simulation.unlocked_technology.insert(technology.clone());
+        let town_hall_id = StableId::new("building:townhall").unwrap();
+        let town_hall = &content.buildings[&town_hall_id];
+        simulation.buildings.insert(
+            town_hall_id.clone(),
+            BuildingState {
+                id: town_hall_id.clone(),
+                archetype: town_hall.archetype.clone(),
+                position,
+                rotation_quarter_turns: 0,
+                level: 3,
+                health: 900,
+                complete: true,
+            },
+        );
+        let monastery_id = StableId::new("building:runtime_monastery").unwrap();
+        simulation.buildings.insert(
+            monastery_id.clone(),
+            BuildingState {
+                id: monastery_id,
+                archetype: content.buildings[&StableId::new("building:monastery").unwrap()]
+                    .archetype
+                    .clone(),
+                position: GridPos { x: 20, z: 20 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: 100,
+                complete: true,
+            },
+        );
+        let snapshot = WorldSnapshot {
+            schema_version: CURRENT_WORLD_SNAPSHOT_SCHEMA,
+            world_seed: generated.seed,
+            generator_version: generated.generator_version,
+            world_hash: generated.deterministic_hash,
+            elapsed_seconds: 9_999,
+            actors: vec![SavedActor {
+                id: player.clone(),
+                kind: ActorKind::Player,
+                archetype: StableId::new("archetype:player").unwrap(),
+                grid_position: position,
+                height_centimetres: 100,
+                health: 50,
+            }],
+            simulation,
+            resource_nodes: BTreeMap::new(),
+            traversal_wear: BTreeMap::from([(position, 123.0)]),
+            legacy_terrain_mesh: None,
+            legacy_migration: None,
+        };
+
+        let reset =
+            reset_snapshot_for_fine_navigation(snapshot, &config, &content, 300_000).unwrap();
+        assert_eq!(reset.simulation.buildings.len(), 1);
+        assert!(reset.simulation.buildings.contains_key(&town_hall_id));
+        assert_eq!(reset.simulation.actors.len(), 1);
+        assert!(reset.simulation.actors.contains_key(&player));
+        assert!(!reset.simulation.actors.contains_key(&recruit));
+        assert_ne!(
+            reset.simulation.actors[&player].role.as_str(),
+            "role:priest"
+        );
+        assert!(reset.simulation.unlocked_technology.contains(&technology));
+        assert_eq!(reset.resource_nodes.len(), generated.resources.len());
+        assert!(reset.traversal_wear.is_empty());
+        assert_eq!(reset.elapsed_seconds, 0);
+        assert!(["food", "gold", "ore", "wood"].into_iter().all(|resource| {
+            reset.simulation.town_resources[&StableId::new(format!("resource:{resource}")).unwrap()]
+                == 300_000
+        }));
     }
 }

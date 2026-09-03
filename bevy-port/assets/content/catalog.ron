@@ -1,5 +1,5 @@
 (
-    schema_version: 35,
+    schema_version: 36,
     loading_screen: (
         progress_milli_per_second: 500,
         completion_hold_milliseconds: 500,
@@ -286,7 +286,7 @@
                 center: (-0.15394077, 1.1388113, 0.006762983),
                 size: (2.7140896, 2.7972455, 2.4640489),
             ),
-            footprint: (1, 1),
+            footprint: (2, 2),
             scenes: [
                 (
                     source_model: "Assets/Models/Buildings/Age01/Age01_FoodStorage.fbx",
@@ -513,7 +513,7 @@
                 center: (-0.0000002384186, 1.7938937, 0.0000000000000071054274),
                 size: (4.064599, 4.4900956, 4.064599),
             ),
-            footprint: (2, 2),
+            footprint: (2, 3),
             scenes: [
                 (
                     source_model: "Assets/Models/Buildings/Age01/Age01_House.fbx",
@@ -895,7 +895,7 @@
                 center: (-0.0033731444, 0.6988204, 0.03937969),
                 size: (2.1198847, 2.2112932, 2.143358),
             ),
-            footprint: (1, 1),
+            footprint: (2, 2),
             scenes: [
                 (
                     source_model: "Assets/Models/Buildings/Age01/Age01_OreStorage.fbx",
@@ -1582,7 +1582,7 @@
                 center: (-0.17004845, 0.68360895, -0.00000002980234),
                 size: (2.746305, 1.7319549, 2.4062078),
             ),
-            footprint: (1, 1),
+            footprint: (2, 2),
             scenes: [
                 (
                     source_model: "Assets/Models/Buildings/Age01/Age01_WoodStorage.fbx",
@@ -8504,6 +8504,7 @@
             display_name: "Barracks",
             archetype: "archetype:building:barracks",
             footprint: (3, 3),
+            navigation_footprint_thirds: Some((9, 9)),
             cost: {
                 "resource:food": 1200,
                 "resource:gold": 800,
@@ -8550,6 +8551,7 @@
             display_name: "Bowyard",
             archetype: "archetype:building:bowyard",
             footprint: (3, 3),
+            navigation_footprint_thirds: Some((9, 9)),
             cost: {
                 "resource:food": 2400,
                 "resource:gold": 1500,
@@ -8596,6 +8598,7 @@
             display_name: "Castle",
             archetype: "archetype:building:castle",
             footprint: (5, 5),
+            navigation_footprint_thirds: Some((15, 15)),
             cost: {
                 "resource:food": 100000,
                 "resource:gold": 40000,
@@ -8749,7 +8752,8 @@
         "building:foodstorage": (
             display_name: "FoodStorage",
             archetype: "archetype:building:foodstorage",
-            footprint: (1, 1),
+            footprint: (2, 2),
+            navigation_footprint_thirds: Some((4, 4)),
             cost: {
                 "resource:food": 500,
                 "resource:gold": 500,
@@ -8825,6 +8829,7 @@
             display_name: "Forge",
             archetype: "archetype:building:forge",
             footprint: (2, 2),
+            navigation_footprint_thirds: Some((6, 6)),
             cost: {
                 "resource:food": 250,
                 "resource:gold": 250,
@@ -8910,6 +8915,7 @@
             display_name: "Gate",
             archetype: "archetype:building:gate",
             footprint: (1, 1),
+            navigation_footprint_thirds: Some((1, 3)),
             cost: {
                 "resource:food": 750,
                 "resource:gold": 1000,
@@ -8956,7 +8962,7 @@
         "building:house": (
             display_name: "House",
             archetype: "archetype:building:house",
-            footprint: (2, 2),
+            footprint: (2, 3),
             cost: {
                 "resource:food": 500,
                 "resource:gold": 250,
@@ -9276,6 +9282,7 @@
             display_name: "Monastery",
             archetype: "archetype:building:monastery",
             footprint: (3, 2),
+            navigation_footprint_thirds: Some((9, 6)),
             cost: {
                 "resource:food": 15000,
                 "resource:gold": 5000,
@@ -9320,6 +9327,7 @@
             display_name: "Necromancer Tower",
             archetype: "archetype:building:necrotower",
             footprint: (2, 2),
+            navigation_footprint_thirds: Some((6, 6)),
             cost: {
                 "resource:food": 60000,
                 "resource:gold": 40000,
@@ -9365,7 +9373,8 @@
         "building:orestorage": (
             display_name: "Ore Storage",
             archetype: "archetype:building:orestorage",
-            footprint: (1, 1),
+            footprint: (2, 2),
+            navigation_footprint_thirds: Some((4, 4)),
             cost: {
                 "resource:food": 500,
                 "resource:gold": 500,
@@ -9654,6 +9663,7 @@
             display_name: "Tower",
             archetype: "archetype:building:tower",
             footprint: (1, 1),
+            navigation_footprint_thirds: Some((3, 3)),
             cost: {
                 "resource:food": 250,
                 "resource:gold": 400,
@@ -9789,6 +9799,7 @@
             display_name: "Path",
             archetype: "archetype:building:path",
             footprint: (1, 1),
+            navigation_footprint_thirds: Some((1, 3)),
             cost: {
                 "resource:ore": 130,
                 "resource:wood": 150,
@@ -9813,6 +9824,7 @@
             display_name: "Wall",
             archetype: "archetype:building:wall",
             footprint: (1, 1),
+            navigation_footprint_thirds: Some((1, 3)),
             cost: {
                 "resource:food": 250,
                 "resource:gold": 100,
@@ -9908,6 +9920,7 @@
             display_name: "Windmill",
             archetype: "archetype:building:windmill",
             footprint: (2, 2),
+            navigation_footprint_thirds: Some((4, 4)),
             cost: {
                 "resource:food": 0,
                 "resource:gold": 400,
@@ -9975,6 +9988,7 @@
             display_name: "Wizard Tower",
             archetype: "archetype:building:wizardtower",
             footprint: (2, 2),
+            navigation_footprint_thirds: Some((6, 6)),
             cost: {
                 "resource:food": 35000,
                 "resource:gold": 250,
@@ -10018,7 +10032,8 @@
         "building:woodstorage": (
             display_name: "Wood Storage",
             archetype: "archetype:building:woodstorage",
-            footprint: (1, 1),
+            footprint: (2, 2),
+            navigation_footprint_thirds: Some((4, 4)),
             cost: {
                 "resource:food": 500,
                 "resource:gold": 500,

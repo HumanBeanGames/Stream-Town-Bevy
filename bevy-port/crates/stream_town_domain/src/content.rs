@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 35;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 36;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -405,7 +405,15 @@ pub struct ArchetypeScene {
 pub struct BuildingDef {
     pub display_name: String,
     pub archetype: StableId,
+    /// Logical placement/exclusion footprint in authored town cells.
     pub footprint: [u16; 2],
+    /// Optional physical navigation footprint measured in thirds of an authored cell.
+    ///
+    /// When omitted, the runtime uses the placement footprint with one fine-navigation
+    /// unit inset on every side. Linear walls and gates derive their occupied fine cells
+    /// from their neighbours instead of treating this as a rectangular footprint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub navigation_footprint_thirds: Option<[u16; 2]>,
     pub cost: BTreeMap<StableId, u32>,
     pub placeable: bool,
     pub can_level: bool,
@@ -697,6 +705,8 @@ pub enum ContentError {
     TechnologyCycle(StableId),
     #[error("building {0} has an empty footprint")]
     EmptyFootprint(StableId),
+    #[error("building {0} has an invalid fine-navigation footprint")]
+    InvalidNavigationFootprint(StableId),
     #[error("building {building} references missing archetype {archetype}")]
     MissingArchetype {
         building: StableId,
@@ -1102,6 +1112,17 @@ impl ContentCatalog {
         for (id, building) in &self.buildings {
             if building.footprint[0] == 0 || building.footprint[1] == 0 {
                 return Err(ContentError::EmptyFootprint(id.clone()));
+            }
+            if building
+                .navigation_footprint_thirds
+                .is_some_and(|footprint| {
+                    footprint[0] == 0
+                        || footprint[1] == 0
+                        || footprint[0] > building.footprint[0].saturating_mul(3)
+                        || footprint[1] > building.footprint[1].saturating_mul(3)
+                })
+            {
+                return Err(ContentError::InvalidNavigationFootprint(id.clone()));
             }
             if !self.archetypes.contains_key(&building.archetype) {
                 return Err(ContentError::MissingArchetype {
