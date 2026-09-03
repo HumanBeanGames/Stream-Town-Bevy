@@ -33,6 +33,7 @@ const VAULT_SERVICE: &str = "stream-town-twitch";
 const TOKEN_REFRESH_WINDOW_SECONDS: u64 = 90 * 60;
 const TWITCH_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const TWITCH_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+static TOKEN_REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub const REQUIRED_SCOPES: [&str; 2] = ["chat:read", "chat:edit"];
 pub const BROADCAST_SCOPES: [&str; 3] = [
     "channel:read:stream_key",
@@ -370,6 +371,10 @@ impl OAuthClient {
         &self,
         vault: &CredentialVault,
     ) -> Result<(StoredOAuthToken, TokenValidation)> {
+        // Operator moderation and direct-stream preparation both use the
+        // broadcaster grant. Serialize their read/refresh/write transaction so
+        // a rotated refresh token cannot be consumed concurrently.
+        let _refresh_guard = TOKEN_REFRESH_LOCK.lock().await;
         let mut token = vault
             .load()?
             .context("Twitch account is not authorized; open Main Menu > Secrets")?;

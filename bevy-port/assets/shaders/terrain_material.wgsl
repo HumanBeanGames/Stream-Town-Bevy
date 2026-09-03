@@ -79,7 +79,11 @@ fn fragment(
         traversal_wear_sampler,
         wear_uv,
     ).r * terrain_material.traversal_grid.w;
-    let worn_color = mix(authored.rgb, terrain_material.traversal_dirt_color.rgb, wear);
+    let worn_color = mix(
+        authored.rgb,
+        terrain_material.traversal_dirt_color.rgb,
+        wear * terrain_material.traversal_dirt_color.a,
+    );
     let terrain_color = vec4<f32>(
         worn_color * terrain_material.season_tint.rgb,
         1.0,

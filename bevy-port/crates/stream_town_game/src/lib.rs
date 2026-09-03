@@ -155,6 +155,7 @@ const TRAVERSAL_WEAR_FULL_DIRT: f32 = 9.0;
 const TRAVERSAL_WEAR_HALF_LIFE_SECONDS: f32 = 30.0 * 60.0;
 const TRAVERSAL_WEAR_PRUNE_SCORE: f32 = 0.01;
 const TRAVERSAL_WEAR_DECAY_INTERVAL_SECONDS: f32 = 1.0;
+const TRAVERSAL_WEAR_DECAY_PAUSE_SECONDS: f32 = 5.0;
 const TERRAIN_HIGH_DETAIL_RADIUS: f32 = 220.0;
 const TERRAIN_MEDIUM_DETAIL_RADIUS: f32 = 440.0;
 const TERRAIN_LOD_HYSTERESIS: f32 = 36.0;
@@ -500,9 +501,15 @@ struct WorldRuntime {
 /// makes it visually irrelevant.
 #[derive(Resource)]
 struct TraversalWearRuntime {
-    cells: HashMap<GridPos, f32>,
+    cells: HashMap<GridPos, TraversalWearCell>,
     decay_elapsed_seconds: f32,
     texture_dirty: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TraversalWearCell {
+    score: f32,
+    decay_pause_seconds: f32,
 }
 
 impl Default for TraversalWearRuntime {
@@ -517,8 +524,9 @@ impl Default for TraversalWearRuntime {
 
 impl TraversalWearRuntime {
     fn record(&mut self, position: GridPos) {
-        let score = self.cells.entry(position).or_default();
-        *score = (*score + 1.0).min(MAX_TRAVERSAL_WEAR_SCORE);
+        let cell = self.cells.entry(position).or_default();
+        cell.score = (cell.score + 1.0).min(MAX_TRAVERSAL_WEAR_SCORE);
+        cell.decay_pause_seconds = TRAVERSAL_WEAR_DECAY_PAUSE_SECONDS;
         self.texture_dirty = true;
     }
 
@@ -532,10 +540,13 @@ impl TraversalWearRuntime {
             return;
         }
         let elapsed = std::mem::take(&mut self.decay_elapsed_seconds);
-        let decay_factor = 0.5_f32.powf(elapsed / TRAVERSAL_WEAR_HALF_LIFE_SECONDS);
-        self.cells.retain(|_, score| {
-            *score *= decay_factor;
-            *score >= TRAVERSAL_WEAR_PRUNE_SCORE
+        self.cells.retain(|_, cell| {
+            let active_decay_seconds = (elapsed - cell.decay_pause_seconds).max(0.0);
+            cell.decay_pause_seconds = (cell.decay_pause_seconds - elapsed).max(0.0);
+            if active_decay_seconds > 0.0 {
+                cell.score *= 0.5_f32.powf(active_decay_seconds / TRAVERSAL_WEAR_HALF_LIFE_SECONDS);
+            }
+            cell.score >= TRAVERSAL_WEAR_PRUNE_SCORE
         });
         self.texture_dirty = true;
     }
@@ -549,7 +560,15 @@ impl TraversalWearRuntime {
                     && score.is_finite()
                     && **score >= TRAVERSAL_WEAR_PRUNE_SCORE
             })
-            .map(|(position, score)| (*position, score.min(MAX_TRAVERSAL_WEAR_SCORE)))
+            .map(|(position, score)| {
+                (
+                    *position,
+                    TraversalWearCell {
+                        score: score.min(MAX_TRAVERSAL_WEAR_SCORE),
+                        decay_pause_seconds: 0.0,
+                    },
+                )
+            })
             .collect();
         self.decay_elapsed_seconds = 0.0;
         self.texture_dirty = true;
@@ -558,8 +577,8 @@ impl TraversalWearRuntime {
     fn saved_cells(&self) -> BTreeMap<GridPos, f32> {
         self.cells
             .iter()
-            .filter(|(_, score)| score.is_finite() && **score >= TRAVERSAL_WEAR_PRUNE_SCORE)
-            .map(|(position, score)| (*position, score.min(MAX_TRAVERSAL_WEAR_SCORE)))
+            .filter(|(_, cell)| cell.score.is_finite() && cell.score >= TRAVERSAL_WEAR_PRUNE_SCORE)
+            .map(|(position, cell)| (*position, cell.score.min(MAX_TRAVERSAL_WEAR_SCORE)))
             .collect()
     }
 }
@@ -6847,7 +6866,10 @@ fn terrain_material(
                         0.0
                     },
                 ),
-                traversal_dirt_color: unity_shader_color([0.34, 0.20, 0.075, 1.0]),
+                // Alpha controls the maximum contribution over the authored
+                // terrain. Keep paths legible without replacing the grass and
+                // use a cooler, less red soil than the first wear pass.
+                traversal_dirt_color: unity_shader_color([0.30, 0.245, 0.14, 0.50]),
             },
             grid_texture,
             traversal_wear_texture,
@@ -35873,7 +35895,7 @@ fn sync_foliage_clearance(
         let wear_score = traversal_wear
             .cells
             .get(&location.0)
-            .copied()
+            .map(|cell| cell.score)
             .unwrap_or_default();
         let should_be_hidden =
             foliage_should_be_hidden(structure_hidden, pending_grounding.is_some(), wear_score);
@@ -35938,7 +35960,7 @@ fn write_traversal_wear_pixels(
     image: &mut Image,
     width: u16,
     height: u16,
-    cells: &HashMap<GridPos, f32>,
+    cells: &HashMap<GridPos, TraversalWearCell>,
 ) {
     let Some(data) = image.data.as_mut() else {
         return;
@@ -35946,12 +35968,12 @@ fn write_traversal_wear_pixels(
     for pixel in data.chunks_exact_mut(4) {
         pixel.copy_from_slice(&[0, 0, 0, u8::MAX]);
     }
-    for (position, score) in cells {
+    for (position, cell) in cells {
         if position.x >= width || position.z >= height {
             continue;
         }
         let index = (usize::from(position.z) * usize::from(width) + usize::from(position.x)) * 4;
-        let wear = traversal_wear_byte(*score);
+        let wear = traversal_wear_byte(cell.score);
         if let Some(red) = data.get_mut(index) {
             *red = wear;
         }
@@ -41948,7 +41970,11 @@ mod tests {
         for _ in 0..20 {
             record_completed_cell_traversal(&mut wear, &ActorKind::Player, start, next);
         }
-        assert!((wear.cells[&next] - MAX_TRAVERSAL_WEAR_SCORE).abs() < f32::EPSILON);
+        assert!((wear.cells[&next].score - MAX_TRAVERSAL_WEAR_SCORE).abs() < f32::EPSILON);
+        assert!(
+            (wear.cells[&next].decay_pause_seconds - TRAVERSAL_WEAR_DECAY_PAUSE_SECONDS).abs()
+                < f32::EPSILON
+        );
     }
 
     #[test]
@@ -41961,11 +41987,32 @@ mod tests {
         let position = GridPos { x: 4, z: 5 };
         let pruned = GridPos { x: 5, z: 5 };
         let mut wear = TraversalWearRuntime::default();
-        wear.cells.insert(position, 12.0);
-        wear.cells.insert(pruned, 0.015);
+        wear.cells.insert(
+            position,
+            TraversalWearCell {
+                score: 12.0,
+                decay_pause_seconds: 0.0,
+            },
+        );
+        wear.cells.insert(
+            pruned,
+            TraversalWearCell {
+                score: 0.015,
+                decay_pause_seconds: 0.0,
+            },
+        );
         wear.decay(TRAVERSAL_WEAR_HALF_LIFE_SECONDS);
-        assert!((wear.cells[&position] - 6.0).abs() < 0.000_1);
+        assert!((wear.cells[&position].score - 6.0).abs() < 0.000_1);
         assert!(!wear.cells.contains_key(&pruned));
+
+        let paused = GridPos { x: 6, z: 5 };
+        wear.record(paused);
+        wear.decay(TRAVERSAL_WEAR_DECAY_PAUSE_SECONDS - 1.0);
+        assert!((wear.cells[&paused].score - 1.0).abs() < f32::EPSILON);
+        wear.decay(1.0);
+        assert!((wear.cells[&paused].score - 1.0).abs() < f32::EPSILON);
+        wear.decay(TRAVERSAL_WEAR_HALF_LIFE_SECONDS);
+        assert!((wear.cells[&paused].score - 0.5).abs() < 0.000_1);
     }
 
     #[test]
@@ -41973,7 +42020,22 @@ mod tests {
         let mut image = traversal_wear_image(4, 3);
         let half = GridPos { x: 1, z: 2 };
         let full = GridPos { x: 3, z: 0 };
-        let cells = HashMap::from([(half, 6.0), (full, 9.0)]);
+        let cells = HashMap::from([
+            (
+                half,
+                TraversalWearCell {
+                    score: 6.0,
+                    decay_pause_seconds: 0.0,
+                },
+            ),
+            (
+                full,
+                TraversalWearCell {
+                    score: 9.0,
+                    decay_pause_seconds: 0.0,
+                },
+            ),
+        ]);
         write_traversal_wear_pixels(&mut image, 4, 3, &cells);
         let data = image.data.as_ref().expect("wear texture is CPU-backed");
         let half_index = (usize::from(half.z) * 4 + usize::from(half.x)) * 4;
@@ -53656,6 +53718,7 @@ mod tests {
         assert!((terrain.base.perceptual_roughness - 1.0).abs() < f32::EPSILON);
         assert!(terrain.base.metallic.abs() < f32::EPSILON);
         assert!(terrain.base.reflectance.abs() < f32::EPSILON);
+        assert!((terrain.extension.parameters.traversal_dirt_color.w - 0.5).abs() < f32::EPSILON);
         assert!((terrain.extension.parameters.texture_uv_blend_tint.z - 1.0).abs() < f32::EPSILON);
         assert!(terrain.extension.parameters.texture_uv_blend_tint.w.abs() < f32::EPSILON);
         assert_eq!(
