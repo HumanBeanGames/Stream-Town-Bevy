@@ -9,14 +9,14 @@
 //! cable, or OBS installation is involved.
 
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{HashMap, VecDeque},
     fmt,
     fs::{self, OpenOptions},
     io::Write as _,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
     thread,
@@ -33,8 +33,15 @@ use bevy::{
     },
     prelude::*,
     render::{
-        gpu_readback::{Readback, ReadbackComplete},
-        render_resource::{TextureFormat, TextureUsages},
+        Render, RenderApp, RenderSystems,
+        extract_resource::{ExtractResource, ExtractResourcePlugin},
+        render_asset::RenderAssets as GpuRenderAssets,
+        render_resource::{
+            Buffer, BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Extent3d, MapMode,
+            PollType, TexelCopyBufferInfo, TexelCopyBufferLayout, TextureFormat, TextureUsages,
+        },
+        renderer::{RenderDevice, RenderQueue},
+        texture::GpuImage,
     },
     window::{CursorOptions, PrimaryWindow, WindowCloseRequested, WindowRef, WindowResolution},
     winit::{UpdateMode, WinitSettings},
@@ -83,9 +90,9 @@ const NATIVE_GAME_AUDIO_QUEUE_CAPACITY: usize = 64;
 const OFFLINE_FRAME_HOLD: Duration = Duration::from_secs(1);
 const BROADCAST_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const BROADCAST_IO_TIMEOUT_MICROSECONDS: &str = "3000000";
-const MAX_STREAM_READBACKS_IN_FLIGHT: usize = 4;
-const MAX_STREAM_COMPLETED_READBACKS: usize = MAX_STREAM_READBACKS_IN_FLIGHT;
-const STREAM_READBACK_TIMEOUT: Duration = Duration::from_secs(2);
+const STREAM_CAPTURE_STAGING_BUFFERS: usize = 4;
+const STREAM_CAPTURE_CPU_QUEUE_CAPACITY: usize = 2;
+const ENCODER_VIDEO_FRAME_BUFFERS: usize = 4;
 
 #[derive(Clone)]
 struct NativeGameAudioClip {
@@ -461,11 +468,6 @@ pub struct DirectBroadcastRuntime {
 #[derive(Resource, Default)]
 struct StreamOnlyCaptureState {
     target: Option<Handle<Image>>,
-    readback_requests: HashMap<Entity, (u64, Instant)>,
-    completed_readbacks: BTreeMap<u64, Option<VideoFrame>>,
-    next_readback_sequence: u64,
-    next_publish_sequence: u64,
-    next_readback_at: Option<Instant>,
     operator_window: Option<Entity>,
     operator_camera: Option<Entity>,
     operator_root: Option<Entity>,
@@ -476,14 +478,73 @@ struct StreamOnlyCaptureState {
     height: u32,
 }
 
+#[derive(Resource, Clone, Default, ExtractResource)]
+struct StreamOnlyCaptureExtract {
+    target: Option<Handle<Image>>,
+    active: bool,
+    width: u32,
+    height: u32,
+    frames_per_second: u8,
+}
+
+struct StreamOnlyCapturedFrame {
+    width: u32,
+    height: u32,
+    captured_at: Instant,
+    pixels: Vec<u8>,
+}
+
+#[derive(Default)]
+struct GpuStreamCaptureCounters {
+    in_flight: AtomicUsize,
+    queued: AtomicUsize,
+    dropped: AtomicU64,
+    map_failures: AtomicU64,
+}
+
+#[derive(Resource, Clone, Default)]
+struct GpuStreamCaptureShared(Arc<GpuStreamCaptureCounters>);
+
+#[derive(Resource)]
+struct StreamOnlyCaptureInbox(Mutex<Receiver<StreamOnlyCapturedFrame>>);
+
+struct GpuStreamCaptureSlot {
+    buffer: Buffer,
+    busy: Arc<AtomicBool>,
+}
+
+#[derive(Resource)]
+struct GpuStreamCaptureRing {
+    sender: SyncSender<StreamOnlyCapturedFrame>,
+    shared: GpuStreamCaptureShared,
+    slots: Vec<GpuStreamCaptureSlot>,
+    width: u32,
+    height: u32,
+    aligned_row_bytes: u32,
+    next_slot: usize,
+    next_capture_at: Option<Instant>,
+}
+
+impl GpuStreamCaptureRing {
+    fn new(sender: SyncSender<StreamOnlyCapturedFrame>, shared: GpuStreamCaptureShared) -> Self {
+        Self {
+            sender,
+            shared,
+            slots: Vec::new(),
+            width: 0,
+            height: 0,
+            aligned_row_bytes: 0,
+            next_slot: 0,
+            next_capture_at: None,
+        }
+    }
+}
+
 #[derive(Component)]
 pub(crate) struct StreamOperatorCamera;
 
 #[derive(Component)]
 pub(crate) struct StreamOperatorWindow;
-
-#[derive(Component)]
-struct StreamOnlyReadbackArmed;
 
 #[derive(Component)]
 struct StreamOperatorInfoText;
@@ -801,6 +862,9 @@ pub struct DirectTwitchBroadcastPlugin;
 
 impl Plugin for DirectTwitchBroadcastPlugin {
     fn build(&self, app: &mut App) {
+        let (capture_sender, capture_receiver) =
+            mpsc::sync_channel(STREAM_CAPTURE_CPU_QUEUE_CAPACITY);
+        let capture_shared = GpuStreamCaptureShared::default();
         app.add_message::<AppExit>()
             .add_message::<WindowCloseRequested>()
             .init_resource::<DirectBroadcastRuntime>()
@@ -808,35 +872,52 @@ impl Plugin for DirectTwitchBroadcastPlugin {
             .init_resource::<AutomaticBroadcastStart>()
             .init_resource::<NativeGameAudioRouting>()
             .init_resource::<StreamOnlyCaptureState>()
+            .init_resource::<StreamOnlyCaptureExtract>()
+            .insert_resource(capture_shared.clone())
+            .insert_resource(StreamOnlyCaptureInbox(Mutex::new(capture_receiver)))
             .init_resource::<OperatorChatRuntime>()
-            .add_systems(First, disarm_stream_only_readbacks)
+            .add_plugins(ExtractResourcePlugin::<StreamOnlyCaptureExtract>::default())
             .add_systems(
                 Update,
                 (
-                    start_local_broadcast_diagnostic,
-                    operator_window_close_requests_exit,
-                    request_automatic_broadcast_start,
-                    stream_operator_live_button,
-                    stream_operator_restart_button,
-                    apply_direct_broadcast_control,
-                    poll_direct_broadcast_authorization,
-                    start_prepared_broadcast_when_gameplay_ready,
-                    poll_direct_broadcast_worker,
-                    poll_twitch_live_verification,
-                    exit_after_broadcast_stops,
-                    return_to_main_menu_after_broadcast_stops,
-                    sync_stream_only_capture,
-                    cleanup_completed_stream_only_readbacks,
-                    update_stream_operator_info,
-                    stream_operator_chat_controls,
-                    update_stream_operator_chat,
-                    stream_operator_settings_controls,
-                    update_stream_operator_settings,
-                    capture_direct_broadcast_frame.after(SensitiveScreenUpdateSet),
+                    (
+                        start_local_broadcast_diagnostic,
+                        operator_window_close_requests_exit,
+                        request_automatic_broadcast_start,
+                        stream_operator_live_button,
+                        stream_operator_restart_button,
+                        apply_direct_broadcast_control,
+                        poll_direct_broadcast_authorization,
+                        start_prepared_broadcast_when_gameplay_ready,
+                        poll_direct_broadcast_worker,
+                        poll_twitch_live_verification,
+                        exit_after_broadcast_stops,
+                        return_to_main_menu_after_broadcast_stops,
+                    )
+                        .chain(),
+                    (
+                        sync_stream_only_capture,
+                        sync_stream_only_capture_extract,
+                        receive_stream_only_captured_frames,
+                        update_stream_operator_info,
+                        stream_operator_chat_controls,
+                        update_stream_operator_chat,
+                        stream_operator_settings_controls,
+                        update_stream_operator_settings,
+                        capture_direct_broadcast_frame.after(SensitiveScreenUpdateSet),
+                    )
+                        .chain(),
                 )
                     .chain(),
-            )
-            .add_systems(Last, arm_stream_only_readback);
+            );
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app
+                .insert_resource(GpuStreamCaptureRing::new(capture_sender, capture_shared))
+                .add_systems(
+                    Render,
+                    capture_stream_only_target.in_set(RenderSystems::Cleanup),
+                );
+        }
     }
 }
 
@@ -1133,7 +1214,7 @@ const fn prepared_broadcast_can_start(phase: &DirectBroadcastPhase, gameplay_rea
 
 fn poll_direct_broadcast_worker(
     config: Res<RuntimeConfig>,
-    capture: Res<StreamOnlyCaptureState>,
+    capture: Res<GpuStreamCaptureShared>,
     mut runtime: ResMut<DirectBroadcastRuntime>,
 ) {
     let events = runtime
@@ -1216,8 +1297,8 @@ fn poll_direct_broadcast_worker(
     report_stream_health(
         &mut runtime,
         config.0.twitch.broadcast.frames_per_second,
-        capture.readback_requests.len(),
-        capture.completed_readbacks.len(),
+        capture.0.in_flight.load(Ordering::Relaxed),
+        capture.0.queued.load(Ordering::Relaxed),
     );
 }
 
@@ -1623,13 +1704,6 @@ fn sync_stream_only_capture(
         winit.unfocused_mode = previous;
     }
     if !target_required && state.target.is_some() {
-        for entity in state.readback_requests.keys().copied().collect::<Vec<_>>() {
-            commands.entity(entity).try_despawn();
-        }
-        state.readback_requests.clear();
-        state.completed_readbacks.clear();
-        state.next_publish_sequence = state.next_readback_sequence;
-        state.next_readback_at = None;
         if let Some(target) = state.target.take()
             && let Some(images) = images.as_deref_mut()
         {
@@ -1656,126 +1730,6 @@ fn sync_stream_only_capture(
     }
 }
 
-fn disarm_stream_only_readbacks(
-    mut commands: Commands,
-    armed: Query<Entity, With<StreamOnlyReadbackArmed>>,
-) {
-    // A persistent Readback queues a new asynchronous copy every render frame.
-    // Remove it on the following main-world frame so each request has exactly
-    // one source frame and therefore one sequence number.
-    for entity in &armed {
-        commands.entity(entity).remove::<Readback>();
-    }
-}
-
-fn cleanup_completed_stream_only_readbacks(
-    mut commands: Commands,
-    armed: Query<Entity, With<StreamOnlyReadbackArmed>>,
-    runtime: Res<DirectBroadcastRuntime>,
-    mut state: ResMut<StreamOnlyCaptureState>,
-) {
-    let now = Instant::now();
-    let stalled = state
-        .readback_requests
-        .iter()
-        .filter_map(|(entity, (sequence, started))| {
-            (now.saturating_duration_since(*started) >= STREAM_READBACK_TIMEOUT)
-                .then_some((*entity, *sequence))
-        })
-        .collect::<Vec<_>>();
-    let mut retired = u64::try_from(stalled.len()).unwrap_or(u64::MAX);
-    for (entity, sequence) in stalled {
-        state.readback_requests.remove(&entity);
-        state.completed_readbacks.entry(sequence).or_insert(None);
-    }
-
-    // An abandoned early GPU copy used to block ordered publication forever
-    // while every later 1080p frame accumulated behind it. Bound the reorder
-    // window and retire the missing prefix as soon as that window fills.
-    if state.completed_readbacks.len() >= MAX_STREAM_COMPLETED_READBACKS
-        && let Some(first_completed) = state
-            .completed_readbacks
-            .first_key_value()
-            .map(|(key, _)| *key)
-        && first_completed > state.next_publish_sequence
-    {
-        let missing = first_completed.saturating_sub(state.next_publish_sequence);
-        retired = retired.saturating_add(missing);
-        state.next_publish_sequence = first_completed;
-        let obsolete = state
-            .readback_requests
-            .iter()
-            .filter_map(|(entity, (sequence, _))| (*sequence < first_completed).then_some(*entity))
-            .collect::<Vec<_>>();
-        for entity in obsolete {
-            state.readback_requests.remove(&entity);
-        }
-    }
-
-    let (next_sequence, frames) =
-        take_ordered_readback_frames(state.next_publish_sequence, &mut state.completed_readbacks);
-    state.next_publish_sequence = next_sequence;
-    if let Some(controller) = runtime.controller.as_ref() {
-        if retired > 0 {
-            controller.drop_video_frames(retired);
-        }
-        for frame in frames {
-            let _ = controller.send_video(frame);
-        }
-    }
-    for entity in &armed {
-        if !state.readback_requests.contains_key(&entity) {
-            commands.entity(entity).try_despawn();
-        }
-    }
-}
-
-fn arm_stream_only_readback(
-    mut commands: Commands,
-    config: Res<RuntimeConfig>,
-    gameplay_ready: Option<Res<crate::GameplayReady>>,
-    sensitive_screen: Res<SensitiveScreenActive>,
-    runtime: Res<DirectBroadcastRuntime>,
-    mut state: ResMut<StreamOnlyCaptureState>,
-) {
-    let active = gameplay_ready.is_some()
-        && config.0.twitch.broadcast.render_mode == BroadcastRenderMode::StreamOnly
-        && !sensitive_screen.0
-        && runtime.controller.is_some()
-        && matches!(
-            runtime.phase,
-            DirectBroadcastPhase::Connecting
-                | DirectBroadcastPhase::VerifyingTwitch
-                | DirectBroadcastPhase::Broadcasting
-                | DirectBroadcastPhase::BandwidthTesting
-                | DirectBroadcastPhase::Reconnecting
-        );
-    if !active || state.readback_requests.len() >= MAX_STREAM_READBACKS_IN_FLIGHT {
-        if !active {
-            state.next_readback_at = None;
-        }
-        return;
-    }
-    let now = Instant::now();
-    if !stream_readback_due(
-        &mut state.next_readback_at,
-        now,
-        config.0.twitch.broadcast.frames_per_second,
-    ) {
-        return;
-    }
-    let Some(target) = state.target.clone() else {
-        return;
-    };
-    let sequence = state.next_readback_sequence;
-    state.next_readback_sequence = state.next_readback_sequence.saturating_add(1);
-    let entity = commands
-        .spawn((Readback::texture(target), StreamOnlyReadbackArmed))
-        .observe(publish_stream_only_frame)
-        .id();
-    state.readback_requests.insert(entity, (sequence, now));
-}
-
 fn stream_readback_due(next: &mut Option<Instant>, now: Instant, frames_per_second: u8) -> bool {
     let period = Duration::from_secs_f64(1.0 / f64::from(frames_per_second.max(1)));
     let deadline = next.get_or_insert(now);
@@ -1788,6 +1742,221 @@ fn stream_readback_due(next: &mut Option<Instant>, now: Instant, frames_per_seco
     let advance = u32::try_from(elapsed_slots).unwrap_or(u32::MAX);
     *deadline += period.saturating_mul(advance);
     true
+}
+
+fn sync_stream_only_capture_extract(
+    config: Res<RuntimeConfig>,
+    gameplay_ready: Option<Res<crate::GameplayReady>>,
+    sensitive_screen: Res<SensitiveScreenActive>,
+    runtime: Res<DirectBroadcastRuntime>,
+    state: Res<StreamOnlyCaptureState>,
+    mut extracted: ResMut<StreamOnlyCaptureExtract>,
+) {
+    extracted.target.clone_from(&state.target);
+    extracted.width = state.width;
+    extracted.height = state.height;
+    extracted.frames_per_second = config.0.twitch.broadcast.frames_per_second;
+    extracted.active = gameplay_ready.is_some()
+        && config.0.twitch.broadcast.render_mode == BroadcastRenderMode::StreamOnly
+        && !sensitive_screen.0
+        && runtime.controller.is_some()
+        && matches!(
+            runtime.phase,
+            DirectBroadcastPhase::Connecting
+                | DirectBroadcastPhase::VerifyingTwitch
+                | DirectBroadcastPhase::Broadcasting
+                | DirectBroadcastPhase::BandwidthTesting
+                | DirectBroadcastPhase::Reconnecting
+        );
+}
+
+fn receive_stream_only_captured_frames(
+    inbox: Res<StreamOnlyCaptureInbox>,
+    shared: Res<GpuStreamCaptureShared>,
+    runtime: Res<DirectBroadcastRuntime>,
+) {
+    let mut newest = None;
+    let Ok(receiver) = inbox.0.lock() else {
+        return;
+    };
+    while let Ok(frame) = receiver.try_recv() {
+        shared.0.queued.fetch_sub(1, Ordering::Relaxed);
+        if newest.replace(frame).is_some() {
+            shared.0.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    drop(receiver);
+    let dropped = shared.0.dropped.swap(0, Ordering::Relaxed);
+    let map_failures = shared.0.map_failures.swap(0, Ordering::Relaxed);
+    let Some(controller) = runtime.controller.as_ref() else {
+        return;
+    };
+    if dropped > 0 {
+        controller.drop_video_frames(dropped);
+    }
+    if map_failures > 0 {
+        controller.drop_video_frames(map_failures);
+        warn!(map_failures, "fixed-ring stream capture mappings failed");
+    }
+    let Some(frame) = newest else {
+        return;
+    };
+    controller
+        .metrics
+        .observe_capture_latency(frame.captured_at.elapsed());
+    let _ = controller.send_video(VideoFrame {
+        width: frame.width,
+        height: frame.height,
+        pixel_format: VideoPixelFormat::Bgra,
+        pixels: frame.pixels,
+    });
+}
+
+fn configure_stream_capture_ring(
+    ring: &mut GpuStreamCaptureRing,
+    render_device: &RenderDevice,
+    width: u32,
+    height: u32,
+) -> bool {
+    if ring.width == width && ring.height == height && !ring.slots.is_empty() {
+        return true;
+    }
+    if ring
+        .slots
+        .iter()
+        .any(|slot| slot.busy.load(Ordering::Acquire))
+    {
+        return false;
+    }
+    let row_bytes = width.saturating_mul(4);
+    let aligned_row_bytes = u32::try_from(RenderDevice::align_copy_bytes_per_row(
+        usize::try_from(row_bytes).unwrap_or(usize::MAX),
+    ))
+    .unwrap_or(u32::MAX);
+    let buffer_bytes = u64::from(aligned_row_bytes).saturating_mul(u64::from(height));
+    if width == 0 || height == 0 || buffer_bytes == 0 {
+        return false;
+    }
+    ring.slots = (0..STREAM_CAPTURE_STAGING_BUFFERS)
+        .map(|_| GpuStreamCaptureSlot {
+            buffer: render_device.create_buffer(&BufferDescriptor {
+                label: Some("stream-town-fixed-capture-staging"),
+                size: buffer_bytes,
+                usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }),
+            busy: Arc::new(AtomicBool::new(false)),
+        })
+        .collect();
+    ring.width = width;
+    ring.height = height;
+    ring.aligned_row_bytes = aligned_row_bytes;
+    ring.next_slot = 0;
+    true
+}
+
+fn capture_stream_only_target(
+    extracted: Res<StreamOnlyCaptureExtract>,
+    render_device: Res<RenderDevice>,
+    render_queue: Res<RenderQueue>,
+    images: Res<GpuRenderAssets<GpuImage>>,
+    mut ring: ResMut<GpuStreamCaptureRing>,
+) {
+    let _ = render_device.poll(PollType::Poll);
+    if !extracted.active {
+        ring.next_capture_at = None;
+        return;
+    }
+    let Some(target) = extracted.target.as_ref() else {
+        return;
+    };
+    let Some(image) = images.get(target) else {
+        return;
+    };
+    if !configure_stream_capture_ring(&mut ring, &render_device, extracted.width, extracted.height)
+    {
+        return;
+    }
+    let now = Instant::now();
+    if !stream_readback_due(&mut ring.next_capture_at, now, extracted.frames_per_second) {
+        return;
+    }
+    let slot_count = ring.slots.len();
+    let slot_index = (0..slot_count)
+        .map(|offset| (ring.next_slot + offset) % slot_count)
+        .find(|index| {
+            ring.slots[*index]
+                .busy
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        });
+    let Some(slot_index) = slot_index else {
+        ring.shared.0.dropped.fetch_add(1, Ordering::Relaxed);
+        return;
+    };
+    ring.next_slot = (slot_index + 1) % slot_count;
+    ring.shared.0.in_flight.fetch_add(1, Ordering::Relaxed);
+
+    let slot = &ring.slots[slot_index];
+    let mut encoder = render_device.create_command_encoder(&CommandEncoderDescriptor {
+        label: Some("stream-town-fixed-capture-copy"),
+    });
+    encoder.copy_texture_to_buffer(
+        image.texture.as_image_copy(),
+        TexelCopyBufferInfo {
+            buffer: &slot.buffer,
+            layout: TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(ring.aligned_row_bytes),
+                rows_per_image: None,
+            },
+        },
+        Extent3d {
+            width: extracted.width,
+            height: extracted.height,
+            depth_or_array_layers: 1,
+        },
+    );
+    render_queue.submit([encoder.finish()]);
+
+    let buffer = slot.buffer.clone();
+    let busy = Arc::clone(&slot.busy);
+    let sender = ring.sender.clone();
+    let shared = ring.shared.clone();
+    let width = extracted.width;
+    let height = extracted.height;
+    let captured_at = now;
+    let callback_buffer = buffer.clone();
+    buffer.slice(..).map_async(MapMode::Read, move |result| {
+        if result.is_ok() {
+            let mapped = callback_buffer.slice(..).get_mapped_range();
+            let pixels = remove_gpu_row_padding(mapped.to_vec(), width, height);
+            drop(mapped);
+            callback_buffer.unmap();
+            if pixels.is_empty() {
+                shared.0.dropped.fetch_add(1, Ordering::Relaxed);
+            } else {
+                match sender.try_send(StreamOnlyCapturedFrame {
+                    width,
+                    height,
+                    captured_at,
+                    pixels,
+                }) {
+                    Ok(()) => {
+                        shared.0.queued.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(TrySendError::Full(_)) => {
+                        shared.0.dropped.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(TrySendError::Disconnected(_)) => {}
+                }
+            }
+        } else {
+            shared.0.map_failures.fetch_add(1, Ordering::Relaxed);
+        }
+        busy.store(false, Ordering::Release);
+        shared.0.in_flight.fetch_sub(1, Ordering::Relaxed);
+    });
 }
 
 fn spawn_stream_operator_view(
@@ -2901,62 +3070,6 @@ fn bounded_history_f32(value: usize) -> f32 {
 
 const fn camera_targets_primary_window(target: &RenderTarget) -> bool {
     matches!(target, RenderTarget::Window(WindowRef::Primary))
-}
-
-fn publish_stream_only_frame(
-    mut event: On<ReadbackComplete>,
-    mut state: ResMut<StreamOnlyCaptureState>,
-    sensitive_screen: Res<SensitiveScreenActive>,
-    runtime: Res<DirectBroadcastRuntime>,
-) {
-    let Some((sequence, capture_started)) = state.readback_requests.remove(&event.entity) else {
-        return;
-    };
-    let completed = if sensitive_screen.0 || state.width == 0 || state.height == 0 {
-        None
-    } else if let Some(controller) = runtime.controller.as_ref() {
-        let readback = std::mem::take(&mut event.event_mut().data);
-        let pixels = remove_gpu_row_padding(readback, state.width, state.height);
-        if pixels.is_empty() {
-            controller.drop_video_frames(1);
-            None
-        } else {
-            controller
-                .metrics
-                .observe_capture_latency(capture_started.elapsed());
-            Some(VideoFrame {
-                width: state.width,
-                height: state.height,
-                pixel_format: VideoPixelFormat::Bgra,
-                pixels,
-            })
-        }
-    } else {
-        None
-    };
-    state.completed_readbacks.insert(sequence, completed);
-    let (next_sequence, frames) =
-        take_ordered_readback_frames(state.next_publish_sequence, &mut state.completed_readbacks);
-    state.next_publish_sequence = next_sequence;
-    if let Some(controller) = runtime.controller.as_ref() {
-        for frame in frames {
-            let _ = controller.send_video(frame);
-        }
-    }
-}
-
-fn take_ordered_readback_frames(
-    mut next_sequence: u64,
-    completed: &mut BTreeMap<u64, Option<VideoFrame>>,
-) -> (u64, Vec<VideoFrame>) {
-    let mut ordered = Vec::new();
-    while let Some(frame) = completed.remove(&next_sequence) {
-        next_sequence = next_sequence.saturating_add(1);
-        if let Some(frame) = frame {
-            ordered.push(frame);
-        }
-    }
-    (next_sequence, ordered)
 }
 
 fn remove_gpu_row_padding(mut data: Vec<u8>, width: u32, height: u32) -> Vec<u8> {
@@ -4167,6 +4280,10 @@ struct BroadcastEncoder {
     width: u32,
     height: u32,
     video_input_format: ffmpeg::format::Pixel,
+    source_video_frames: Vec<frame::Video>,
+    source_video_frame_cursor: usize,
+    converted_video_frames: Vec<frame::Video>,
+    converted_video_frame_cursor: usize,
     audio_pts_base: Option<i64>,
 }
 
@@ -4415,6 +4532,10 @@ impl BroadcastEncoder {
                 width: u32::from(config.width),
                 height: u32::from(config.height),
                 video_input_format,
+                source_video_frames: Vec::new(),
+                source_video_frame_cursor: 0,
+                converted_video_frames: Vec::new(),
+                converted_video_frame_cursor: 0,
                 audio_pts_base: None,
             },
             encoder_selection,
@@ -4428,15 +4549,21 @@ impl BroadcastEncoder {
         metrics: &BroadcastMetrics,
     ) -> Result<u64> {
         let source_format = video.pixel_format.ffmpeg();
-        let mut source = frame::Video::new(source_format, video.width, video.height);
-        copy_packed_video_frame(video, &mut source)?;
+        let source = reusable_video_frame(
+            &mut self.source_video_frames,
+            &mut self.source_video_frame_cursor,
+            source_format,
+            video.width,
+            video.height,
+        );
+        copy_packed_video_frame(video, source)?;
         if source_format == self.video_input_format
             && video.width == self.width
             && video.height == self.height
         {
             source.set_pts(Some(pts));
             self.video
-                .send_frame(&source)
+                .send_frame(source)
                 .context("H.264 encoder rejected a packed frame")?;
             return self.drain_video(metrics);
         }
@@ -4459,16 +4586,22 @@ impl BroadcastEncoder {
             .context("could not initialize the broadcast video scaler")?;
             self.scaler = Some((video.width, video.height, source_format, scaler));
         }
-        let mut converted = frame::Video::new(self.video_input_format, self.width, self.height);
+        let converted = reusable_video_frame(
+            &mut self.converted_video_frames,
+            &mut self.converted_video_frame_cursor,
+            self.video_input_format,
+            self.width,
+            self.height,
+        );
         self.scaler
             .as_mut()
             .context("broadcast scaler was not initialized")?
             .3
-            .run(&source, &mut converted)
+            .run(source, converted)
             .context("could not scale a broadcast frame")?;
         converted.set_pts(Some(pts));
         self.video
-            .send_frame(&converted)
+            .send_frame(converted)
             .context("H.264 encoder rejected a frame")?;
         self.drain_video(metrics)
     }
@@ -4550,6 +4683,31 @@ impl BroadcastEncoder {
         metrics.observe_mux_write_latency(publish_started.elapsed());
         finished.context("could not finish the Twitch FLV stream")
     }
+}
+
+fn reusable_video_frame<'a>(
+    frames: &'a mut Vec<frame::Video>,
+    cursor: &mut usize,
+    format: ffmpeg::format::Pixel,
+    width: u32,
+    height: u32,
+) -> &'a mut frame::Video {
+    let layout_changed = frames.first().is_some_and(|frame| {
+        frame.format() != format || frame.width() != width || frame.height() != height
+    });
+    if layout_changed || frames.len() != ENCODER_VIDEO_FRAME_BUFFERS {
+        frames.clear();
+        frames.extend(
+            (0..ENCODER_VIDEO_FRAME_BUFFERS).map(|_| frame::Video::new(format, width, height)),
+        );
+        *cursor = 0;
+    }
+    let index = *cursor % frames.len();
+    *cursor = (index + 1) % frames.len();
+    // Four slots exceed the zero-B-frame encoder's retained input depth. Each
+    // slot is therefore released before the cadence worker cycles back to it,
+    // without allocating another full-resolution AVFrame every tick.
+    &mut frames[index]
 }
 
 fn copy_packed_video_frame(video: &VideoFrame, target: &mut frame::Video) -> Result<()> {
@@ -5105,73 +5263,6 @@ mod tests {
         assert_eq!(pixels.len(), row_bytes * usize::try_from(height).unwrap());
         assert!(pixels[..row_bytes].iter().all(|byte| *byte == 0x11));
         assert!(pixels[row_bytes..].iter().all(|byte| *byte == 0x22));
-    }
-
-    #[test]
-    fn gpu_readbacks_are_published_in_render_order_even_when_they_finish_out_of_order() {
-        let frame = |value| VideoFrame {
-            width: 1,
-            height: 1,
-            pixel_format: VideoPixelFormat::Bgra,
-            pixels: vec![value; 4],
-        };
-        let mut completed = BTreeMap::from([(2, Some(frame(2))), (1, None)]);
-
-        let (next_sequence, frames) = take_ordered_readback_frames(0, &mut completed);
-
-        assert_eq!(next_sequence, 0);
-        assert!(frames.is_empty());
-        completed.insert(0, Some(frame(0)));
-
-        let (next_sequence, frames) = take_ordered_readback_frames(next_sequence, &mut completed);
-
-        assert_eq!(next_sequence, 3);
-        assert_eq!(
-            frames
-                .into_iter()
-                .map(|frame| frame.pixels[0])
-                .collect::<Vec<_>>(),
-            [0, 2]
-        );
-        assert!(completed.is_empty());
-    }
-
-    #[test]
-    fn stalled_gpu_readback_cannot_accumulate_full_resolution_frames() {
-        let mut app = App::new();
-        let stalled = app.world_mut().spawn(StreamOnlyReadbackArmed).id();
-        let frame = |value| VideoFrame {
-            width: 1,
-            height: 1,
-            pixel_format: VideoPixelFormat::Bgra,
-            pixels: vec![value; 4],
-        };
-        let mut capture = StreamOnlyCaptureState::default();
-        capture
-            .readback_requests
-            .insert(stalled, (0, Instant::now()));
-        capture.completed_readbacks = (1..=MAX_STREAM_COMPLETED_READBACKS)
-            .map(|sequence| {
-                (
-                    u64::try_from(sequence).unwrap(),
-                    Some(frame(u8::try_from(sequence).unwrap())),
-                )
-            })
-            .collect();
-        app.insert_resource(DirectBroadcastRuntime::default())
-            .insert_resource(capture)
-            .add_systems(Update, cleanup_completed_stream_only_readbacks);
-
-        app.update();
-
-        let capture = app.world().resource::<StreamOnlyCaptureState>();
-        assert!(capture.readback_requests.is_empty());
-        assert!(capture.completed_readbacks.is_empty());
-        assert_eq!(
-            capture.next_publish_sequence,
-            u64::try_from(MAX_STREAM_COMPLETED_READBACKS).unwrap() + 1
-        );
-        assert!(app.world().get_entity(stalled).is_err());
     }
 
     #[test]
