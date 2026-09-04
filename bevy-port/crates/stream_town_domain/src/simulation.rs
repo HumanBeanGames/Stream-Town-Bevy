@@ -136,7 +136,10 @@ pub struct ActorCustomization {
     pub hair_color: u8,
     pub eye_color: u8,
     /// Index into the five authored Unity skin colours.
-    #[serde(default)]
+    // Zero must remain absent from the canonical RON representation. Native
+    // saves created before schema 5 did not contain this field, and their
+    // checksum is verified before the appearance migration runs.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
     pub skin_color: u8,
     pub body_type: u8,
     /// Optional RGB overrides authored by the player through Twitch chat.
@@ -1776,6 +1779,11 @@ fn is_zero_u32(value: &u32) -> bool {
     *value == 0
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero_u8(value: &u8) -> bool {
+    *value == 0
+}
+
 fn actor_appearance_hash(world_seed: u64, actor: &StableId, salt: u64) -> u64 {
     let mut hash = (world_seed ^ salt).wrapping_add(0x9e37_79b9_7f4a_7c15);
     for byte in actor.as_str().bytes() {
@@ -2664,6 +2672,27 @@ mod tests {
         let encoded = ron::to_string(&simulation).unwrap();
         let decoded = ron::from_str::<WorldSimulation>(&encoded).unwrap();
         assert_eq!(decoded.actors[&first].customization, first_appearance);
+    }
+
+    #[test]
+    fn zero_skin_color_preserves_pre_schema_five_canonical_ron() {
+        let legacy_customization = ActorCustomization {
+            hair: 2,
+            ..ActorCustomization::default()
+        };
+        let legacy_compatible = ron::to_string(&legacy_customization).unwrap();
+        assert!(!legacy_compatible.contains("skin_color"));
+
+        let current_customization = ActorCustomization {
+            skin_color: 3,
+            ..legacy_customization
+        };
+        let current = ron::to_string(&current_customization).unwrap();
+        assert!(current.contains("skin_color:3"));
+        assert_eq!(
+            ron::from_str::<ActorCustomization>(&current).unwrap(),
+            current_customization
+        );
     }
 
     #[test]

@@ -681,6 +681,29 @@ struct SaveRuntime {
     store: NativeSaveStore,
 }
 
+/// Holds the startup resume request after process initialization. Keeping the
+/// path in a resource makes the loading and broadcast gates independent of any
+/// later environment changes, and `applied` prevents a failed resume from ever
+/// exposing or streaming the freshly generated fallback world.
+#[derive(Resource, Clone, Debug, Default)]
+struct AutomaticResumeRuntime {
+    path: Option<PathBuf>,
+    applied: bool,
+}
+
+impl AutomaticResumeRuntime {
+    fn new(path: Option<PathBuf>) -> Self {
+        Self {
+            path,
+            applied: false,
+        }
+    }
+
+    fn pending(&self) -> bool {
+        self.path.is_some() && !self.applied
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TownSaveEntry {
     name: String,
@@ -707,12 +730,6 @@ fn startup_save_path(resume_path: Option<PathBuf>, fixed_path: Option<PathBuf>) 
 }
 
 impl TownSaveCatalogRuntime {
-    fn from_environment() -> Self {
-        let fixed_path = std::env::var_os("STREAM_TOWN_SAVE_PATH").map(PathBuf::from);
-        let resume_path = automatic_resume_save_path();
-        Self::from_startup_paths(fixed_path, resume_path)
-    }
-
     fn from_startup_paths(fixed_path: Option<PathBuf>, resume_path: Option<PathBuf>) -> Self {
         let active_town = resume_path.as_deref().and_then(|path| {
             path.file_stem()
@@ -4349,6 +4366,8 @@ impl Plugin for StreamTownGamePlugin {
         let render_schedule_available = app.get_sub_app(RenderApp).is_some();
         let presented_frames = PresentedRenderFrames::new(render_schedule_available);
         let gpu_readiness = GpuReadinessProbe::default();
+        let automatic_resume_path = automatic_resume_save_path();
+        let fixed_save_path = std::env::var_os("STREAM_TOWN_SAVE_PATH").map(PathBuf::from);
         app.insert_resource(presented_frames.clone());
         app.insert_resource(gpu_readiness.clone());
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
@@ -4440,13 +4459,17 @@ impl Plugin for StreamTownGamePlugin {
             .insert_resource(PlayerSettingsRuntime {
                 autosave_elapsed_seconds: 0.0,
             })
-            .insert_resource(TownSaveCatalogRuntime::from_environment())
+            .insert_resource(TownSaveCatalogRuntime::from_startup_paths(
+                fixed_save_path.clone(),
+                automatic_resume_path.clone(),
+            ))
             .insert_resource(SaveRuntime {
                 store: NativeSaveStore::new(startup_save_path(
-                    automatic_resume_save_path(),
-                    std::env::var_os("STREAM_TOWN_SAVE_PATH").map(PathBuf::from),
+                    automatic_resume_path.clone(),
+                    fixed_save_path,
                 )),
             })
+            .insert_resource(AutomaticResumeRuntime::new(automatic_resume_path))
             .add_systems(
                 Startup,
                 (
@@ -4636,6 +4659,10 @@ impl Plugin for StreamTownGamePlugin {
                     sync_loading_screen_status
                         .after(finish_world_reveal)
                         .run_if(resource_exists::<WorldLoadingRuntime>),
+                    load_input
+                        .after(finish_world_reveal)
+                        .before(enforce_loading_overlay_retired)
+                        .run_if(world_reveal_finished),
                     enforce_loading_overlay_retired.after(finish_world_reveal),
                     confirm_gameplay_ready.after(enforce_loading_overlay_retired),
                 )
@@ -4757,10 +4784,6 @@ impl Plugin for StreamTownGamePlugin {
                         .in_set(GameplaySimulationSet),
                     inject_environment_commands.in_set(GameplaySimulationSet),
                     save_input
-                        .after(apply_agent_commands)
-                        .after(apply_building_commands)
-                        .in_set(GameplaySimulationSet),
-                    load_input
                         .after(apply_agent_commands)
                         .after(apply_building_commands)
                         .in_set(GameplaySimulationSet),
@@ -4955,14 +4978,12 @@ impl Plugin for StreamTownGamePlugin {
                     sync_traversal_wear_texture.after(decay_traversal_wear),
                     sync_path_surface_texture
                         .after(apply_building_commands)
-                        .after(load_input)
                         .before(move_agents),
                     sync_building_placement_overlays
                         .after(process_injected_commands)
                         .after(apply_building_placement_ghosts),
                     sync_foliage_clearance
                         .after(apply_building_commands)
-                        .after(load_input)
                         .after(decay_traversal_wear)
                         .after(ground_loaded_surface_visuals),
                     sync_world_diagnostic_view
@@ -7802,11 +7823,12 @@ fn begin_menu_loading(
     render: Option<Res<RenderAssets>>,
     asset_root: Res<RuntimeAssetRoot>,
     asset_server: Option<Res<AssetServer>>,
+    automatic_resume: Res<AutomaticResumeRuntime>,
 ) {
     let destination = startup_destination(
         std::env::var_os("STREAM_TOWN_AUTOSTART_CREDITS").is_some(),
         std::env::var_os("STREAM_TOWN_AUTOSTART").is_some(),
-        automatic_resume_save_path().is_some(),
+        automatic_resume.path.is_some(),
     );
     commands.insert_resource(menu_loading_runtime(
         destination,
@@ -10024,14 +10046,22 @@ fn finish_world_reveal(
     commands.remove_resource::<WorldRevealRuntime>();
 }
 
+fn world_reveal_finished(
+    reveal: Option<Res<WorldRevealRuntime>>,
+    loading: Option<Res<WorldLoadingRuntime>>,
+) -> bool {
+    reveal.is_none() && loading.is_none()
+}
+
 fn enforce_loading_overlay_retired(
     mut commands: Commands,
     reveal: Option<Res<WorldRevealRuntime>>,
+    automatic_resume: Res<AutomaticResumeRuntime>,
     mut loading_entities: Query<(Entity, &mut Visibility), With<LoadingScreenEntity>>,
     loading_cameras: Query<Entity, With<LoadingUiCamera>>,
     mut retirement_verified: Local<bool>,
 ) {
-    if reveal.is_some() {
+    if reveal.is_some() || automatic_resume.pending() {
         return;
     }
     let mut survivors = 0;
@@ -10057,13 +10087,19 @@ fn enforce_loading_overlay_retired(
 fn confirm_gameplay_ready(
     mut commands: Commands,
     ready: Option<Res<GameplayReady>>,
+    automatic_resume: Res<AutomaticResumeRuntime>,
     reveal: Option<Res<WorldRevealRuntime>>,
     loading: Option<Res<WorldLoadingRuntime>>,
     loading_entities: LoadingRetirementQuery,
     simulation: Option<Res<SimulationRuntime>>,
     stats: Option<Res<SessionStats>>,
 ) {
-    if ready.is_some() || reveal.is_some() || loading.is_some() || !loading_entities.is_empty() {
+    if automatic_resume.pending()
+        || ready.is_some()
+        || reveal.is_some()
+        || loading.is_some()
+        || !loading_entities.is_empty()
+    {
         return;
     }
     commands.insert_resource(GameplayReady);
@@ -34693,12 +34729,13 @@ fn autosave_game(
 fn save_on_gameplay_exit(
     save: Res<SaveRuntime>,
     restart: Res<TownRestartRuntime>,
+    ready: Option<Res<GameplayReady>>,
     world: Option<Res<WorldRuntime>>,
     stats: Option<Res<SessionStats>>,
     simulation: Option<Res<SimulationRuntime>>,
     traversal_wear: Option<Res<TraversalWearRuntime>>,
 ) {
-    if restart.suppress_exit_save {
+    if restart.suppress_exit_save || ready.is_none() {
         return;
     }
     let (Some(world), Some(stats), Some(simulation), Some(traversal_wear)) =
@@ -34770,6 +34807,7 @@ fn load_input(
     mut ecs: Commands,
     mut io: ResMut<MenuIoRequest>,
     save: Res<SaveRuntime>,
+    mut automatic_resume: ResMut<AutomaticResumeRuntime>,
     mut world: ResMut<WorldRuntime>,
     mut config: ResMut<RuntimeConfig>,
     content: Res<RuntimeContent>,
@@ -34786,7 +34824,7 @@ fn load_input(
     let automatic = automatic_load_requested(
         *automatic_complete,
         std::env::var_os("STREAM_TOWN_AUTO_LOAD").is_some(),
-        automatic_resume_save_path().is_some(),
+        automatic_resume.path.is_some(),
     );
     let requested = std::mem::take(&mut io.load);
     let requested_source = io.load_source.take();
@@ -35338,6 +35376,9 @@ fn load_input(
     }
     simulation.0 = snapshot.simulation;
     config.0.world.seed = snapshot.world_seed;
+    if automatic_resume.path.is_some() {
+        automatic_resume.applied = true;
+    }
     runtime_console.last_result = if forked_from_template {
         format!(
             "Loaded protected {} as {}",
@@ -44942,7 +44983,8 @@ mod tests {
     #[test]
     fn gameplay_gate_remains_closed_until_loading_entities_and_runtimes_are_gone() {
         let mut app = App::new();
-        app.add_systems(Update, confirm_gameplay_ready);
+        app.insert_resource(AutomaticResumeRuntime::default())
+            .add_systems(Update, confirm_gameplay_ready);
         let loading_entity = app.world_mut().spawn(LoadingScreenEntity).id();
         app.update();
         assert!(!app.world().contains_resource::<GameplayReady>());
@@ -44960,6 +45002,24 @@ mod tests {
         assert!(!app.world().contains_resource::<GameplayReady>());
 
         app.world_mut().remove_resource::<WorldRevealRuntime>();
+        app.update();
+        assert!(app.world().contains_resource::<GameplayReady>());
+    }
+
+    #[test]
+    fn automatic_resume_gate_never_exposes_an_unapplied_fallback_world() {
+        let mut app = App::new();
+        app.insert_resource(AutomaticResumeRuntime::new(Some(PathBuf::from(
+            ".stream-town/saves/Tonyville.stbevy",
+        ))))
+        .add_systems(Update, confirm_gameplay_ready);
+
+        app.update();
+        assert!(!app.world().contains_resource::<GameplayReady>());
+
+        app.world_mut()
+            .resource_mut::<AutomaticResumeRuntime>()
+            .applied = true;
         app.update();
         assert!(app.world().contains_resource::<GameplayReady>());
     }
