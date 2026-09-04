@@ -9909,7 +9909,7 @@
             display_name: "Path",
             archetype: "archetype:building:path",
             footprint: (1, 1),
-            navigation_footprint_thirds: Some((1, 3)),
+            navigation_footprint_thirds: Some((1, 1)),
             cost: {
                 "resource:ore": 130,
                 "resource:wood": 150,

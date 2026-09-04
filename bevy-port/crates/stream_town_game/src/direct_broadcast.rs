@@ -1397,6 +1397,26 @@ fn report_stream_health(
             .mux_write_samples
             .saturating_sub(runtime.health_reported_metrics.mux_write_samples),
     );
+    let video_bytes = metrics
+        .video_packet_bytes
+        .saturating_sub(runtime.health_reported_metrics.video_packet_bytes);
+    let video_kbps = rate_per_second(video_bytes.saturating_mul(8), elapsed) / 1_000.0;
+    let keyframe_packets = metrics
+        .keyframe_packets
+        .saturating_sub(runtime.health_reported_metrics.keyframe_packets);
+    let keyframe_bytes = metrics
+        .keyframe_bytes
+        .saturating_sub(runtime.health_reported_metrics.keyframe_bytes);
+    let average_keyframe_kib = if keyframe_packets == 0 {
+        0
+    } else {
+        keyframe_bytes
+            .saturating_div(keyframe_packets)
+            .saturating_add(512)
+            / 1_024
+    };
+    let maximum_keyframe_kib = metrics.maximum_keyframe_bytes.saturating_add(512) / 1_024;
+    let maximum_video_packet_kib = metrics.maximum_video_packet_bytes.saturating_add(512) / 1_024;
     runtime.rolling_captured_video_fps = captured_fps;
     runtime.rolling_encoded_video_fps = encoded_fps;
     let minimum_healthy_fps = f64::from(target_fps) * 0.9;
@@ -1408,7 +1428,7 @@ fn report_stream_health(
     append_direct_broadcast_diagnostic(
         if unhealthy { "WARN" } else { "INFO" },
         &format!(
-            "event=health target_fps={target_fps} captured_fps={captured_fps:.2} encoded_fps={encoded_fps:.2} audio_fps={audio_fps:.2} video_drops={new_video_drops} capture_replacements={new_video_replacements} cadence_skips={new_video_skips} audio_drops={new_audio_drops} audio_queue={} readbacks_in_flight={readbacks_in_flight} readbacks_completed={readbacks_completed} average_encode_ms={average_encode_ms:.2} maximum_encode_ms={:.2} average_mux_write_ms={average_mux_write_ms:.2} maximum_mux_write_ms={:.2}",
+            "event=health target_fps={target_fps} captured_fps={captured_fps:.2} encoded_fps={encoded_fps:.2} audio_fps={audio_fps:.2} video_kbps={video_kbps:.0} keyframes={keyframe_packets} average_keyframe_kib={average_keyframe_kib} maximum_keyframe_kib={maximum_keyframe_kib} maximum_video_packet_kib={maximum_video_packet_kib} video_drops={new_video_drops} capture_replacements={new_video_replacements} cadence_skips={new_video_skips} audio_drops={new_audio_drops} audio_queue={} readbacks_in_flight={readbacks_in_flight} readbacks_completed={readbacks_completed} average_encode_ms={average_encode_ms:.2} maximum_encode_ms={:.2} average_mux_write_ms={average_mux_write_ms:.2} maximum_mux_write_ms={:.2}",
             metrics.queued_audio,
             micros_to_milliseconds(metrics.maximum_video_encode_micros),
             micros_to_milliseconds(metrics.maximum_mux_write_micros),
@@ -1428,6 +1448,11 @@ fn report_stream_health(
             readbacks_in_flight,
             readbacks_completed,
             average_encode_ms,
+            video_kbps,
+            keyframe_packets,
+            average_keyframe_kib,
+            maximum_keyframe_kib,
+            maximum_video_packet_kib,
             maximum_encode_ms = micros_to_milliseconds(metrics.maximum_video_encode_micros),
             average_mux_write_ms,
             maximum_mux_write_ms = micros_to_milliseconds(metrics.maximum_mux_write_micros),
@@ -1447,6 +1472,9 @@ fn report_stream_health(
             readbacks_in_flight,
             readbacks_completed,
             average_encode_ms,
+            video_kbps,
+            keyframe_packets,
+            average_keyframe_kib,
             average_mux_write_ms,
             "direct Twitch broadcast health"
         );
@@ -3385,6 +3413,11 @@ struct BroadcastMetrics {
     mux_write_samples: AtomicU64,
     mux_write_micros: AtomicU64,
     maximum_mux_write_micros: AtomicU64,
+    video_packet_bytes: AtomicU64,
+    keyframe_packets: AtomicU64,
+    keyframe_bytes: AtomicU64,
+    maximum_video_packet_bytes: AtomicU64,
+    maximum_keyframe_bytes: AtomicU64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -3406,6 +3439,11 @@ struct BroadcastMetricsSnapshot {
     mux_write_samples: u64,
     mux_write_micros: u64,
     maximum_mux_write_micros: u64,
+    video_packet_bytes: u64,
+    keyframe_packets: u64,
+    keyframe_bytes: u64,
+    maximum_video_packet_bytes: u64,
+    maximum_keyframe_bytes: u64,
 }
 
 impl BroadcastMetrics {
@@ -3428,6 +3466,11 @@ impl BroadcastMetrics {
             mux_write_samples: self.mux_write_samples.load(Ordering::Relaxed),
             mux_write_micros: self.mux_write_micros.load(Ordering::Relaxed),
             maximum_mux_write_micros: self.maximum_mux_write_micros.load(Ordering::Relaxed),
+            video_packet_bytes: self.video_packet_bytes.load(Ordering::Relaxed),
+            keyframe_packets: self.keyframe_packets.load(Ordering::Relaxed),
+            keyframe_bytes: self.keyframe_bytes.load(Ordering::Relaxed),
+            maximum_video_packet_bytes: self.maximum_video_packet_bytes.load(Ordering::Relaxed),
+            maximum_keyframe_bytes: self.maximum_keyframe_bytes.load(Ordering::Relaxed),
         }
     }
 
@@ -3453,6 +3496,19 @@ impl BroadcastMetrics {
         self.mux_write_micros.fetch_add(micros, Ordering::Relaxed);
         self.maximum_mux_write_micros
             .fetch_max(micros, Ordering::Relaxed);
+    }
+
+    fn observe_video_packet(&self, bytes: usize, keyframe: bool) {
+        let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
+        self.video_packet_bytes.fetch_add(bytes, Ordering::Relaxed);
+        self.maximum_video_packet_bytes
+            .fetch_max(bytes, Ordering::Relaxed);
+        if keyframe {
+            self.keyframe_packets.fetch_add(1, Ordering::Relaxed);
+            self.keyframe_bytes.fetch_add(bytes, Ordering::Relaxed);
+            self.maximum_keyframe_bytes
+                .fetch_max(bytes, Ordering::Relaxed);
+        }
     }
 }
 
@@ -4452,6 +4508,7 @@ impl BroadcastEncoder {
         let mut packet = Packet::empty();
         let mut published = 0_u64;
         while self.video.receive_packet(&mut packet).is_ok() {
+            metrics.observe_video_packet(packet.size(), packet.is_key());
             packet.set_stream(self.video_stream);
             packet.rescale_ts(self.video.time_base(), self.video_time_base);
             let pts = packet.pts();
@@ -4519,6 +4576,9 @@ fn copy_packed_video_frame(video: &VideoFrame, target: &mut frame::Video) -> Res
 fn configure_amf_quality(options: &mut Dictionary<'_>) {
     options.set("profile", "high");
     options.set("usage", "lowlatency_high_quality");
+    // The linked FFmpeg 8 / AMF combination accepts the quality preset on the
+    // RX 7800 XT. Its newer high_quality enum is exposed only by later FFmpeg
+    // builds and makes this shipped runtime reject AMF at encoder open.
     options.set("quality", "quality");
     // Retain broad AMF-driver compatibility for Twitch's constant-rate
     // contract while spending the RX 7800 XT's quality budget on stable fine
@@ -5458,6 +5518,21 @@ mod tests {
         mailbox.lock().unwrap().replace(second);
         assert_eq!(take_latest_video(&mailbox).unwrap().pixels, [5, 6, 7, 8]);
         assert!(take_latest_video(&mailbox).is_none());
+    }
+
+    #[test]
+    fn video_packet_metrics_separate_keyframe_pressure_from_mux_stalls() {
+        let metrics = BroadcastMetrics::default();
+        metrics.observe_video_packet(1_024, false);
+        metrics.observe_video_packet(8_192, true);
+        metrics.observe_video_packet(4_096, true);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.video_packet_bytes, 13_312);
+        assert_eq!(snapshot.keyframe_packets, 2);
+        assert_eq!(snapshot.keyframe_bytes, 12_288);
+        assert_eq!(snapshot.maximum_video_packet_bytes, 8_192);
+        assert_eq!(snapshot.maximum_keyframe_bytes, 8_192);
     }
 
     #[test]

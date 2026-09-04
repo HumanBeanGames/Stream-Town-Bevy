@@ -328,7 +328,7 @@ impl Default for BroadcastConfig {
             width: 1_280,
             height: 720,
             frames_per_second: 30,
-            video_bitrate_kbps: 3_000,
+            video_bitrate_kbps: 6_000,
             audio_bitrate_kbps: 160,
             encoder: BroadcastEncoderPreference::Auto,
             ingest: String::new(),

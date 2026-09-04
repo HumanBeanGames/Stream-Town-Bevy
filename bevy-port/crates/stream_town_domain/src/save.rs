@@ -204,6 +204,10 @@ pub enum NativeSaveError {
     EnemyCampKeyMismatch { key: StableId, embedded: StableId },
     #[error("persistent ID {0} is reused across simulation entity kinds")]
     DuplicatePersistentId(StableId),
+    #[error("path navigation position references missing building {0}")]
+    MissingPathBuilding(StableId),
+    #[error("multiple paths occupy fine navigation cell {0:?}")]
+    DuplicatePathNavigationPosition(GridPos),
     #[error("saved {kind} {id} has no authoritative simulation state")]
     MissingSimulationState { kind: &'static str, id: StableId },
     #[error("simulation actor {0} has no saved world entity record")]
@@ -454,6 +458,15 @@ fn validate_snapshot(snapshot: &WorldSnapshot) -> Result<(), NativeSaveError> {
         }
         if !persistent_ids.insert(key.clone()) {
             return Err(NativeSaveError::DuplicatePersistentId(key.clone()));
+        }
+    }
+    let mut path_positions = BTreeSet::new();
+    for (building, position) in &snapshot.simulation.path_navigation_positions {
+        if !snapshot.simulation.buildings.contains_key(building) {
+            return Err(NativeSaveError::MissingPathBuilding(building.clone()));
+        }
+        if !path_positions.insert(*position) {
+            return Err(NativeSaveError::DuplicatePathNavigationPosition(*position));
         }
     }
 
@@ -750,6 +763,45 @@ mod tests {
         assert!(matches!(
             validate_snapshot(&invalid),
             Err(NativeSaveError::EnemyCampKeyMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn snapshot_validation_rejects_dangling_or_overlapping_fine_paths() {
+        let first = StableId::new("building:path_first").unwrap();
+        let second = StableId::new("building:path_second").unwrap();
+        let position = GridPos { x: 13, z: 17 };
+        let mut invalid = snapshot(7);
+        invalid
+            .simulation
+            .path_navigation_positions
+            .insert(first.clone(), position);
+        assert!(matches!(
+            validate_snapshot(&invalid),
+            Err(NativeSaveError::MissingPathBuilding(id)) if id == first
+        ));
+
+        for id in [&first, &second] {
+            invalid.simulation.buildings.insert(
+                id.clone(),
+                BuildingState {
+                    id: id.clone(),
+                    archetype: StableId::new("archetype:building:path").unwrap(),
+                    position: GridPos { x: 4, z: 5 },
+                    rotation_quarter_turns: 0,
+                    level: 1,
+                    health: 50,
+                    complete: true,
+                },
+            );
+        }
+        invalid
+            .simulation
+            .path_navigation_positions
+            .insert(second, position);
+        assert!(matches!(
+            validate_snapshot(&invalid),
+            Err(NativeSaveError::DuplicatePathNavigationPosition(cell)) if cell == position
         ));
     }
 

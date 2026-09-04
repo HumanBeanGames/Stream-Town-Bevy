@@ -252,6 +252,11 @@ pub struct WorldSimulation {
     pub passive_resource_accumulators: BTreeMap<StableId, BTreeMap<StableId, u64>>,
     pub actors: BTreeMap<StableId, ActorState>,
     pub buildings: BTreeMap<StableId, BuildingState>,
+    /// Fine-navigation coordinates for path sections. Paths are the one authored
+    /// structure that lives on the one-third-cell movement grid; old saves omit
+    /// this map and retain their former coarse-cell-centred placement.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub path_navigation_positions: BTreeMap<StableId, GridPos>,
     /// Ruler-authored building light colours, keyed by persistent BID.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub building_night_light_colors: BTreeMap<StableId, [u8; 3]>,
@@ -364,6 +369,7 @@ impl WorldSimulation {
             passive_resource_accumulators: BTreeMap::new(),
             actors: BTreeMap::new(),
             buildings: BTreeMap::new(),
+            path_navigation_positions: BTreeMap::new(),
             building_night_light_colors: BTreeMap::new(),
             next_enemy_serial: 0,
             enemy_camps: BTreeMap::new(),
@@ -1803,6 +1809,33 @@ mod tests {
         assert_eq!(
             ron::from_str::<WorldSimulation>(&old_actor).unwrap().actors[&actor].user_type,
             StreamUserType::Normal
+        );
+    }
+
+    #[test]
+    fn fine_path_positions_round_trip_and_default_for_old_saves() {
+        let building = id("building:runtime_path_test");
+        let mut simulation = WorldSimulation::new(17);
+        simulation
+            .path_navigation_positions
+            .insert(building.clone(), GridPos { x: 31, z: 47 });
+
+        let encoded = ron::to_string(&simulation).unwrap();
+        let decoded = ron::from_str::<WorldSimulation>(&encoded).unwrap();
+        assert_eq!(
+            decoded.path_navigation_positions[&building],
+            GridPos { x: 31, z: 47 }
+        );
+
+        let old_encoded = encoded.replace(
+            &format!("path_navigation_positions:{{\"{building}\":(x:31,z:47)}},"),
+            "",
+        );
+        assert!(
+            ron::from_str::<WorldSimulation>(&old_encoded)
+                .unwrap()
+                .path_navigation_positions
+                .is_empty()
         );
     }
 

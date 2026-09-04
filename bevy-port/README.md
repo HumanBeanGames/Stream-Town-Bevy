@@ -338,12 +338,15 @@ causes are written asynchronously to
 so a failed session can be diagnosed after the game exits without putting disk
 I/O on the render or encoder thread. Auto encoder selection prefers AMD AMF on a
 compatible Radeon GPU, falls back to forced-hardware Windows Media Foundation,
-and uses OpenH264 only as the software fallback. AMF uses CBR, zero B-frames,
-and its low-latency path; RTMP uses live, no-delay, immediate-flush output so a
+and uses OpenH264 only as the software fallback. New configurations default to
+Twitch's 6,000 kbps ceiling, and AMF uses its quality-oriented low-latency CBR
+profile with zero B-frames; RTMP uses live, no-delay, immediate-flush output so a
 delayed packet cannot periodically stall the ingest connection. A mux failure
 records the failed packet timestamps in the redacted diagnostics log. Packet
-writes have independent average/maximum latency telemetry and a three-second
-network timeout, separating an ingest stall from hardware encoding cost. Ending
+writes have independent average/maximum latency telemetry, while health samples
+report measured video kbps, keyframe count/size, and maximum packet size.
+Together with the three-second network timeout, this separates an ingest stall,
+I-frame pressure, and hardware encoding cost. Ending
 a live stream publishes the offline card for one second and then closes RTMP
 without attempting a seekable FLV trailer; local diagnostic files retain normal
 trailer finalization. The
@@ -439,7 +442,10 @@ position, `!move`/direction aliases and `!rotate` adjust
 the exact grid cell and retained 90-degree rotation, `!confirm`/`!accept` spends
 schema-4 resources and commits valid occupancy, and `!cancel` exits without
 spending. Walls use the separate `!beginplace`, orthogonal movement,
-`!endplace`, and `!confirm` line workflow. `!bid <BuildingName>` exposes stable,
+`!endplace`, and `!confirm` line workflow. Paths use the same commands but move
+and persist on individual one-third-cell navigation samples; every movement step
+extends a bendable route, and retracing edits that route before confirmation.
+`!bid <BuildingName>` exposes stable,
 one-based per-type BID numbers; `!upgrade <BuildingName> <BID>`,
 `!rotatebuilding`, `!buildinglight`, and Ruler-only `!remove` consume those same
 numbers. An untouched placement expires after 30 seconds. Placed rotation, occupancy, station/target
@@ -619,7 +625,10 @@ as a correctness fallback. Wave members are instantiated deterministically
 across ten seconds and their one-second repath phases are identity-staggered,
 preventing a horde from synchronizing scene creation or route work on one
 frame. Moving targets retain the authored one-second response interval. Player combat
-roles intercept enemies within Unity's 100-world-unit sensor region; attacks,
+roles intercept enemies within Unity's 100-world-unit sensor region. Defenders
+and Guardhouse guards first engage threats within five town cells of themselves;
+when none are nearby, they choose the enemy nearest their Town Hall or Guardhouse
+defence anchor respectively. Other combat roles remain nearest-threat driven. Attacks,
 projectiles, health, death, 60-second player revival, player-attributed kill
 objectives, and exact enemy gold rewards share the normal authoritative save
 state. Tower/environment kills intentionally do not grant player rewards or
@@ -653,8 +662,9 @@ remain fully solid. Resources reserve one placement cell but block only its
 central fine cell so actors can squeeze between adjacent nodes. Connected
 walls and gates derive 1x3 straight blockers and the corresponding corner/T/
 cross shapes; gates remove those blockers for citizens but retain them for
-enemies. Paths use the same fine connected shapes for rendering and movement
-bonuses without blocking either side. Movement and A* permit diagonals only
+enemies. Paths uniquely occupy one 1x1 fine-grid sample (one ninth of a placement
+cell's area), can bend between inset building blockers, and provide their movement
+bonus without blocking either side. Movement and A* permit diagonals only
 when both adjacent cardinal fine cells are open.
 The shipping Fish God event is also live: its configurable channel-point reward
 ID and `!praise` feed the same deterministic command path, with Unity's one-in-ten

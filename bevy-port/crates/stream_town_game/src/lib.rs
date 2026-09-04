@@ -159,6 +159,7 @@ const NAVIGATION_TERRAIN_MIN_HEIGHT_CENTIMETRES: i16 = 45;
 const WORLD_DIAGNOSTIC_VIEW_SECONDS: f32 = 10.0;
 const WORLD_DIAGNOSTIC_OVERLAY_LIFT: f32 = 0.14;
 const WORLD_DIAGNOSTIC_TILE_SCALE: f32 = 0.94;
+const DEFENDER_LOCAL_PRIORITY_RADIUS_CELLS: u16 = 5;
 const WORLD_DIAGNOSTIC_DEPTH_BIAS: f32 = 64.0;
 const TERRAIN_HIGH_DETAIL_RADIUS: f32 = 220.0;
 const TERRAIN_MEDIUM_DETAIL_RADIUS: f32 = 440.0;
@@ -1366,10 +1367,17 @@ enum BuildingRuntimeCommand {
 #[derive(Clone, Debug)]
 struct BuildingPlacement {
     building: StableId,
+    /// Coarse placement cell used by all authored buildings and retained as the
+    /// containing cell for fine-grid paths.
     position: GridPos,
+    /// Paths alone are authored directly on the one-third-cell navigation grid.
+    navigation_position: Option<GridPos>,
     rotation_quarter_turns: i32,
     line_start: Option<GridPos>,
     line_end: Option<GridPos>,
+    /// Ordered fine-grid cells traced after `!beginplace`, allowing paths to
+    /// bend through narrow spaces instead of being constrained to one line.
+    path_cells: Vec<GridPos>,
     inactivity_seconds: f32,
 }
 
@@ -17187,9 +17195,11 @@ fn generate_and_spawn_world(
                     BuildingPlacement {
                         building: building.clone(),
                         position: valid_position,
+                        navigation_position: None,
                         rotation_quarter_turns: 0,
                         line_start: None,
                         line_end: None,
+                        path_cells: Vec::new(),
                         inactivity_seconds: 0.0,
                     },
                 );
@@ -17198,9 +17208,11 @@ fn generate_and_spawn_world(
                     BuildingPlacement {
                         building,
                         position: town_hall_placement,
+                        navigation_position: None,
                         rotation_quarter_turns: 1,
                         line_start: None,
                         line_end: None,
+                        path_cells: Vec::new(),
                         inactivity_seconds: 0.0,
                     },
                 );
@@ -21001,11 +21013,19 @@ fn next_agent_goal_with_station_runtime(
             .filter(|target| target.alive && target.role.as_str() == "role:enemy")
             .filter(|target| within_player_target_search_region(target.position, current))
             .min_by_key(|target| {
+                let actor_distance = grid_distance_squared(target.position, current);
+                let nearby = defender_anchor.is_some()
+                    && actor_distance <= u64::from(DEFENDER_LOCAL_PRIORITY_RADIUS_CELLS).pow(2);
                 (
-                    defender_anchor.map_or(0, |town_hall| {
-                        grid_distance_squared(target.position, town_hall)
-                    }),
-                    grid_distance_squared(target.position, current),
+                    u8::from(defender_anchor.is_some() && !nearby),
+                    if nearby {
+                        actor_distance
+                    } else {
+                        defender_anchor.map_or(actor_distance, |anchor| {
+                            grid_distance_squared(target.position, anchor)
+                        })
+                    },
+                    actor_distance,
                     target.id.clone(),
                 )
             })
@@ -22161,6 +22181,7 @@ fn complete_agent_goal_with_regeneration(
                             let _ = world.navigation.set_blocked(region, false);
                         }
                         simulation.buildings.remove(building_id);
+                        simulation.path_navigation_positions.remove(building_id);
                         simulation.building_night_light_colors.remove(building_id);
                         for actor in simulation.actors.values_mut() {
                             if actor.station.as_ref() == Some(building_id)
@@ -32284,6 +32305,10 @@ fn is_line_building(building: &StableId) -> bool {
     matches!(building.as_str(), "building:wall" | "building:path")
 }
 
+fn is_path_building(building: &StableId) -> bool {
+    building.as_str() == "building:path"
+}
+
 fn building_blocks_navigation(definition: &BuildingDef) -> bool {
     definition.archetype.as_str() != "archetype:building:path"
 }
@@ -32318,6 +32343,17 @@ fn wall_line_cells(start: GridPos, end: GridPos) -> Result<Vec<GridPos>, String>
 }
 
 fn placement_visual_cells(placement: &BuildingPlacement) -> Vec<GridPos> {
+    if is_path_building(&placement.building) {
+        return if placement.line_start.is_some() && !placement.path_cells.is_empty() {
+            placement.path_cells.clone()
+        } else {
+            vec![
+                placement
+                    .navigation_position
+                    .unwrap_or_else(|| placement_to_navigation_centre(placement.position)),
+            ]
+        };
+    }
     if is_line_building(&placement.building)
         && let Some(start) = placement.line_start
     {
@@ -32328,12 +32364,19 @@ fn placement_visual_cells(placement: &BuildingPlacement) -> Vec<GridPos> {
 }
 
 fn placement_at_cell(placement: &BuildingPlacement, cell: GridPos) -> BuildingPlacement {
+    let path = is_path_building(&placement.building);
     BuildingPlacement {
         building: placement.building.clone(),
-        position: cell,
+        position: if path {
+            navigation_to_placement(cell)
+        } else {
+            cell
+        },
+        navigation_position: path.then_some(cell),
         rotation_quarter_turns: placement.rotation_quarter_turns,
         line_start: None,
         line_end: None,
+        path_cells: Vec::new(),
         inactivity_seconds: placement.inactivity_seconds,
     }
 }
@@ -32344,7 +32387,20 @@ fn building_placement_is_available(
     world: &GeneratedWorld,
     placement: &BuildingPlacement,
     definition: &BuildingDef,
+    fine_navigation: Option<&stream_town_domain::NavGrid>,
 ) -> bool {
+    if is_path_building(&placement.building) {
+        let Some(navigation) = fine_navigation else {
+            return false;
+        };
+        return placement_visual_cells(placement).into_iter().all(|cell| {
+            navigation.is_walkable(cell)
+                && !simulation
+                    .path_navigation_positions
+                    .values()
+                    .any(|occupied| *occupied == cell)
+        });
+    }
     let footprint = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
     placement_visual_cells(placement).into_iter().all(|cell| {
         building_site_is_available_for_simulation(content, simulation, world, cell, footprint)
@@ -32370,6 +32426,7 @@ fn sync_building_placers(
     asset_server: Option<Res<AssetServer>>,
     asset_root: Res<RuntimeAssetRoot>,
     world: Res<WorldRuntime>,
+    fine_navigation: Res<FineNavigationRuntime>,
     placers: Res<BuildingPlacers>,
     render: Res<RenderAssets>,
     mut visuals: Query<
@@ -32407,6 +32464,7 @@ fn sync_building_placers(
             &world.generated,
             placement,
             definition,
+            fine_navigation.grid.as_ref(),
         );
         update_placer_visual(
             &config.0,
@@ -32437,6 +32495,7 @@ fn sync_building_placers(
                 &world.generated,
                 placement,
                 definition,
+                fine_navigation.grid.as_ref(),
             );
             update_placer_visual(
                 &config.0,
@@ -32552,6 +32611,7 @@ fn apply_building_placement_ghosts(
     content: Res<RuntimeContent>,
     simulation: Res<SimulationRuntime>,
     world: Res<WorldRuntime>,
+    fine_navigation: Res<FineNavigationRuntime>,
     placers: Res<BuildingPlacers>,
     render: Res<RenderAssets>,
     parents: Query<&ChildOf>,
@@ -32596,6 +32656,7 @@ fn apply_building_placement_ghosts(
             &content.0,
             &simulation.0,
             &world.generated,
+            fine_navigation.grid.as_ref(),
             &placers.0,
             &render,
             &owner,
@@ -32613,6 +32674,7 @@ fn apply_building_placement_ghosts(
             &content.0,
             &simulation.0,
             &world.generated,
+            fine_navigation.grid.as_ref(),
             &placers.0,
             &render,
             &mesh.owner,
@@ -32646,6 +32708,7 @@ fn placement_ghost_material(
     content: &ContentCatalog,
     simulation: &WorldSimulation,
     world: &GeneratedWorld,
+    fine_navigation: Option<&stream_town_domain::NavGrid>,
     placers: &BTreeMap<StableId, BuildingPlacement>,
     render: &RenderAssets,
     owner: &StableId,
@@ -32655,7 +32718,14 @@ fn placement_ghost_material(
             .buildings
             .get(&placement.building)
             .is_some_and(|definition| {
-                building_placement_is_available(content, simulation, world, placement, definition)
+                building_placement_is_available(
+                    content,
+                    simulation,
+                    world,
+                    placement,
+                    definition,
+                    fine_navigation,
+                )
             })
     });
     if available {
@@ -32672,6 +32742,16 @@ fn update_placer_ghost_transform(
     definition: &BuildingDef,
     transform: &mut Transform,
 ) {
+    if is_path_building(&placement.building) {
+        let position = placement
+            .navigation_position
+            .unwrap_or_else(|| placement_to_navigation_centre(placement.position));
+        transform.translation = navigation_to_world_on_surface(position, config, world);
+        transform.rotation = quarter_turn_rotation(placement.rotation_quarter_turns);
+        transform.scale =
+            Vec3::splat(config.world.cell_size / f32::from(NAVIGATION_SUBDIVISIONS) / 2.0);
+        return;
+    }
     let effective = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
     let centre = GridPos {
         x: placement.position.x.saturating_add(effective[0] / 2),
@@ -32700,26 +32780,42 @@ fn building_placement_overlay_text(
     format!("{owner_name} · {} floorplan", definition.display_name)
 }
 
-fn building_placement_overlay_centre(
+fn building_placement_overlay_world_position(
     placement: &BuildingPlacement,
     definition: &BuildingDef,
-) -> GridPos {
+    config: &GameConfig,
+    world: &GeneratedWorld,
+) -> Vec3 {
     let cells = placement_visual_cells(placement);
     let first = cells.first().copied().unwrap_or(placement.position);
     let last = cells.last().copied().unwrap_or(placement.position);
-    let footprint = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
-    GridPos {
-        x: first
-            .x
-            .saturating_add(last.x)
-            .saturating_div(2)
-            .saturating_add(footprint[0] / 2),
-        z: first
-            .z
-            .saturating_add(last.z)
-            .saturating_div(2)
-            .saturating_add(footprint[1] / 2),
+    if is_path_building(&placement.building) {
+        return navigation_to_world_on_surface(
+            GridPos {
+                x: first.x.saturating_add(last.x).saturating_div(2),
+                z: first.z.saturating_add(last.z).saturating_div(2),
+            },
+            config,
+            world,
+        );
     }
+    let footprint = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
+    grid_to_world_on_surface(
+        GridPos {
+            x: first
+                .x
+                .saturating_add(last.x)
+                .saturating_div(2)
+                .saturating_add(footprint[0] / 2),
+            z: first
+                .z
+                .saturating_add(last.z)
+                .saturating_div(2)
+                .saturating_add(footprint[1] / 2),
+        },
+        config,
+        world,
+    )
 }
 
 #[allow(clippy::type_complexity)]
@@ -32753,9 +32849,12 @@ fn sync_building_placement_overlays(
             commands.entity(entity).despawn();
             continue;
         };
-        let centre = building_placement_overlay_centre(placement, definition);
-        let world_position = grid_to_world_on_surface(centre, &config.0, &world.generated)
-            + Vec3::Y * config.0.world.cell_size * 0.35;
+        let world_position = building_placement_overlay_world_position(
+            placement,
+            definition,
+            &config.0,
+            &world.generated,
+        ) + Vec3::Y * config.0.world.cell_size * 0.35;
         let Some(screen) = overlay_viewport_position(camera, camera_transform, world_position)
         else {
             *visibility = Visibility::Hidden;
@@ -32773,9 +32872,12 @@ fn sync_building_placement_overlays(
         let Some(definition) = content.0.buildings.get(&placement.building) else {
             continue;
         };
-        let centre = building_placement_overlay_centre(placement, definition);
-        let world_position = grid_to_world_on_surface(centre, &config.0, &world.generated)
-            + Vec3::Y * config.0.world.cell_size * 0.35;
+        let world_position = building_placement_overlay_world_position(
+            placement,
+            definition,
+            &config.0,
+            &world.generated,
+        ) + Vec3::Y * config.0.world.cell_size * 0.35;
         let Some(screen) = overlay_viewport_position(camera, camera_transform, world_position)
         else {
             continue;
@@ -32823,6 +32925,23 @@ fn update_placer_visual(
     transform: &mut Transform,
     material: &mut MeshMaterial3d<BoundsMaterial>,
 ) {
+    if is_path_building(&placement.building) {
+        let position = placement
+            .navigation_position
+            .unwrap_or_else(|| placement_to_navigation_centre(placement.position));
+        let side = config.world.cell_size / f32::from(NAVIGATION_SUBDIVISIONS) * 0.9;
+        let footprint_size = Vec3::new(side, config.world.cell_size * 0.02, side);
+        transform.translation = navigation_to_world_on_surface(position, config, world)
+            + Vec3::Y * footprint_size.y * 0.5;
+        transform.scale = footprint_size;
+        transform.rotation = Quat::IDENTITY;
+        material.0 = if available {
+            render.placement_valid.clone()
+        } else {
+            render.placement_invalid.clone()
+        };
+        return;
+    }
     let effective = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
     let centre = GridPos {
         x: placement.position.x.saturating_add(effective[0] / 2),
@@ -32952,6 +33071,7 @@ fn remove_selected_building(
             .map_err(|error| error.to_string())?;
     }
     simulation.buildings.remove(runtime_id);
+    simulation.path_navigation_positions.remove(runtime_id);
     simulation.building_night_light_colors.remove(runtime_id);
     for actor in simulation.actors.values_mut() {
         if actor.station.as_ref() == Some(runtime_id) {
@@ -36227,6 +36347,15 @@ fn linear_navigation_cells(
     state: &BuildingState,
     building_id: &StableId,
 ) -> Vec<GridPos> {
+    if is_path_building(building_id) {
+        return vec![
+            simulation
+                .path_navigation_positions
+                .get(&state.id)
+                .copied()
+                .unwrap_or_else(|| placement_to_navigation_centre(state.position)),
+        ];
+    }
     let centre = placement_to_navigation_centre(state.position);
     let mut connections = linear_neighbour_value(content, simulation, state, building_id);
     let horizontal = connections & (2 | 8) != 0;
@@ -36314,7 +36443,10 @@ fn building_fine_navigation_cells(
     building_id: &StableId,
     definition: &BuildingDef,
 ) -> Vec<GridPos> {
-    if matches!(building_id.as_str(), "building:wall" | "building:gate") {
+    if matches!(
+        building_id.as_str(),
+        "building:wall" | "building:gate" | "building:path"
+    ) {
         return linear_navigation_cells(content, simulation, state, building_id);
     }
     let navigation = definition
@@ -36330,7 +36462,11 @@ fn building_fine_navigation_cells(
 
 fn fine_navigation_signature(world: &GeneratedWorld, simulation: &WorldSimulation) -> u64 {
     let mut signature = world.navigation.topology_signature() ^ 0x6a09_e667_f3bc_c909;
-    for building in simulation.buildings.values() {
+    for building in simulation.buildings.values().filter(|building| {
+        !simulation
+            .path_navigation_positions
+            .contains_key(&building.id)
+    }) {
         signature = signature
             .wrapping_mul(0x0000_0100_0000_01b3)
             .wrapping_add(stable_id_hash(&building.id))
@@ -36486,6 +36622,9 @@ fn floorplan_diagnostic_cells(
         let Some(definition) = building_def_for_archetype(content, &building.archetype) else {
             continue;
         };
+        if definition.archetype.as_str() == "archetype:building:path" {
+            continue;
+        }
         add_region(building_region(
             building.position,
             rotated_footprint(definition.footprint, building.rotation_quarter_turns),
@@ -36538,6 +36677,29 @@ fn diagnostic_surface_quad(
     })
 }
 
+fn diagnostic_navigation_surface_quad(
+    cell: GridPos,
+    size: f32,
+    config: &GameConfig,
+    world: &GeneratedWorld,
+    water_height: f32,
+) -> [Vec3; 4] {
+    let centre = navigation_to_world_on_surface(cell, config, world);
+    let half = size * 0.5;
+    [
+        Vec2::new(centre.x - half, centre.z - half),
+        Vec2::new(centre.x + half, centre.z - half),
+        Vec2::new(centre.x + half, centre.z + half),
+        Vec2::new(centre.x - half, centre.z + half),
+    ]
+    .map(|point| {
+        let surface = terrain_surface_height_at_world(world, config, point.x, point.y)
+            .unwrap_or(centre.y)
+            .max(water_height);
+        Vec3::new(point.x, surface + WORLD_DIAGNOSTIC_OVERLAY_LIFT, point.y)
+    })
+}
+
 fn world_diagnostic_overlay_mesh(
     mode: WorldDiagnosticMode,
     config: &GameConfig,
@@ -36564,6 +36726,34 @@ fn world_diagnostic_overlay_mesh(
             &mut uvs,
             &mut indices,
         );
+    }
+    let path_id = StableId::new("building:path").expect("static path ID");
+    let path_archetype = content
+        .buildings
+        .get(&path_id)
+        .map(|definition| &definition.archetype);
+    let fine_tile_size =
+        config.world.cell_size / f32::from(NAVIGATION_SUBDIVISIONS) * WORLD_DIAGNOSTIC_TILE_SCALE;
+    for building in simulation
+        .buildings
+        .values()
+        .filter(|building| path_archetype.is_some_and(|archetype| *archetype == building.archetype))
+    {
+        for cell in linear_navigation_cells(content, simulation, building, &path_id) {
+            append_world_diagnostic_quad(
+                diagnostic_navigation_surface_quad(
+                    cell,
+                    fine_tile_size,
+                    config,
+                    world,
+                    water_height,
+                ),
+                &mut positions,
+                &mut normals,
+                &mut uvs,
+                &mut indices,
+            );
+        }
     }
     if positions.is_empty() {
         return None;
@@ -36794,6 +36984,9 @@ fn foliage_clearance_regions(
 ) -> Vec<stream_town_domain::DirtyRegion> {
     let building_regions = simulation.buildings.values().filter_map(|building| {
         let definition = building_def_for_archetype(content, &building.archetype)?;
+        if definition.archetype.as_str() == "archetype:building:path" {
+            return None;
+        }
         building_region(
             building.position,
             rotated_footprint(definition.footprint, building.rotation_quarter_turns),
@@ -36938,11 +37131,15 @@ fn path_surface_signature(
         building.complete
             && path_archetype.is_some_and(|archetype| *archetype == building.archetype)
     }) {
+        let fine_position = simulation.path_navigation_positions.get(&building.id);
         signature = signature
             .wrapping_mul(0x0000_0100_0000_01b3)
             .wrapping_add(stable_id_hash(&building.id))
             .wrapping_add(u64::from(building.position.x) << 16)
             .wrapping_add(u64::from(building.position.z))
+            .wrapping_add(fine_position.map_or(0, |position| {
+                (u64::from(position.x) << 24) | (u64::from(position.z) << 8)
+            }))
             .wrapping_add(
                 u64::from(u32::from_ne_bytes(
                     building.rotation_quarter_turns.to_ne_bytes(),
@@ -37121,6 +37318,12 @@ fn building_site_is_available_for_simulation(
         let Some(definition) = building_def_for_archetype(content, &building.archetype) else {
             return false;
         };
+        // Paths belong to the fine navigation grid and never reserve their
+        // containing coarse floorplan cell. A later building may therefore
+        // coexist with a path running through its inset pedestrian margin.
+        if definition.archetype.as_str() == "archetype:building:path" {
+            return false;
+        }
         building_region(
             building.position,
             rotated_footprint(definition.footprint, building.rotation_quarter_turns),
@@ -38899,6 +39102,20 @@ fn shift_grid_position(
     actions: &[BuildingAction],
     world: &GeneratedWorld,
 ) -> (GridPos, i32) {
+    shift_grid_position_with_bounds(
+        position,
+        actions,
+        world.navigation.width(),
+        world.navigation.height(),
+    )
+}
+
+fn shift_grid_position_with_bounds(
+    position: GridPos,
+    actions: &[BuildingAction],
+    width: u16,
+    height: u16,
+) -> (GridPos, i32) {
     let mut x = i32::from(position.x);
     let mut z = i32::from(position.z);
     let mut rotation = 0_i32;
@@ -38914,8 +39131,8 @@ fn shift_grid_position(
             BuildingDirection::Rotate => rotation = rotation.saturating_add(action.amount),
         }
     }
-    let max_x = i32::from(world.navigation.width().saturating_sub(1));
-    let max_z = i32::from(world.navigation.height().saturating_sub(1));
+    let max_x = i32::from(width.saturating_sub(1));
+    let max_z = i32::from(height.saturating_sub(1));
     (
         GridPos {
             x: u16::try_from(x.clamp(0, max_x)).expect("grid x is clamped"),
@@ -38923,6 +39140,63 @@ fn shift_grid_position(
         },
         rotation,
     )
+}
+
+fn trace_path_cell(path_cells: &mut Vec<GridPos>, next: GridPos) {
+    if path_cells.last() == Some(&next) {
+        return;
+    }
+    if path_cells.len() >= 2 && path_cells.get(path_cells.len() - 2) == Some(&next) {
+        path_cells.pop();
+        return;
+    }
+    if let Some(index) = path_cells.iter().position(|cell| *cell == next) {
+        path_cells.truncate(index + 1);
+        return;
+    }
+    path_cells.push(next);
+}
+
+fn move_path_placement(
+    placement: &mut BuildingPlacement,
+    actions: &[BuildingAction],
+    world: &GeneratedWorld,
+) -> i32 {
+    let width = world
+        .navigation
+        .width()
+        .saturating_mul(NAVIGATION_SUBDIVISIONS);
+    let height = world
+        .navigation
+        .height()
+        .saturating_mul(NAVIGATION_SUBDIVISIONS);
+    let mut cursor = placement
+        .navigation_position
+        .unwrap_or_else(|| placement_to_navigation_centre(placement.position));
+    let mut rotation = 0_i32;
+    for action in actions {
+        if action.direction == BuildingDirection::Rotate {
+            rotation = rotation.saturating_add(action.amount);
+            continue;
+        }
+        let step = BuildingAction {
+            direction: action.direction,
+            amount: action.amount.signum(),
+        };
+        for _ in 0..action.amount.unsigned_abs() {
+            let next = shift_grid_position_with_bounds(cursor, &[step], width, height).0;
+            if next == cursor {
+                continue;
+            }
+            cursor = next;
+            if placement.line_start.is_some() {
+                trace_path_cell(&mut placement.path_cells, cursor);
+            }
+        }
+    }
+    placement.navigation_position = Some(cursor);
+    placement.position = navigation_to_placement(cursor);
+    rotation
 }
 
 fn building_definition_id(
@@ -39405,18 +39679,29 @@ fn process_injected_commands(
                             .or(view.selected.0)
                             .unwrap_or(actor.position);
                         let line_building = is_line_building(&building_id);
+                        let path_building = is_path_building(&building_id);
+                        let path_navigation_position =
+                            path_building.then(|| placement_to_navigation_centre(near));
                         queues.placers.0.insert(
                             actor_id.clone(),
                             BuildingPlacement {
                                 building: building_id,
                                 position: near,
+                                navigation_position: path_navigation_position,
                                 rotation_quarter_turns: rotation,
                                 line_start: None,
                                 line_end: None,
+                                path_cells: Vec::new(),
                                 inactivity_seconds: 0.0,
                             },
                         );
-                        Ok(if line_building {
+                        Ok(if path_building {
+                            let fine = path_navigation_position.expect("path has fine cursor");
+                            format!(
+                                "placing {} at fine pathfinding cell {},{}; move to the first point and use !beginplace",
+                                building.display_name, fine.x, fine.z
+                            )
+                        } else if line_building {
                             format!(
                                 "placing {} at {},{}; move to the first endpoint and use !beginplace",
                                 building.display_name, near.x, near.z
@@ -39435,9 +39720,14 @@ fn process_injected_commands(
                         .0
                         .get_mut(&actor_id)
                         .ok_or_else(|| "not in building placement mode".to_owned())?;
-                    let (position, rotation_delta) =
-                        shift_grid_position(placement.position, actions, &world.generated);
-                    placement.position = position;
+                    let rotation_delta = if is_path_building(&placement.building) {
+                        move_path_placement(placement, actions, &world.generated)
+                    } else {
+                        let (position, rotation_delta) =
+                            shift_grid_position(placement.position, actions, &world.generated);
+                        placement.position = position;
+                        rotation_delta
+                    };
                     placement.inactivity_seconds = 0.0;
                     placement.rotation_quarter_turns = placement
                         .rotation_quarter_turns
@@ -39448,12 +39738,14 @@ fn process_injected_commands(
                             .saturating_add(rotation_delta);
                     }
                     let definition = &content.0.buildings[&placement.building];
+                    let cursor = placement.navigation_position.unwrap_or(placement.position);
                     let validity = if building_placement_is_available(
                         &content.0,
                         &simulation.0,
                         &world.generated,
                         placement,
                         definition,
+                        view.fine_navigation.grid.as_ref(),
                     ) {
                         "valid"
                     } else {
@@ -39462,8 +39754,8 @@ fn process_injected_commands(
                     Ok(format!(
                         "{} placer moved to {},{} at {} degrees ({validity})",
                         definition.display_name,
-                        placement.position.x,
-                        placement.position.z,
+                        cursor.x,
+                        cursor.z,
                         placement.rotation_quarter_turns.rem_euclid(4) * 90
                     ))
                 }
@@ -39481,12 +39773,18 @@ fn process_injected_commands(
                     let line_name = content.0.buildings[&placement.building]
                         .display_name
                         .clone();
-                    placement.line_start = Some(placement.position);
+                    let cursor = placement.navigation_position.unwrap_or(placement.position);
+                    placement.line_start = Some(cursor);
                     placement.line_end = None;
+                    placement.path_cells = if is_path_building(&placement.building) {
+                        vec![cursor]
+                    } else {
+                        Vec::new()
+                    };
                     placement.inactivity_seconds = 0.0;
                     Ok(format!(
                         "{line_name} start set at {},{}; move to the other endpoint and use !confirm",
-                        placement.position.x, placement.position.z,
+                        cursor.x, cursor.z,
                     ))
                 }
                 ChatCommand::EndBuildingLine => {
@@ -39505,13 +39803,18 @@ fn process_injected_commands(
                         format!("set the first {line_name} endpoint with !beginplace")
                     })?;
                     placement.line_end = None;
-                    let cells = wall_line_cells(start, placement.position)?;
-                    placement.line_end = Some(placement.position);
+                    let cursor = placement.navigation_position.unwrap_or(placement.position);
+                    let cells = if is_path_building(&placement.building) {
+                        placement.path_cells.clone()
+                    } else {
+                        wall_line_cells(start, cursor)?
+                    };
+                    placement.line_end = Some(cursor);
                     placement.inactivity_seconds = 0.0;
                     Ok(format!(
                         "{line_name} endpoint set at {},{} ({} sections); !endplace is optional, review the ghost then use !confirm",
-                        placement.position.x,
-                        placement.position.z,
+                        cursor.x,
+                        cursor.z,
                         cells.len()
                     ))
                 }
@@ -39528,7 +39831,10 @@ fn process_injected_commands(
                     {
                         return Err(format!("{} can no longer be placed", building.display_name));
                     }
-                    let cells = if is_line_building(&placement.building) {
+                    let path_building = is_path_building(&placement.building);
+                    let cells = if path_building {
+                        placement_visual_cells(&placement)
+                    } else if is_line_building(&placement.building) {
                         placement.line_start.map_or_else(
                             || Ok(vec![placement.position]),
                             |start| wall_line_cells(start, placement.position),
@@ -39536,17 +39842,14 @@ fn process_injected_commands(
                     } else {
                         vec![placement.position]
                     };
-                    let footprint =
-                        rotated_footprint(building.footprint, placement.rotation_quarter_turns);
-                    if cells.iter().any(|cell| {
-                        !building_site_is_available_for_simulation(
-                            &content.0,
-                            &simulation.0,
-                            &world.generated,
-                            *cell,
-                            footprint,
-                        )
-                    }) {
+                    if !building_placement_is_available(
+                        &content.0,
+                        &simulation.0,
+                        &world.generated,
+                        &placement,
+                        building,
+                        view.fine_navigation.grid.as_ref(),
+                    ) {
                         return Err("building placement is blocked or outside the world".to_owned());
                     }
                     let unit_cost = if simulation.0.building_costs_enabled {
@@ -39565,22 +39868,35 @@ fn process_injected_commands(
                     {
                         return Err(message);
                     }
-                    let regions = cells
+                    let sections = cells
                         .iter()
                         .map(|cell| {
-                            building_navigation_region(
-                                *cell,
-                                building,
-                                placement.rotation_quarter_turns,
-                                &world.generated,
-                            )
-                            .map(|region| (*cell, region))
-                            .ok_or_else(|| "building placement is outside the world".to_owned())
+                            let placement_cell = if path_building {
+                                navigation_to_placement(*cell)
+                            } else {
+                                *cell
+                            };
+                            let region = if path_building {
+                                None
+                            } else {
+                                Some(
+                                    building_navigation_region(
+                                        placement_cell,
+                                        building,
+                                        placement.rotation_quarter_turns,
+                                        &world.generated,
+                                    )
+                                    .ok_or_else(|| {
+                                        "building placement is outside the world".to_owned()
+                                    })?,
+                                )
+                            };
+                            Ok((*cell, placement_cell, region))
                         })
                         .collect::<Result<Vec<_>, String>>()?;
                     let mut first = true;
                     let no_cost = BTreeMap::new();
-                    for (cell, region) in regions {
+                    for (cell, placement_cell, region) in sections {
                         let runtime_id = runtime_building_id(&simulation.0);
                         let section_cost = if first { &cost } else { &no_cost };
                         simulation
@@ -39588,14 +39904,22 @@ fn process_injected_commands(
                             .construct_rotated(
                                 runtime_id.clone(),
                                 building.archetype.clone(),
-                                cell,
+                                placement_cell,
                                 placement.rotation_quarter_turns,
                                 building_base_max_health(&content.0, building),
                                 section_cost,
                             )
                             .map_err(|error| error.to_string())?;
+                        if path_building {
+                            simulation
+                                .0
+                                .path_navigation_positions
+                                .insert(runtime_id.clone(), cell);
+                        }
                         first = false;
-                        if building_blocks_navigation(building) {
+                        if building_blocks_navigation(building)
+                            && let Some(region) = region
+                        {
                             world
                                 .generated
                                 .navigation
@@ -39613,7 +39937,7 @@ fn process_injected_commands(
                             &simulation.0.buildings[&runtime_id],
                             building,
                             &content.0.archetypes[&building.archetype],
-                            cell,
+                            placement_cell,
                             building.footprint,
                             building_age(&content.0, &simulation.0, &placement.building),
                         );
@@ -47280,7 +47604,7 @@ mod tests {
     }
 
     #[test]
-    fn defenders_prioritize_threats_nearest_the_town_hall_only() {
+    fn defenders_prioritize_nearby_threats_then_their_defence_anchor() {
         let config = GameConfig::default();
         let content = embedded_content();
         let world = generate_world(&config.world);
@@ -47322,8 +47646,23 @@ mod tests {
                 defender_position,
             )
             .0,
+            AgentGoal::Attack(near_actor.clone())
+        );
+
+        simulation.actors.get_mut(&near_actor).unwrap().alive = false;
+        assert_eq!(
+            next_agent_goal(
+                &simulation,
+                &world,
+                &config,
+                &content,
+                &fighter,
+                defender_position,
+            )
+            .0,
             AgentGoal::Attack(near_town.clone())
         );
+        simulation.actors.get_mut(&near_actor).unwrap().alive = true;
 
         simulation
             .assign_role(&fighter, StableId::new("role:ranger").unwrap())
@@ -53281,9 +53620,11 @@ mod tests {
         let mut placement = BuildingPlacement {
             building: building_id,
             position: valid_position,
+            navigation_position: None,
             rotation_quarter_turns: 0,
             line_start: None,
             line_end: None,
+            path_cells: Vec::new(),
             inactivity_seconds: 0.0,
         };
         update_placer_visual(
@@ -53336,9 +53677,11 @@ mod tests {
         let placement = BuildingPlacement {
             building: building_id,
             position,
+            navigation_position: None,
             rotation_quarter_turns: 1,
             line_start: None,
             line_end: None,
+            path_cells: Vec::new(),
             inactivity_seconds: 0.0,
         };
         let mut transform = Transform::default();
@@ -53366,8 +53709,16 @@ mod tests {
         let simulation = WorldSimulation::new(world.seed);
         let placers = BTreeMap::from([(owner.clone(), placement)]);
         assert_eq!(
-            placement_ghost_material(&content, &simulation, &world, &placers, &render, &owner,)
-                .id(),
+            placement_ghost_material(
+                &content,
+                &simulation,
+                &world,
+                None,
+                &placers,
+                &render,
+                &owner,
+            )
+            .id(),
             valid.id()
         );
     }
@@ -55234,9 +55585,11 @@ mod tests {
         let mut placement = BuildingPlacement {
             building: StableId::new("building:house").unwrap(),
             position: GridPos { x: 1, z: 1 },
+            navigation_position: None,
             rotation_quarter_turns: 0,
             line_start: None,
             line_end: None,
+            path_cells: Vec::new(),
             inactivity_seconds: 0.0,
         };
         assert!(building_placement_remains_active(&mut placement, 29.99));
@@ -57305,9 +57658,11 @@ mod tests {
             BuildingPlacement {
                 building: StableId::new("building:wall").unwrap(),
                 position: GridPos { x: 3, z: 3 },
+                navigation_position: None,
                 rotation_quarter_turns: 0,
                 line_start: None,
                 line_end: None,
+                path_cells: Vec::new(),
                 inactivity_seconds: 0.0,
             },
         );
@@ -58218,15 +58573,92 @@ mod tests {
         let mut placement = BuildingPlacement {
             building: StableId::new("building:wall").unwrap(),
             position: GridPos { x: 10, z: 10 },
+            navigation_position: None,
             rotation_quarter_turns: 0,
             line_start: None,
             line_end: None,
+            path_cells: Vec::new(),
             inactivity_seconds: 0.0,
         };
         assert_eq!(placement_visual_cells(&placement), vec![placement.position]);
         placement.line_start = Some(placement.position);
         placement.position = GridPos { x: 10, z: 14 };
         assert_eq!(placement_visual_cells(&placement).len(), 5);
+    }
+
+    #[test]
+    fn paths_trace_bends_on_single_fine_navigation_cells() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world(&config.world);
+        let simulation = WorldSimulation::new(world.seed);
+        let origin = placement_to_navigation_centre(town_hall_grid_position(&config));
+        let mut placement = BuildingPlacement {
+            building: StableId::new("building:path").unwrap(),
+            position: navigation_to_placement(origin),
+            navigation_position: Some(origin),
+            rotation_quarter_turns: 0,
+            line_start: Some(origin),
+            line_end: None,
+            path_cells: vec![origin],
+            inactivity_seconds: 0.0,
+        };
+        move_path_placement(
+            &mut placement,
+            &[
+                BuildingAction {
+                    direction: BuildingDirection::Right,
+                    amount: 2,
+                },
+                BuildingAction {
+                    direction: BuildingDirection::Up,
+                    amount: 2,
+                },
+                BuildingAction {
+                    direction: BuildingDirection::Left,
+                    amount: 1,
+                },
+            ],
+            &world,
+        );
+
+        let cells = placement_visual_cells(&placement);
+        assert_eq!(cells.len(), 6);
+        assert!(
+            cells
+                .windows(2)
+                .all(|pair| { pair[0].x.abs_diff(pair[1].x) + pair[0].z.abs_diff(pair[1].z) == 1 })
+        );
+        assert!(cells.iter().any(|cell| cell.x != origin.x));
+        assert!(cells.iter().any(|cell| cell.z != origin.z));
+        assert_eq!(
+            content.buildings[&StableId::new("building:path").unwrap()].navigation_footprint_thirds,
+            Some([1, 1])
+        );
+
+        let navigation = build_fine_navigation(&config, &content, &simulation, &world).unwrap();
+        assert!(building_placement_is_available(
+            &content,
+            &simulation,
+            &world,
+            &placement,
+            &content.buildings[&StableId::new("building:path").unwrap()],
+            Some(&navigation),
+        ));
+
+        let mut occupied = simulation;
+        occupied.path_navigation_positions.insert(
+            StableId::new("building:runtime_path_occupied").unwrap(),
+            cells[2],
+        );
+        assert!(!building_placement_is_available(
+            &content,
+            &occupied,
+            &world,
+            &placement,
+            &content.buildings[&StableId::new("building:path").unwrap()],
+            Some(&navigation),
+        ));
     }
 
     #[test]
@@ -58251,7 +58683,9 @@ mod tests {
 
     #[test]
     fn guardhouse_defenders_round_trip_to_their_station_without_using_recruit_capacity() {
+        let config = GameConfig::default();
         let content = embedded_content();
+        let world = generate_world(&config.world);
         let guardhouse = &content.buildings[&StableId::new("building:guardhouse").unwrap()];
         let building_id = StableId::new("building:runtime_guardhouse_test").unwrap();
         let mut simulation = WorldSimulation::new(1);
@@ -58268,13 +58702,52 @@ mod tests {
             },
         );
         let defender = guardhouse_defender_id(&building_id);
-        assert!(simulation.join_player(defender.clone(), GridPos { x: 3, z: 5 }));
+        let defender_position = GridPos { x: 20, z: 20 };
+        assert!(simulation.join_player(defender.clone(), defender_position));
+        simulation
+            .assign_role(&defender, StableId::new("role:defender").unwrap())
+            .unwrap();
         assert_eq!(
             guardhouse_for_defender(&simulation, &defender).unwrap().id,
             building_id
         );
         assert_eq!(recruited_actor_ids(&simulation), vec![defender]);
         assert!(capacity_recruited_actor_ids(&simulation).is_empty());
+
+        let nearby = StableId::new("enemy:guard_nearby").unwrap();
+        let near_guardhouse = StableId::new("enemy:near_guardhouse").unwrap();
+        assert!(simulation.join_player(nearby.clone(), GridPos { x: 19, z: 20 }));
+        assert!(simulation.join_player(near_guardhouse.clone(), GridPos { x: 5, z: 5 }));
+        for enemy in [&nearby, &near_guardhouse] {
+            simulation
+                .assign_role(enemy, StableId::new("role:enemy").unwrap())
+                .unwrap();
+        }
+        assert_eq!(
+            next_agent_goal(
+                &simulation,
+                &world,
+                &config,
+                &content,
+                &guardhouse_defender_id(&building_id),
+                defender_position,
+            )
+            .0,
+            AgentGoal::Attack(nearby.clone())
+        );
+        simulation.actors.get_mut(&nearby).unwrap().alive = false;
+        assert_eq!(
+            next_agent_goal(
+                &simulation,
+                &world,
+                &config,
+                &content,
+                &guardhouse_defender_id(&building_id),
+                defender_position,
+            )
+            .0,
+            AgentGoal::Attack(near_guardhouse)
+        );
     }
 
     #[test]

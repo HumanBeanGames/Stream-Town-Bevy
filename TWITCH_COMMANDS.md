@@ -83,22 +83,24 @@ blueprint. Every move resets its 30-second timeout.
 If the town cannot afford the building, the rejection identifies every missing resource and amount.
 Square-footprint buildings can also be rotated after construction through their BID.
 
-### Placing wall and path lines
+### Placing walls and paths
 
-Immediately using `!confirm` after `!build Wall` or `!build Path` places one section. To place a
-line instead:
+Immediately using `!confirm` after `!build Wall` or `!build Path` places one section. To place
+multiple sections instead:
 
 1. Move the placement cursor to the first cell and use `!beginplace`.
-2. Move only horizontally or vertically toward the other endpoint. The complete red/green line
-   ghost updates after every movement command.
+2. For walls, move only horizontally or vertically toward the other endpoint. Paths instead move
+   one third of a town cell per step and may turn freely, so they can snake through the fine
+   pathfinding space between buildings. The complete red/green ghost updates after every move;
+   retracing a step shortens the pending path.
 3. Use `!confirm` to set the current cursor as the endpoint, pay for, and place every section; use
    `!cancel` to discard it.
 
 Calling `!beginplace` again replaces the start. `!endplace` remains a compatibility alias for
-freezing the current endpoint but is not required. A diagonal endpoint is rejected, and a line that
-exceeds available resources is not constructed. Paths cost 150 Wood and 130 Ore
-per cell at level 1, conform to the terrain, remain walkable, and do not consume building capacity.
-Each completed Path level gives citizens on that cell 5% additional movement speed. Path
+freezing the current endpoint but is not required. A diagonal wall endpoint is rejected, and a route
+that exceeds available resources is not constructed. Paths cost 150 Wood and 130 Ore per fine-grid
+section at level 1, conform to the terrain, remain walkable, and do not consume building capacity.
+Each completed Path level gives citizens on that fine-grid section 5% additional movement speed. Path
 technologies form their own branch beginning in Age 1.
 
 ## Building IDs (BIDs)
