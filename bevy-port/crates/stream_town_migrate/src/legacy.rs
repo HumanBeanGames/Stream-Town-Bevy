@@ -876,10 +876,11 @@ impl<'a> BinaryParser<'a> {
                 facial_hair: legacy_customization_index(self.i32()?),
                 ..ActorCustomization::default()
             };
-            let _skin = self.i32()?;
+            let skin_color = legacy_customization_index(self.i32()?);
             let customization = ActorCustomization {
                 hair_color: legacy_customization_index(self.i32()?),
                 eye_color: legacy_customization_index(self.i32()?),
+                skin_color,
                 body_type: legacy_customization_index(self.i32()?),
                 ..customization
             };
@@ -1683,6 +1684,7 @@ fn json_customization(value: &Value) -> ActorCustomization {
         facial_hair: legacy_customization_index(json_i32_default(value, "ChosenFacialHairIndex")),
         hair_color: legacy_customization_index(json_i32_default(value, "ChosenHairColourIndex")),
         eye_color: legacy_customization_index(json_i32_default(value, "ChosenEyeColourIndex")),
+        skin_color: legacy_customization_index(json_i32_default(value, "ChosenSkinIndex")),
         body_type: legacy_customization_index(json_i32_default(value, "ChosenBodyTypeIndex")),
         ..ActorCustomization::default()
     }
@@ -2368,6 +2370,7 @@ mod tests {
                         "ChosenFacialHairIndex": 2,
                         "ChosenHairColourIndex": 5,
                         "ChosenEyeColourIndex": 1,
+                        "ChosenSkinIndex": 3,
                         "ChosenBodyTypeIndex": 2
                     },
                     "Roles": [{ "Role": "Builder", "Level": 7, "Experience": 123 }],
@@ -2432,6 +2435,7 @@ mod tests {
         assert_eq!(actor.customization.facial_hair, 2);
         assert_eq!(actor.customization.hair_color, 5);
         assert_eq!(actor.customization.eye_color, 1);
+        assert_eq!(actor.customization.skin_color, 3);
         assert_eq!(actor.customization.body_type, 2);
         assert_eq!(actor.user_type, StreamUserType::Normal);
         assert!(

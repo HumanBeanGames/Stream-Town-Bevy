@@ -89,10 +89,10 @@ Immediately using `!confirm` after `!build Wall` or `!build Path` places one sec
 multiple sections instead:
 
 1. Move the placement cursor to the first cell and use `!beginplace`.
-2. For walls, move only horizontally or vertically toward the other endpoint. Paths instead move
-   one third of a town cell per step and may turn freely, so they can snake through the fine
-   pathfinding space between buildings. The complete red/green ghost updates after every move;
-   retracing a step shortens the pending path.
+2. For walls, move only horizontally or vertically toward the other endpoint. A Path cursor instead
+   moves one third of a town cell per step. After each move, the preview uses diagonal-aware A* to
+   show the complete shortest walkable route from the saved start to the cursor, automatically
+   snaking between buildings and resources.
 3. Use `!confirm` to set the current cursor as the endpoint, pay for, and place every section; use
    `!cancel` to discard it.
 
@@ -179,18 +179,25 @@ different resource from the one the unlocked worker restores.
 
 Guardhouse research becomes available from the Age 1 Tower branch and requires collecting 30,000
 Gold. A Guardhouse costs three times a Tower, uses the Tower footprint and blue-tinted model, and
-provides one permanent free Defender that does not consume recruit or Defender capacity. That guard
-prioritizes enemies nearest its own Guardhouse; unlike a Tower, the Guardhouse fires no projectiles.
+provides one permanent free Defender that does not consume recruit or Defender capacity, appear in
+the recruit population UI, or increase enemy-wave scaling. That guard prioritizes enemies nearest
+its own Guardhouse; unlike a Tower, the Guardhouse fires no projectiles.
 
 Each three-choice technology ballot contains one deepest eligible specialization, one shallowest
 eligible fundamental, and one random remaining technology. Equal-depth choices are tie-broken
 deterministically from the town seed. The UI labels the first two choices `Specialized!` and
 `Fundamental!`.
 
+Food, Wood, and Ore collection objectives count only resources actually gathered and delivered by
+citizens; bought or passive stock does not count. Gold spent on resource purchases while a Gold
+collection objective is active increases its target by the same amount. The same adjustment is
+tracked while a three-choice ballot is visible and follows the Gold option only if it wins.
+
 ## Information
 
 | Command | Purpose |
 |---|---|
+| `!info <username>` | Show a player citizen's health, current role, and level in every profession. |
 | `!info <resource\|role\|building\|enemy> [BID]` | Show authored information; add a BID for one building instance. |
 | `!stdiscord` | Show the Stream Town community link. |
 

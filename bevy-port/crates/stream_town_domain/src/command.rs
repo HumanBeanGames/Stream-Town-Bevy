@@ -71,7 +71,7 @@ pub fn unity_command_usage(input: &str) -> Option<&'static str> {
         "cam" => "!cam <up|down|left|right|in|out> [amount] OR !cam home",
         "follow" => "!follow <username|me>",
         "focus" => "!focus <building> <BID>",
-        "info" => "!info <resource|role|building|enemy> [id]",
+        "info" => "!info <username|resource|role|building|enemy> [BID]",
         "rrole" => "!rrole <id> <role>",
         "rinfo" => "!rinfo <id>",
         "rdismiss" => "!rdismiss <id>",

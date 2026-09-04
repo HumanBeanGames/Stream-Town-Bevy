@@ -93,12 +93,63 @@ fn fragment(
     let path_cell = in.world_position.xz / terrain_material.path_grid.z
         + (terrain_material.path_grid.xy - vec2<f32>(1.0)) * 0.5;
     let path_uv = (path_cell + vec2<f32>(0.5)) / terrain_material.path_grid.xy;
-    let path_level = textureSample(
+    let sampled_path_level = textureSample(
         path_surface_texture,
         path_surface_sampler,
         path_uv,
     ).r * 255.0 * terrain_material.path_grid.w;
-    let path_mask = select(0.0, 1.0, path_level >= 0.5);
+    let path_dimensions = vec2<i32>(textureDimensions(path_surface_texture));
+    let path_index = vec2<i32>(floor(path_cell + vec2<f32>(0.5)));
+    let path_local = path_cell + vec2<f32>(0.5) - vec2<f32>(path_index);
+    let path_maximum = path_dimensions - vec2<i32>(1);
+    let left_level = textureLoad(
+        path_surface_texture,
+        clamp(path_index + vec2<i32>(-1, 0), vec2<i32>(0), path_maximum),
+        0,
+    ).r * 255.0 * terrain_material.path_grid.w;
+    let right_level = textureLoad(
+        path_surface_texture,
+        clamp(path_index + vec2<i32>(1, 0), vec2<i32>(0), path_maximum),
+        0,
+    ).r * 255.0 * terrain_material.path_grid.w;
+    let down_level = textureLoad(
+        path_surface_texture,
+        clamp(path_index + vec2<i32>(0, -1), vec2<i32>(0), path_maximum),
+        0,
+    ).r * 255.0 * terrain_material.path_grid.w;
+    let up_level = textureLoad(
+        path_surface_texture,
+        clamp(path_index + vec2<i32>(0, 1), vec2<i32>(0), path_maximum),
+        0,
+    ).r * 255.0 * terrain_material.path_grid.w;
+    // Diagonal A* steps touch at a corner. Round the two adjacent empty-cell
+    // corners into a narrow bridge so diagonal routes read as one continuous
+    // cobbled path instead of a chain of point-touching squares.
+    let corner_radius = 0.36;
+    let lower_left = select(
+        0.0,
+        1.0 - smoothstep(0.0, corner_radius, distance(path_local, vec2<f32>(0.0, 0.0))),
+        left_level >= 0.5 && down_level >= 0.5,
+    );
+    let lower_right = select(
+        0.0,
+        1.0 - smoothstep(0.0, corner_radius, distance(path_local, vec2<f32>(1.0, 0.0))),
+        right_level >= 0.5 && down_level >= 0.5,
+    );
+    let upper_left = select(
+        0.0,
+        1.0 - smoothstep(0.0, corner_radius, distance(path_local, vec2<f32>(0.0, 1.0))),
+        left_level >= 0.5 && up_level >= 0.5,
+    );
+    let upper_right = select(
+        0.0,
+        1.0 - smoothstep(0.0, corner_radius, distance(path_local, vec2<f32>(1.0, 1.0))),
+        right_level >= 0.5 && up_level >= 0.5,
+    );
+    let diagonal_bridge = max(max(lower_left, lower_right), max(upper_left, upper_right));
+    let neighbouring_level = max(max(left_level, right_level), max(down_level, up_level));
+    let path_level = max(sampled_path_level, neighbouring_level * diagonal_bridge);
+    let path_mask = max(select(0.0, 1.0, sampled_path_level >= 0.5), diagonal_bridge);
     // Staggered stones and a narrow mortar line are generated directly in
     // terrain space, so paving conforms to slopes without another mesh.
     let stone_scale = 1.8 + min(path_level, 8.0) * 0.06;

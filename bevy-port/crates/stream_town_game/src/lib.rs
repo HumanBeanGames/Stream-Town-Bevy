@@ -93,19 +93,20 @@ use stream_town_domain::{
     ArchetypeScene, AvatarMaskDef, BUILDING_MAX_HEALTH, BroadcastConfig,
     BroadcastEncoderPreference, BroadcastRenderMode, BuildingAction, BuildingDef,
     BuildingDirection, BuildingHealthDisplayMode, BuildingModelDef, BuildingState,
-    CURRENT_RUNTIME_CONSOLE_SCHEMA, CURRENT_WORLD_SNAPSHOT_SCHEMA, CameraAction, CameraDirection,
-    ChatCommand, ChimneySmokeDef, ContentCatalog, CustomizationKind, DAYS_PER_SEASON, DisplayMode,
-    EnemyCampGenerationDef, EnemyCampState, EnemyModelSetDef, EnemyRunAnimation, FireworksVfxDef,
-    FoliageHabitat, GameConfig, GeneratedFoliage, GeneratedWorld, GridPos, HealingBurstVfxDef,
-    HealingChannelVfxDef, LegacyMigrationMetadata, MAX_TRAVERSAL_WEAR_SCORE,
-    MainMenuSceneReference, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode,
-    NativeSaveStore, ObjectiveEvent, ObjectiveKind, PetDef, PetModelDef, PlayerSettings,
-    PlayerSettingsStore, PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping,
-    PresentationCatalog, RainingFishVfxDef, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction,
-    RuntimeConsoleStatus, RuntimeConsoleStore, SEASON_TRANSITION_SECONDS, SEASONS_PER_YEAR,
-    SavedActor, SavedTerrainMesh, Season, StableId, StationDef, StationUpdateMode, StorageModelDef,
-    StreamUserType, TargetingScoreDef, TownEvent, VfxGradientDef, Weather, WorldGenerationStage,
-    WorldSimulation, WorldSnapshot, foliage_visual_variant, foliage_visual_yaw_milliradians,
+    CURRENT_RUNTIME_CONSOLE_SCHEMA, CURRENT_SIMULATION_SCHEMA, CURRENT_WORLD_SNAPSHOT_SCHEMA,
+    CameraAction, CameraDirection, ChatCommand, ChimneySmokeDef, ContentCatalog, CustomizationKind,
+    DAYS_PER_SEASON, DisplayMode, EnemyCampGenerationDef, EnemyCampState, EnemyModelSetDef,
+    EnemyRunAnimation, FireworksVfxDef, FoliageHabitat, GameConfig, GeneratedFoliage,
+    GeneratedWorld, GridPos, HealingBurstVfxDef, HealingChannelVfxDef, LegacyMigrationMetadata,
+    MAX_TRAVERSAL_WEAR_SCORE, MainMenuSceneReference, MaterialAlphaMode as AuthoredAlphaMode,
+    MaterialDef, NameDisplayMode, NativeSaveStore, ObjectiveEvent, ObjectiveKind, PetDef,
+    PetModelDef, PlayerSettings, PlayerSettingsStore, PostProcessAntiAliasing,
+    PostProcessProfileDef, PostProcessTonemapping, PresentationCatalog, RainingFishVfxDef,
+    RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction, RuntimeConsoleStatus,
+    RuntimeConsoleStore, SEASON_TRANSITION_SECONDS, SEASONS_PER_YEAR, SavedActor, SavedTerrainMesh,
+    Season, StableId, StationDef, StationUpdateMode, StorageModelDef, StreamUserType,
+    TargetingScoreDef, TownEvent, VfxGradientDef, Weather, WorldGenerationStage, WorldSimulation,
+    WorldSnapshot, foliage_visual_variant, foliage_visual_yaw_milliradians,
     generate_world_with_content, generate_world_with_content_observed, parse_chat_commands,
     resource_visual_variant,
 };
@@ -450,6 +451,13 @@ const EYE_COLORS: [[f32; 3]; 5] = [
     [0.402_439_36, 0.726_415_1, 0.085_662_15],
     [0.743_859, 0.792_452_8, 0.790_356_93],
     [0.801_886_8, 0.693_535_1, 0.086_997_17],
+];
+const SKIN_COLORS: [[f32; 3]; 5] = [
+    [0.850_980_4, 0.678_431_4, 0.509_803_95],
+    [0.811_320_8, 0.697_127_04, 0.585_528_7],
+    [0.556_603_8, 0.387_968_9, 0.223_166_61],
+    [0.358_490_6, 0.222_511_4, 0.089_622_65],
+    [0.850_980_4, 0.745_124_1, 0.509_803_95],
 ];
 use twitch::{
     CredentialVault, DeviceAuthorization, OAuthClient, TokenValidation, TwitchControl, TwitchEvent,
@@ -3254,7 +3262,7 @@ struct ResourceVisual {
 struct FoliageVisual(StableId);
 
 #[derive(Component)]
-struct PendingFoliageGrounding {
+struct PendingSurfaceGrounding {
     surface_height: f32,
 }
 
@@ -3267,7 +3275,7 @@ type FoliageClearanceQuery<'w, 's> = Query<
     (
         &'static GridLocation,
         Option<&'static FoliageRenderBatch>,
-        Option<&'static PendingFoliageGrounding>,
+        Option<&'static PendingSurfaceGrounding>,
         &'static mut Visibility,
     ),
     With<FoliageVisual>,
@@ -4112,6 +4120,7 @@ enum CosmeticNodeKind {
     Eyes,
     Hair,
     FacialHair,
+    Skin,
 }
 
 #[derive(Component)]
@@ -4955,7 +4964,7 @@ impl Plugin for StreamTownGamePlugin {
                         .after(apply_building_commands)
                         .after(load_input)
                         .after(decay_traversal_wear)
-                        .after(ground_loaded_foliage_visuals),
+                        .after(ground_loaded_surface_visuals),
                     sync_world_diagnostic_view
                         .after(process_injected_commands)
                         .after(sync_fine_navigation)
@@ -4982,7 +4991,7 @@ impl Plugin for StreamTownGamePlugin {
                     apply_player_settings.run_if(resource_changed::<RuntimePlayerSettings>),
                 ),
             )
-            .add_systems(Update, ground_loaded_foliage_visuals)
+            .add_systems(Update, ground_loaded_surface_visuals)
             .add_systems(
                 Update,
                 sync_authored_post_processing
@@ -10384,7 +10393,7 @@ fn spawn_main_menu_baked_foliage(
         StateEntity,
         Name::new(format!("Baked menu foliage: {}", foliage.id)),
         Mesh3d(mesh),
-        PendingFoliageGrounding {
+        PendingSurfaceGrounding {
             surface_height: position.y,
         },
         Transform::from_translation(position)
@@ -17374,6 +17383,7 @@ fn generate_and_spawn_world(
                         resource,
                         position,
                         &config.0,
+                        generated,
                     );
                 }
             }
@@ -18275,6 +18285,20 @@ fn centred_resource_visual_position(
         )
 }
 
+fn grounded_resource_visual_position(
+    position: Vec3,
+    archetype: Option<&ArchetypeDef>,
+    config: &GameConfig,
+    world: &GeneratedWorld,
+) -> Vec3 {
+    let mut position = archetype.map_or(position, |archetype| {
+        centred_resource_visual_position(position, archetype, config.world.cell_size)
+    });
+    position.y = terrain_surface_height_at_world(world, config, position.x, position.z)
+        .unwrap_or(position.y);
+    position
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_resource_visual(
     commands: &mut Commands,
@@ -18286,6 +18310,7 @@ fn spawn_resource_visual(
     resource: &stream_town_domain::GeneratedResource,
     position: Vec3,
     config: &GameConfig,
+    world: &GeneratedWorld,
 ) {
     let cell_size = config.world.cell_size;
     if resource.target_kind.as_str() == "target:fish" {
@@ -18323,9 +18348,8 @@ fn spawn_resource_visual(
             }
             .from_asset(scene.asset_path.clone()),
         );
-        let visual_position = visual_archetype.map_or(position, |archetype| {
-            centred_resource_visual_position(position, archetype, cell_size)
-        });
+        let visual_position =
+            grounded_resource_visual_position(position, visual_archetype, config, world);
         let mut entity = commands.spawn((
             WorldEntity,
             ResourceNode {
@@ -18334,9 +18358,13 @@ fn spawn_resource_visual(
             ResourceVisual { mesh_index },
             GridLocation(resource.position),
             Mesh3d(mesh),
+            PendingSurfaceGrounding {
+                surface_height: visual_position.y,
+            },
             Transform::from_translation(visual_position)
                 .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
                 .with_scale(Vec3::splat(resource_visual_scale(cell_size))),
+            Visibility::Hidden,
         ));
         match material {
             ResolvedMaterialHandle::Standard(material) => {
@@ -18546,7 +18574,7 @@ fn spawn_foliage_visual(
         FoliageRenderBatch(batch),
         GridLocation(visual.position),
         Mesh3d(visual.source_mesh),
-        PendingFoliageGrounding {
+        PendingSurfaceGrounding {
             surface_height: visual.transform.translation.y,
         },
         visual.transform,
@@ -18566,11 +18594,11 @@ fn spawn_foliage_visual(
     }
 }
 
-fn ground_loaded_foliage_visuals(
+fn ground_loaded_surface_visuals(
     mut commands: Commands,
     mut foliage: Query<(
         Entity,
-        &PendingFoliageGrounding,
+        &PendingSurfaceGrounding,
         &Aabb,
         &mut Transform,
         &mut Visibility,
@@ -18588,7 +18616,7 @@ fn ground_loaded_foliage_visuals(
             *visibility = Visibility::Inherited;
             commands
                 .entity(entity)
-                .try_remove::<PendingFoliageGrounding>();
+                .try_remove::<PendingSurfaceGrounding>();
         }
     }
 }
@@ -22087,7 +22115,7 @@ fn complete_agent_goal_with_regeneration(
                     if amount > 0 {
                         let _ = simulation.record_objective_event(
                             &content.objectives,
-                            &ObjectiveEvent::ResourceGained { resource, amount },
+                            &ObjectiveEvent::ResourceGathered { resource, amount },
                         );
                     }
                     amount > 0
@@ -23794,7 +23822,9 @@ fn simulation_player_count(simulation: &WorldSimulation) -> usize {
     simulation
         .actors
         .values()
-        .filter(|actor| actor.role.as_str() != "role:enemy")
+        .filter(|actor| {
+            actor.role.as_str() != "role:enemy" && !is_guardhouse_defender_id(&actor.id)
+        })
         .count()
 }
 
@@ -23815,7 +23845,9 @@ fn restart_world_after_town_hall_falls(
         .0
         .actors
         .values()
-        .filter(|actor| actor.role.as_str() != "role:enemy")
+        .filter(|actor| {
+            actor.role.as_str() != "role:enemy" && !is_guardhouse_defender_id(&actor.id)
+        })
         .cloned()
         .collect::<Vec<_>>();
     if let (Some(ruler), Some(previous_role)) = (
@@ -25868,7 +25900,13 @@ fn sync_resource_nodes(
     asset_root: Res<RuntimeAssetRoot>,
     simulation: Res<SimulationRuntime>,
     world: Res<WorldRuntime>,
-    mut resources: Query<(Entity, &ResourceNode, &GridLocation, &mut Visibility)>,
+    mut resources: Query<(
+        Entity,
+        &ResourceNode,
+        &GridLocation,
+        Option<&PendingSurfaceGrounding>,
+        &mut Visibility,
+    )>,
 ) {
     if !world.is_changed() && !simulation.is_changed() {
         return;
@@ -25890,7 +25928,7 @@ fn sync_resource_nodes(
         .map(|resource| resource.id.as_str())
         .collect::<HashSet<_>>();
     let mut spawned_ids = HashSet::with_capacity(resources.iter().len());
-    for (entity, node, location, mut visibility) in &mut resources {
+    for (entity, node, location, pending_grounding, mut visibility) in &mut resources {
         if !live_ids.contains(node.id.as_str()) {
             commands.entity(entity).despawn();
             continue;
@@ -25899,7 +25937,7 @@ fn sync_resource_nodes(
         let available = !camp_regions
             .iter()
             .any(|region| region_contains_grid_position(*region, location.0));
-        let desired = if available {
+        let desired = if available && pending_grounding.is_none() {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -25926,6 +25964,7 @@ fn sync_resource_nodes(
             resource,
             position,
             &config.0,
+            &world.generated,
         );
     }
 }
@@ -28936,6 +28975,7 @@ fn cosmetic_node_visible(
         CosmeticNodeKind::Eyes => customization.eyes == index,
         CosmeticNodeKind::Hair => customization.hair == index && !helmet_equipped,
         CosmeticNodeKind::FacialHair => customization.facial_hair == index,
+        CosmeticNodeKind::Skin => true,
     }
 }
 
@@ -28972,6 +29012,7 @@ fn tag_cosmetic_renderers(
     mut commands: Commands,
     parents: Query<&ChildOf>,
     names: Query<&Name>,
+    material_names: Query<&GltfMaterialName>,
     agents: Query<Entity, With<Agent>>,
     animated_player_rigs: Query<Entity, With<PlayerAnimatedRig>>,
     standard_renderers: Query<
@@ -28992,7 +29033,7 @@ fn tag_cosmetic_renderers(
             entity_commands.insert(AnimatedCharacterShadowReceiver);
         }
         if let Some((actor_root, kind)) =
-            cosmetic_renderer_context(entity, &parents, &names, &agents)
+            cosmetic_renderer_context(entity, &parents, &names, &material_names, &agents)
         {
             entity_commands.insert(CosmeticRenderer {
                 actor_root,
@@ -29009,7 +29050,8 @@ fn tag_cosmetic_renderers(
         return;
     };
     for (entity, material) in &standard_renderers {
-        let cosmetic_context = cosmetic_renderer_context(entity, &parents, &names, &agents);
+        let cosmetic_context =
+            cosmetic_renderer_context(entity, &parents, &names, &material_names, &agents);
         let animated_player = animated_player_renderer(entity, &parents, &animated_player_rigs);
         if !animated_player && cosmetic_context.is_none() {
             continue;
@@ -29071,6 +29113,7 @@ fn cosmetic_renderer_context(
     entity: Entity,
     parents: &Query<&ChildOf>,
     names: &Query<&Name>,
+    material_names: &Query<&GltfMaterialName>,
     agents: &Query<Entity, With<Agent>>,
 ) -> Option<(Entity, CosmeticNodeKind)> {
     let mut ancestor = entity;
@@ -29083,6 +29126,13 @@ fn cosmetic_renderer_context(
                 .and_then(|name| cosmetic_node(name.as_str()))
                 .map(|(kind, _)| kind)
         });
+        if cosmetic_kind.is_none()
+            && material_names
+                .get(ancestor)
+                .is_ok_and(|name| name.0 == "SkinMaterial")
+        {
+            cosmetic_kind = Some(CosmeticNodeKind::Skin);
+        }
         if let (true, Some(kind)) = (agents.contains(ancestor), cosmetic_kind) {
             return Some((ancestor, kind));
         }
@@ -29108,6 +29158,13 @@ fn cosmetic_color(customization: ActorCustomization, kind: CosmeticNodeKind) -> 
             (
                 u8::try_from(index).expect("hair color index fits"),
                 HAIR_COLORS[index],
+            )
+        }
+        CosmeticNodeKind::Skin => {
+            let index = usize::from(customization.skin_color).min(SKIN_COLORS.len() - 1);
+            (
+                u8::try_from(index).expect("skin color index fits"),
+                SKIN_COLORS[index],
             )
         }
     }
@@ -32363,6 +32420,22 @@ fn placement_visual_cells(placement: &BuildingPlacement) -> Vec<GridPos> {
     vec![placement.position]
 }
 
+fn path_route_is_complete(placement: &BuildingPlacement) -> bool {
+    let Some(start) = placement.line_start else {
+        return true;
+    };
+    let cursor = placement
+        .navigation_position
+        .unwrap_or_else(|| placement_to_navigation_centre(placement.position));
+    placement.path_cells.first() == Some(&start)
+        && placement.path_cells.last() == Some(&cursor)
+        && placement.path_cells.windows(2).all(|step| {
+            let dx = step[0].x.abs_diff(step[1].x);
+            let dz = step[0].z.abs_diff(step[1].z);
+            dx <= 1 && dz <= 1 && (dx != 0 || dz != 0)
+        })
+}
+
 fn placement_at_cell(placement: &BuildingPlacement, cell: GridPos) -> BuildingPlacement {
     let path = is_path_building(&placement.building);
     BuildingPlacement {
@@ -32393,13 +32466,14 @@ fn building_placement_is_available(
         let Some(navigation) = fine_navigation else {
             return false;
         };
-        return placement_visual_cells(placement).into_iter().all(|cell| {
-            navigation.is_walkable(cell)
-                && !simulation
-                    .path_navigation_positions
-                    .values()
-                    .any(|occupied| *occupied == cell)
-        });
+        return path_route_is_complete(placement)
+            && placement_visual_cells(placement).into_iter().all(|cell| {
+                navigation.is_walkable(cell)
+                    && !simulation
+                        .path_navigation_positions
+                        .values()
+                        .any(|occupied| *occupied == cell)
+            });
     }
     let footprint = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
     placement_visual_cells(placement).into_iter().all(|cell| {
@@ -33358,7 +33432,11 @@ fn technology_vote_options(vote: &stream_town_domain::TechVote) -> Vec<&StableId
     }
 }
 
-fn technology_vote_requirements(content: &ContentCatalog, technology: &StableId) -> String {
+fn technology_vote_requirements(
+    content: &ContentCatalog,
+    vote: &stream_town_domain::TechVote,
+    technology: &StableId,
+) -> String {
     let Some(technology) = content.technology.nodes.get(technology) else {
         return "Requirements unavailable".to_owned();
     };
@@ -33367,10 +33445,20 @@ fn technology_vote_requirements(content: &ContentCatalog, technology: &StableId)
         .iter()
         .filter_map(|objective| content.objectives.get(objective))
         .map(|objective| {
+            let gold_adjustment = if objective.kind == ObjectiveKind::Collect
+                && objective
+                    .resource
+                    .as_ref()
+                    .is_some_and(|resource| resource.as_str() == "resource:gold")
+            {
+                vote.gold_spent_during_vote
+            } else {
+                0
+            };
             format!(
                 "{} ×{}",
                 objective_display_label(objective),
-                objective.required_amount
+                objective.required_amount.saturating_add(gold_adjustment)
             )
         })
         .collect::<Vec<_>>();
@@ -33639,7 +33727,7 @@ fn update_vote_panels(
                 }
                 VoteTextKind::TechnologyOptionRequirements(index) => options
                     .get(usize::from(*index))
-                    .map(|technology| technology_vote_requirements(&content.0, technology))
+                    .map(|technology| technology_vote_requirements(&content.0, vote, technology))
                     .unwrap_or_default(),
                 _ => continue,
             };
@@ -34629,6 +34717,55 @@ fn automatic_load_requested(automatic_complete: bool, legacy: bool, resume: bool
     !automatic_complete && (legacy || resume)
 }
 
+fn migrate_legacy_path_navigation_positions(simulation: &mut WorldSimulation) -> usize {
+    const LOCAL_CANDIDATES: [(u16, u16); 9] = [
+        (1, 1),
+        (1, 0),
+        (2, 1),
+        (1, 2),
+        (0, 1),
+        (2, 0),
+        (2, 2),
+        (0, 2),
+        (0, 0),
+    ];
+    let mut occupied = simulation
+        .path_navigation_positions
+        .values()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let legacy_paths = simulation
+        .buildings
+        .values()
+        .filter(|building| building.archetype.as_str() == "archetype:building:path")
+        .filter(|building| {
+            !simulation
+                .path_navigation_positions
+                .contains_key(&building.id)
+        })
+        .map(|building| (building.id.clone(), building.position))
+        .collect::<Vec<_>>();
+    let mut migrated = 0;
+    for (id, coarse) in legacy_paths {
+        let base_x = coarse.x.saturating_mul(NAVIGATION_SUBDIVISIONS);
+        let base_z = coarse.z.saturating_mul(NAVIGATION_SUBDIVISIONS);
+        let Some(position) = LOCAL_CANDIDATES
+            .iter()
+            .map(|(x, z)| GridPos {
+                x: base_x.saturating_add(*x),
+                z: base_z.saturating_add(*z),
+            })
+            .find(|position| !occupied.contains(position))
+        else {
+            continue;
+        };
+        occupied.insert(position);
+        simulation.path_navigation_positions.insert(id, position);
+        migrated += 1;
+    }
+    migrated
+}
+
 fn load_input(
     mut ecs: Commands,
     mut io: ResMut<MenuIoRequest>,
@@ -34670,6 +34807,7 @@ fn load_input(
             return;
         }
     };
+    let mut persisted_upgrade = snapshot.simulation.schema_version < CURRENT_SIMULATION_SCHEMA;
     selected.0 = None;
     ecs.insert_resource(SelectedActor::default());
     let mut restored_config = config.0.clone();
@@ -34703,6 +34841,7 @@ fn load_input(
                 | NativeWorldCompatibility::RegeneratePrior
         )
     ) {
+        persisted_upgrade = true;
         info!(
             saved_generator_version = snapshot.generator_version,
             runtime_generator_version = restored_world.generator_version,
@@ -34768,9 +34907,18 @@ fn load_input(
     snapshot
         .simulation
         .upgrade_time_schema(restored_config.time.seconds_per_day);
+    let migrated_paths = migrate_legacy_path_navigation_positions(&mut snapshot.simulation);
+    if migrated_paths > 0 {
+        persisted_upgrade = true;
+        info!(
+            paths = migrated_paths,
+            "migrated coarse saved paths onto the fine navigation grid"
+        );
+    }
     normalize_building_health(&content.0, &mut snapshot.simulation);
     let capped_recruit_progress = normalize_recruit_role_progression(&mut snapshot.simulation);
     if capped_recruit_progress > 0 {
+        persisted_upgrade = true;
         info!(
             adjusted_professions = capped_recruit_progress,
             maximum_level = MAX_RECRUIT_ROLE_LEVEL,
@@ -34843,6 +34991,7 @@ fn load_input(
         &mut snapshot.simulation,
     );
     if repaired_enemy_camps > 0 {
+        persisted_upgrade = true;
         info!(
             camps = repaired_enemy_camps,
             "repaired native save created before enemy camp generation was enabled"
@@ -35164,17 +35313,26 @@ fn load_input(
         &config.0.terrain,
     );
     let forked_from_template = source_path != save.store.path();
-    if forked_from_template {
+    if forked_from_template || persisted_upgrade {
         match save.store.write(&snapshot) {
-            Ok(()) => info!(
-                source = %source_path.display(),
-                destination = %save.store.path().display(),
-                "jump-start template forked to writable town save"
-            ),
+            Ok(()) => {
+                if forked_from_template {
+                    info!(
+                        source = %source_path.display(),
+                        destination = %save.store.path().display(),
+                        "jump-start template forked to writable town save"
+                    );
+                } else {
+                    info!(
+                        destination = %save.store.path().display(),
+                        "persisted native save schema and content migrations"
+                    );
+                }
+            }
             Err(error) => error!(
                 %error,
                 destination = %save.store.path().display(),
-                "loaded jump-start template but could not write its town copy"
+                "loaded native save but could not persist its migrated town state"
             ),
         }
     }
@@ -38120,7 +38278,7 @@ fn recruited_actor_ids(simulation: &WorldSimulation) -> Vec<StableId> {
     simulation
         .actors
         .keys()
-        .filter(|id| is_recruited_actor_id(id))
+        .filter(|id| is_recruited_actor_id(id) && !is_guardhouse_defender_id(id))
         .cloned()
         .collect()
 }
@@ -38337,7 +38495,7 @@ fn spawn_numbered_world_labels(commands: &mut Commands, targets: &[StableId]) {
 }
 
 fn recruit_id(simulation: &WorldSimulation, index: u16) -> Option<StableId> {
-    recruited_actor_ids(simulation)
+    capacity_recruited_actor_ids(simulation)
         .get(usize::from(index.saturating_sub(1)))
         .cloned()
 }
@@ -38479,6 +38637,41 @@ fn item_info(
     requested: &StableId,
     instance: Option<u16>,
 ) -> Result<String, String> {
+    if instance.is_none()
+        && let Some(player) = simulation.actors.values().find(|actor| {
+            is_stream_player_actor(&actor.id)
+                && (actor.id == *requested
+                    || actor
+                        .login_name
+                        .as_deref()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(requested.as_str()))
+                    || actor.display_name.as_deref().is_some_and(|name| {
+                        name.replace('_', " ")
+                            .eq_ignore_ascii_case(&requested.as_str().replace('_', " "))
+                    }))
+        })
+    {
+        let levels = content
+            .roles
+            .iter()
+            .filter(|(id, _)| !matches!(id.as_str(), "role:ruler" | "role:enemy"))
+            .map(|(id, role)| {
+                let level = player
+                    .role_progression
+                    .get(id)
+                    .copied()
+                    .unwrap_or_default()
+                    .level;
+                format!("{} {level}", role.display_name)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let name = player.display_name.as_deref().unwrap_or(player.id.as_str());
+        return Ok(format!(
+            "{name}: current {}, health {}/{}, role levels — {levels}",
+            player.role, player.health, player.max_health
+        ));
+    }
     if let Some(role_id) = prefixed_id(requested, "role:")
         && let Some(role) = content.roles.get(&role_id)
     {
@@ -38487,7 +38680,7 @@ fn item_info(
         let assigned = simulation
             .actors
             .values()
-            .filter(|actor| actor.role == role_id)
+            .filter(|actor| actor.role == role_id && !is_guardhouse_defender_id(&actor.id))
             .count();
         return Ok(format!(
             "{}: action {}, health {}, carry {}, slots {assigned}/{capacity}",
@@ -39142,25 +39335,12 @@ fn shift_grid_position_with_bounds(
     )
 }
 
-fn trace_path_cell(path_cells: &mut Vec<GridPos>, next: GridPos) {
-    if path_cells.last() == Some(&next) {
-        return;
-    }
-    if path_cells.len() >= 2 && path_cells.get(path_cells.len() - 2) == Some(&next) {
-        path_cells.pop();
-        return;
-    }
-    if let Some(index) = path_cells.iter().position(|cell| *cell == next) {
-        path_cells.truncate(index + 1);
-        return;
-    }
-    path_cells.push(next);
-}
-
 fn move_path_placement(
     placement: &mut BuildingPlacement,
     actions: &[BuildingAction],
     world: &GeneratedWorld,
+    fine_navigation: Option<&stream_town_domain::NavGrid>,
+    simulation: &WorldSimulation,
 ) -> i32 {
     let width = world
         .navigation
@@ -39189,14 +39369,42 @@ fn move_path_placement(
                 continue;
             }
             cursor = next;
-            if placement.line_start.is_some() {
-                trace_path_cell(&mut placement.path_cells, cursor);
-            }
         }
     }
     placement.navigation_position = Some(cursor);
     placement.position = navigation_to_placement(cursor);
+    if let Some(start) = placement.line_start {
+        placement.path_cells = fine_navigation
+            .and_then(|navigation| routed_path_cells(navigation, simulation, start, cursor))
+            // Retain both endpoints so the preview clearly communicates a
+            // failed route; path_route_is_complete keeps confirmation red.
+            .unwrap_or_else(|| vec![start, cursor]);
+    }
     rotation
+}
+
+fn routed_path_cells(
+    navigation: &stream_town_domain::NavGrid,
+    simulation: &WorldSimulation,
+    start: GridPos,
+    goal: GridPos,
+) -> Option<Vec<GridPos>> {
+    let mut routing = navigation.clone();
+    for occupied in simulation.path_navigation_positions.values().copied() {
+        if !routing.contains(occupied) {
+            continue;
+        }
+        routing
+            .set_blocked(
+                stream_town_domain::DirtyRegion {
+                    min: occupied,
+                    max: occupied,
+                },
+                true,
+            )
+            .ok()?;
+    }
+    routing.find_path(start, goal).ok()
 }
 
 fn building_definition_id(
@@ -39410,6 +39618,10 @@ fn buy_town_resource(
     simulation
         .buy_resource(resource.clone(), amount, capacity)
         .map(|(bought, gold)| {
+            let _ = simulation.record_objective_event(
+                &content.objectives,
+                &ObjectiveEvent::TradeGoldSpent { amount: gold },
+            );
             let _ = simulation.record_objective_event(
                 &content.objectives,
                 &ObjectiveEvent::ResourceGained {
@@ -39721,7 +39933,13 @@ fn process_injected_commands(
                         .get_mut(&actor_id)
                         .ok_or_else(|| "not in building placement mode".to_owned())?;
                     let rotation_delta = if is_path_building(&placement.building) {
-                        move_path_placement(placement, actions, &world.generated)
+                        move_path_placement(
+                            placement,
+                            actions,
+                            &world.generated,
+                            view.fine_navigation.grid.as_ref(),
+                            &simulation.0,
+                        )
                     } else {
                         let (position, rotation_delta) =
                             shift_grid_position(placement.position, actions, &world.generated);
@@ -40219,12 +40437,12 @@ fn process_injected_commands(
                 }
                 ChatCommand::RecruitCount => {
                     require_ruler_or_staff(&simulation.0, &pending)?;
-                    let recruits = recruited_actor_ids(&simulation.0).len();
+                    let recruits = capacity_recruited_actor_ids(&simulation.0).len();
                     Ok(format!("The town has {recruits} recruits!"))
                 }
                 ChatCommand::RecruitIds => {
                     require_ruler_or_staff(&simulation.0, &pending)?;
-                    let recruit_ids = recruited_actor_ids(&simulation.0);
+                    let recruit_ids = capacity_recruited_actor_ids(&simulation.0);
                     let recruits = recruit_ids
                         .iter()
                         .enumerate()
@@ -40642,7 +40860,7 @@ fn process_injected_commands(
                         .values()
                         .filter(|actor| actor.id.as_str().starts_with("twitch:"))
                         .count(),
-                    recruited_actor_ids(&simulation.0).len(),
+                    capacity_recruited_actor_ids(&simulation.0).len(),
                     hud_building_count(&content.0, &simulation.0),
                     simulation.0.day,
                     simulation.0.season,
@@ -40656,7 +40874,7 @@ fn process_injected_commands(
                         .join(", ")
                 )),
                 ChatCommand::Population => {
-                    let recruits = recruited_actor_ids(&simulation.0)
+                    let recruits = capacity_recruited_actor_ids(&simulation.0)
                         .into_iter()
                         .collect::<BTreeSet<_>>();
                     let populations = content
@@ -41239,7 +41457,9 @@ fn update_hud(
             HudMetric::Npcs => agents
                 .iter()
                 .filter(|agent| {
-                    agent.kind == ActorKind::Player && !is_stream_player_actor(&agent.id)
+                    agent.kind == ActorKind::Player
+                        && !is_stream_player_actor(&agent.id)
+                        && !is_guardhouse_defender_id(&agent.id)
                 })
                 .count()
                 .to_string(),
@@ -42513,6 +42733,14 @@ fn update_actor_health_overlay_timer(
     }
 }
 
+fn actor_health_fill_color(actor: &ActorState) -> Color {
+    if actor.role.as_str() == "role:enemy" {
+        Color::srgb(0.58, 0.16, 0.86)
+    } else {
+        Color::srgb(0.85, 0.1, 0.1)
+    }
+}
+
 #[allow(clippy::type_complexity)]
 fn sync_actor_health_overlays(
     mut commands: Commands,
@@ -42530,7 +42758,7 @@ fn sync_actor_health_overlays(
         &mut Visibility,
     )>,
     mut fills: Query<
-        &mut Node,
+        (&mut Node, &mut BackgroundColor),
         (
             With<ActorHealthFill>,
             Without<ActorHealthOverlay>,
@@ -42586,8 +42814,9 @@ fn sync_actor_health_overlays(
         *visibility = Visibility::Visible;
         let health_fraction = building_health_fraction(actor.health, actor.max_health.max(1));
         for child in children.iter() {
-            if let Ok(mut fill) = fills.get_mut(child) {
+            if let Ok((mut fill, mut color)) = fills.get_mut(child) {
                 fill.width = percent(health_fraction * 100.0);
+                color.0 = actor_health_fill_color(actor);
             }
         }
     }
@@ -42638,7 +42867,7 @@ fn sync_actor_health_overlays(
                         height: percent(100.0),
                         ..default()
                     },
-                    BackgroundColor(Color::srgb(0.85, 0.1, 0.1)),
+                    BackgroundColor(actor_health_fill_color(actor)),
                 ));
             });
     }
@@ -43928,6 +44157,49 @@ mod tests {
             .starts_with("Prospector Hut:"),
             "PascalCase command names must resolve building IDs containing underscores"
         );
+    }
+
+    #[test]
+    fn player_info_reports_every_authored_profession_level() {
+        let content = embedded_content();
+        let player = StableId::new("twitch:forestfriend").unwrap();
+        let mut simulation = WorldSimulation::new(42);
+        assert!(simulation.join_player(player.clone(), GridPos { x: 2, z: 3 }));
+        simulation.actors.get_mut(&player).unwrap().display_name = Some("ForestFriend".to_owned());
+        simulation
+            .actors
+            .get_mut(&player)
+            .unwrap()
+            .role_progression
+            .insert(
+                StableId::new("role:forester").unwrap(),
+                stream_town_domain::RoleProgress {
+                    level: 7,
+                    experience: 12,
+                },
+            );
+
+        let details = item_info(
+            &content,
+            &simulation,
+            &StableId::new("forestfriend").unwrap(),
+            None,
+        )
+        .unwrap();
+
+        assert!(details.starts_with("ForestFriend:"), "{details}");
+        assert!(details.contains("Forester 7"), "{details}");
+        for role in content
+            .roles
+            .values()
+            .filter(|role| !matches!(role.display_name.as_str(), "Ruler" | "Enemy"))
+        {
+            assert!(
+                details.contains(&role.display_name),
+                "missing {} in {details}",
+                role.display_name
+            );
+        }
     }
 
     #[test]
@@ -45271,7 +45543,7 @@ mod tests {
     }
 
     #[test]
-    fn foliage_grounding_places_the_rotated_bounds_on_the_surface() {
+    fn surface_grounding_places_rotated_bounds_on_the_surface() {
         let rotation = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
         let minimum = transformed_bounds_minimum_y(
             Vec3::new(0.0, 2.0, 0.0),
@@ -45286,9 +45558,9 @@ mod tests {
     }
 
     #[test]
-    fn foliage_remains_hidden_until_grounding_is_complete() {
+    fn surface_visual_remains_hidden_until_grounding_is_complete() {
         let mut app = App::new();
-        app.add_systems(Update, ground_loaded_foliage_visuals);
+        app.add_systems(Update, ground_loaded_surface_visuals);
         let bounds = Aabb::from_min_max(Vec3::new(-0.5, 0.0, -0.25), Vec3::new(0.5, 4.0, 0.25));
         let rotation = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
         let scale = Vec3::splat(2.0);
@@ -45296,7 +45568,7 @@ mod tests {
         let entity = app
             .world_mut()
             .spawn((
-                PendingFoliageGrounding {
+                PendingSurfaceGrounding {
                     surface_height: surface,
                 },
                 bounds,
@@ -45308,7 +45580,7 @@ mod tests {
         app.update();
 
         let grounded = app.world().entity(entity);
-        assert!(grounded.get::<PendingFoliageGrounding>().is_none());
+        assert!(grounded.get::<PendingSurfaceGrounding>().is_none());
         assert_eq!(grounded.get::<Visibility>(), Some(&Visibility::Inherited));
         let transform = grounded.get::<Transform>().unwrap();
         let minimum = transformed_bounds_minimum_y(
@@ -45356,6 +45628,25 @@ mod tests {
             );
         }
         assert!(terrain_surface_height_at_world(&world, &config, 1.01, 0.0).is_none());
+    }
+
+    #[test]
+    fn resource_pivot_offsets_are_resampled_and_bounds_grounded_at_final_xz() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world(&config.world);
+        let resource = world
+            .resources
+            .iter()
+            .find(|resource| resource.kind.as_str() == "resource:wood")
+            .expect("shipping world has trees");
+        let archetype = resource_visual_archetype(&content, &resource.kind).unwrap();
+        let generated = generated_resource_world_position(resource, &config, &world);
+        let grounded =
+            grounded_resource_visual_position(generated, Some(archetype), &config, &world);
+        let expected = terrain_surface_height_at_world(&world, &config, grounded.x, grounded.z)
+            .expect("resource pivot remains inside terrain");
+        assert!((grounded.y - expected).abs() < 0.0001);
     }
 
     #[test]
@@ -46259,7 +46550,7 @@ mod tests {
         assert_ne!(streaming, original_streaming);
         assert_eq!((streaming.width, streaming.height), (1_920, 1_080));
         assert_eq!(streaming.frames_per_second, 60);
-        assert_eq!(streaming.video_bitrate_kbps, 4_500);
+        assert_eq!(streaming.video_bitrate_kbps, 500);
         assert_eq!(streaming.audio_bitrate_kbps, 64);
         assert_eq!(streaming.encoder, BroadcastEncoderPreference::Nvidia);
         assert!(streaming.bandwidth_test);
@@ -48554,6 +48845,7 @@ mod tests {
             facial_hair: 1,
             hair_color: 4,
             eye_color: 1,
+            skin_color: 3,
             body_type: 2,
             ..ActorCustomization::default()
         };
@@ -48598,6 +48890,10 @@ mod tests {
         assert_eq!(
             cosmetic_color(customization, CosmeticNodeKind::Eyes),
             (1, EYE_COLORS[1])
+        );
+        assert_eq!(
+            cosmetic_color(customization, CosmeticNodeKind::Skin),
+            (3, SKIN_COLORS[3])
         );
     }
 
@@ -51655,12 +51951,14 @@ mod tests {
                     ObjectiveEvent::BuildingBuilt(objective.building.clone().unwrap())
                 }
                 ObjectiveKind::BuildAny => ObjectiveEvent::BuildingBuilt(building_id.clone()),
-                ObjectiveKind::Collect | ObjectiveKind::EarnPerHour => {
-                    ObjectiveEvent::ResourceGained {
-                        resource: objective.resource.clone().unwrap(),
-                        amount: objective.required_amount,
-                    }
-                }
+                ObjectiveKind::Collect => ObjectiveEvent::ResourceGathered {
+                    resource: objective.resource.clone().unwrap(),
+                    amount: objective.required_amount,
+                },
+                ObjectiveKind::EarnPerHour => ObjectiveEvent::ResourceGained {
+                    resource: objective.resource.clone().unwrap(),
+                    amount: objective.required_amount,
+                },
                 ObjectiveKind::Kill => {
                     ObjectiveEvent::EnemyKilled(objective.enemy.clone().unwrap())
                 }
@@ -58587,7 +58885,7 @@ mod tests {
     }
 
     #[test]
-    fn paths_trace_bends_on_single_fine_navigation_cells() {
+    fn paths_route_diagonally_on_single_fine_navigation_cells() {
         let config = GameConfig::default();
         let content = embedded_content();
         let world = generate_world(&config.world);
@@ -58603,6 +58901,7 @@ mod tests {
             path_cells: vec![origin],
             inactivity_seconds: 0.0,
         };
+        let navigation = build_fine_navigation(&config, &content, &simulation, &world).unwrap();
         move_path_placement(
             &mut placement,
             &[
@@ -58620,15 +58919,21 @@ mod tests {
                 },
             ],
             &world,
+            Some(&navigation),
+            &simulation,
         );
 
         let cells = placement_visual_cells(&placement);
-        assert_eq!(cells.len(), 6);
+        assert_eq!(cells.first(), Some(&origin));
+        assert_eq!(cells.last(), placement.navigation_position.as_ref());
         assert!(
-            cells
-                .windows(2)
-                .all(|pair| { pair[0].x.abs_diff(pair[1].x) + pair[0].z.abs_diff(pair[1].z) == 1 })
+            cells.windows(2).all(
+                |pair| pair[0].x.abs_diff(pair[1].x) <= 1 && pair[0].z.abs_diff(pair[1].z) <= 1
+            )
         );
+        assert!(cells.windows(2).any(|pair| {
+            pair[0].x.abs_diff(pair[1].x) == 1 && pair[0].z.abs_diff(pair[1].z) == 1
+        }));
         assert!(cells.iter().any(|cell| cell.x != origin.x));
         assert!(cells.iter().any(|cell| cell.z != origin.z));
         assert_eq!(
@@ -58636,7 +58941,6 @@ mod tests {
             Some([1, 1])
         );
 
-        let navigation = build_fine_navigation(&config, &content, &simulation, &world).unwrap();
         assert!(building_placement_is_available(
             &content,
             &simulation,
@@ -58662,6 +58966,66 @@ mod tests {
     }
 
     #[test]
+    fn legacy_paths_migrate_once_from_coarse_cells_without_overlap() {
+        let mut simulation = WorldSimulation::new(9);
+        for suffix in ["a", "b"] {
+            let id = StableId::new(format!("building:path_{suffix}")).unwrap();
+            simulation.buildings.insert(
+                id.clone(),
+                BuildingState {
+                    id,
+                    archetype: StableId::new("archetype:building:path").unwrap(),
+                    position: GridPos { x: 4, z: 7 },
+                    rotation_quarter_turns: 0,
+                    level: 1,
+                    health: 100,
+                    complete: true,
+                },
+            );
+        }
+
+        assert_eq!(migrate_legacy_path_navigation_positions(&mut simulation), 2);
+        let positions = simulation
+            .path_navigation_positions
+            .values()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(positions.len(), 2);
+        assert!(positions.contains(&GridPos { x: 13, z: 22 }));
+        assert!(
+            positions
+                .iter()
+                .all(|position| (12..=14).contains(&position.x) && (21..=23).contains(&position.z))
+        );
+        assert_eq!(migrate_legacy_path_navigation_positions(&mut simulation), 0);
+    }
+
+    #[test]
+    fn routed_paths_avoid_existing_paths_and_use_diagonals() {
+        let mut blocked = vec![false; 36];
+        blocked[usize::from(2_u16) * 6 + usize::from(2_u16)] = true;
+        let navigation = stream_town_domain::NavGrid::new(6, 6, blocked, vec![0; 36]).unwrap();
+        let mut simulation = WorldSimulation::new(1);
+        simulation.path_navigation_positions.insert(
+            StableId::new("building:existing_path").unwrap(),
+            GridPos { x: 1, z: 1 },
+        );
+
+        let route = routed_path_cells(
+            &navigation,
+            &simulation,
+            GridPos { x: 0, z: 0 },
+            GridPos { x: 5, z: 5 },
+        )
+        .unwrap();
+        assert!(!route.contains(&GridPos { x: 1, z: 1 }));
+        assert!(!route.contains(&GridPos { x: 2, z: 2 }));
+        assert!(route.windows(2).any(|pair| {
+            pair[0].x.abs_diff(pair[1].x) == 1 && pair[0].z.abs_diff(pair[1].z) == 1
+        }));
+    }
+
+    #[test]
     fn enemies_receive_health_bars_without_a_player_only_authored_timeout() {
         let content = embedded_content();
         let enemy_archetype =
@@ -58678,6 +59042,10 @@ mod tests {
         assert_eq!(
             actor_health_bar_hide_seconds(&content, &simulation.actors[&enemy]),
             Some(3.0)
+        );
+        assert_eq!(
+            actor_health_fill_color(&simulation.actors[&enemy]),
+            Color::srgb(0.58, 0.16, 0.86)
         );
     }
 
@@ -58711,8 +59079,9 @@ mod tests {
             guardhouse_for_defender(&simulation, &defender).unwrap().id,
             building_id
         );
-        assert_eq!(recruited_actor_ids(&simulation), vec![defender]);
+        assert!(recruited_actor_ids(&simulation).is_empty());
         assert!(capacity_recruited_actor_ids(&simulation).is_empty());
+        assert_eq!(simulation_player_count(&simulation), 0);
 
         let nearby = StableId::new("enemy:guard_nearby").unwrap();
         let near_guardhouse = StableId::new("enemy:near_guardhouse").unwrap();

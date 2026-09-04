@@ -426,7 +426,10 @@ catalog/prerequisite validation and HUD/Twitch feedback.
 Selling through `!sell` converts available wood, ore, or food into town gold
 with Unity's authored 0.25 rate and 0.5 sell tax (including Unity's two integer
 truncation points); `!buy` spends that same gold at the authored buy-tax rate and
-respects live storage capacity. Both paths update technology objectives. A
+respects live storage capacity. Bought Food, Wood, and Ore no longer advance
+collection objectives, while Gold spent during an active objective or pending
+three-option ballot is added to the relevant Gold target to prevent trade
+cycling from manufacturing progress. A
 source-driven parity test reads Unity's shipping `CommandDictionary.cs` and
 requires every registered command to retain both a Bevy parser path and an entry
 in the public `!help` reference.
@@ -443,8 +446,9 @@ the exact grid cell and retained 90-degree rotation, `!confirm`/`!accept` spends
 schema-4 resources and commits valid occupancy, and `!cancel` exits without
 spending. Walls use the separate `!beginplace`, orthogonal movement,
 `!endplace`, and `!confirm` line workflow. Paths use the same commands but move
-and persist on individual one-third-cell navigation samples; every movement step
-extends a bendable route, and retracing edits that route before confirmation.
+and persist on individual one-third-cell navigation samples. After `!beginplace`,
+the complete preview is recalculated with diagonal-aware A* from the saved start
+to the cursor, routing through available fine-grid gaps before confirmation.
 `!bid <BuildingName>` exposes stable,
 one-based per-type BID numbers; `!upgrade <BuildingName> <BID>`,
 `!rotatebuilding`, `!buildinglight`, and Ruler-only `!remove` consume those same
@@ -796,7 +800,11 @@ has local before/after evidence but still awaits user confirmation. Do not
 broaden or repeat the previous shadow/material changes without consulting
 [`docs/visual-regressions/tree-foliage-flicker.md`](docs/visual-regressions/tree-foliage-flicker.md),
 which records the failed approaches and the next isolation matrix.
-Missing converted assets retain the resource-cube fallback.
+Missing converted assets retain the resource-cube fallback. Resource trees and
+bushes resample terrain after prefab-pivot X/Z correction and remain hidden
+until their transformed mesh bounds have been grounded. The same bounds pass
+covers foliage, preventing a one-frame hover and keeping both resource and
+decorative instances attached to sloped terrain.
 
 Content schema 21 also preserves each building prefab's authored base maximum
 health and per-level health increase. Construction starts at the Unity-authored

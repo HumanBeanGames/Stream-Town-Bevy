@@ -9,7 +9,7 @@ use thiserror::Error;
 use crate::{GridPos, ObjectiveDef, ObjectiveKind, StableId};
 
 pub const BUILDING_MAX_HEALTH: i32 = 500;
-pub const CURRENT_SIMULATION_SCHEMA: u32 = 4;
+pub const CURRENT_SIMULATION_SCHEMA: u32 = 5;
 /// Shipping Unity's `AllSeasonSettings` advances after three in-game days.
 pub const DAYS_PER_SEASON: u32 = 3;
 pub const SEASONS_PER_YEAR: u32 = 4;
@@ -18,6 +18,13 @@ pub const INITIAL_TECHNOLOGY_VOTE_DELAY_SECONDS: f32 = 20.0;
 pub const MAX_ROLE_LEVEL: u16 = 99;
 pub const RULER_VOTE_DURATION_SECONDS: f32 = 120.0;
 pub const RULER_VOTE_INTERVAL_SECONDS: f32 = 3_600.0;
+const ACTOR_EYE_VARIANTS: u64 = 10;
+const ACTOR_HAIR_VARIANTS: u64 = 7;
+const ACTOR_FACIAL_HAIR_VARIANTS: u64 = 2;
+const ACTOR_HAIR_COLOR_VARIANTS: u64 = 6;
+const ACTOR_EYE_COLOR_VARIANTS: u64 = 5;
+const ACTOR_SKIN_COLOR_VARIANTS: u64 = 5;
+const ACTOR_BODY_VARIANTS: u64 = 3;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RoleProgress {
@@ -128,6 +135,9 @@ pub struct ActorCustomization {
     pub facial_hair: u8,
     pub hair_color: u8,
     pub eye_color: u8,
+    /// Index into the five authored Unity skin colours.
+    #[serde(default)]
+    pub skin_color: u8,
     pub body_type: u8,
     /// Optional RGB overrides authored by the player through Twitch chat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -140,6 +150,26 @@ impl ActorCustomization {
     #[must_use]
     pub fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+
+    /// Produces a stable varied appearance without coupling saves to Bevy entities.
+    #[must_use]
+    pub fn randomized(world_seed: u64, actor: &StableId) -> Self {
+        let pick = |salt, variants| {
+            u8::try_from(actor_appearance_hash(world_seed, actor, salt) % variants)
+                .expect("actor appearance variant count fits u8")
+        };
+        Self {
+            eyes: pick(0x6579_6573, ACTOR_EYE_VARIANTS),
+            hair: pick(0x6861_6972, ACTOR_HAIR_VARIANTS),
+            facial_hair: pick(0x6661_6369_616c, ACTOR_FACIAL_HAIR_VARIANTS),
+            hair_color: pick(0x6861_6972_636f_6c6f, ACTOR_HAIR_COLOR_VARIANTS),
+            eye_color: pick(0x6579_655f_636f_6c6f, ACTOR_EYE_COLOR_VARIANTS),
+            skin_color: pick(0x736b_696e_636f_6c6f, ACTOR_SKIN_COLOR_VARIANTS),
+            body_type: pick(0x626f_6479, ACTOR_BODY_VARIANTS),
+            name_color: None,
+            night_light_color: None,
+        }
     }
 }
 
@@ -198,6 +228,10 @@ pub struct TechVote {
     /// Unity-compatible numbered-option votes.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub option_votes: BTreeMap<StableId, StableId>,
+    /// Gold spent on resource purchases while these options are visible. If a
+    /// gold-collection option wins, its objective inherits this extra cost.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub gold_spent_during_vote: u32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -231,10 +265,29 @@ pub struct TownGoalState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ObjectiveEvent {
     BuildingBuilt(StableId),
-    ResourceGained { resource: StableId, amount: u32 },
+    /// Resources delivered by an actor after a gathering action.
+    ResourceGathered {
+        resource: StableId,
+        amount: u32,
+    },
+    ResourceGained {
+        resource: StableId,
+        amount: u32,
+    },
+    /// Gold consumed by the resource-trading system, used to prevent cycling
+    /// bought stock through a gold technology objective.
+    TradeGoldSpent {
+        amount: u32,
+    },
     EnemyKilled(StableId),
-    ResourceSold { resource: StableId, amount: u32 },
-    ResourceBought { resource: StableId, amount: u32 },
+    ResourceSold {
+        resource: StableId,
+        amount: u32,
+    },
+    ResourceBought {
+        resource: StableId,
+        amount: u32,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -413,6 +466,7 @@ impl WorldSimulation {
         if self.actors.contains_key(&id) {
             return false;
         }
+        let customization = ActorCustomization::randomized(self.world_seed, &id);
         self.actors.insert(
             id.clone(),
             ActorState {
@@ -438,7 +492,7 @@ impl WorldSimulation {
                 unlocked_pets: BTreeSet::new(),
                 active_pet: None,
                 preferred_target: None,
-                customization: ActorCustomization::default(),
+                customization,
             },
         );
         true
@@ -1196,6 +1250,7 @@ impl WorldSimulation {
             remaining_seconds: duration_seconds.max(0.0),
             votes: BTreeMap::new(),
             option_votes: BTreeMap::new(),
+            gold_spent_during_vote: 0,
         });
         self.technology_vote_cooldown_seconds = None;
         Ok(())
@@ -1268,6 +1323,7 @@ impl WorldSimulation {
         } else {
             vote.technology.clone()
         };
+        let vote_gold_spent = vote.gold_spent_during_vote;
         let approvals = vote.votes.values().filter(|approve| **approve).count();
         let rejections = vote.votes.len().saturating_sub(approvals);
         let numbered_ballot = vote.options.len() > 1 || !vote.option_votes.is_empty();
@@ -1297,7 +1353,13 @@ impl WorldSimulation {
                         .map(|definition| ObjectiveProgress {
                             objective: objective.clone(),
                             amount: 0,
-                            required_amount: definition.required_amount,
+                            required_amount: definition.required_amount.saturating_add(
+                                if is_gold_collect_objective(definition) {
+                                    vote_gold_spent
+                                } else {
+                                    0
+                                },
+                            ),
                         })
                 })
                 .collect(),
@@ -1370,6 +1432,21 @@ impl WorldSimulation {
         definitions: &BTreeMap<StableId, ObjectiveDef>,
         event: &ObjectiveEvent,
     ) -> Vec<StableId> {
+        if let ObjectiveEvent::TradeGoldSpent { amount } = event {
+            if let Some(vote) = &mut self.active_vote {
+                vote.gold_spent_during_vote = vote.gold_spent_during_vote.saturating_add(*amount);
+            }
+            for goal in &mut self.active_goals {
+                for progress in &mut goal.objectives {
+                    if definitions
+                        .get(&progress.objective)
+                        .is_some_and(is_gold_collect_objective)
+                    {
+                        progress.required_amount = progress.required_amount.saturating_add(*amount);
+                    }
+                }
+            }
+        }
         for goal in &mut self.active_goals {
             for progress in &mut goal.objectives {
                 let Some(definition) = definitions.get(&progress.objective) else {
@@ -1587,6 +1664,20 @@ impl WorldSimulation {
             {
                 self.technology_vote_cooldown_seconds = Some(0.0);
             }
+            if self.schema_version < 5 {
+                for actor in self
+                    .actors
+                    .values_mut()
+                    .filter(|actor| actor.role.as_str() != "role:enemy")
+                {
+                    let name_color = actor.customization.name_color;
+                    let night_light_color = actor.customization.night_light_color;
+                    actor.customization =
+                        ActorCustomization::randomized(self.world_seed, &actor.id);
+                    actor.customization.name_color = name_color;
+                    actor.customization.night_light_color = night_light_color;
+                }
+            }
             self.schema_version = CURRENT_SIMULATION_SCHEMA;
             self.recalculate_calendar(seconds_per_day);
         }
@@ -1680,6 +1771,37 @@ fn is_true(value: &bool) -> bool {
     *value
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
+fn actor_appearance_hash(world_seed: u64, actor: &StableId, salt: u64) -> u64 {
+    let mut hash = (world_seed ^ salt).wrapping_add(0x9e37_79b9_7f4a_7c15);
+    for byte in actor.as_str().bytes() {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash ^= hash >> 30;
+    hash = hash.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    hash ^= hash >> 27;
+    hash.wrapping_mul(0x94d0_49bb_1331_11eb) ^ (hash >> 31)
+}
+
+fn is_gold_collect_objective(definition: &ObjectiveDef) -> bool {
+    definition.kind == ObjectiveKind::Collect
+        && definition
+            .resource
+            .as_ref()
+            .is_some_and(|resource| resource.as_str() == "resource:gold")
+}
+
+fn common_gathered_resource(resource: &StableId) -> bool {
+    matches!(
+        resource.as_str(),
+        "resource:food" | "resource:wood" | "resource:ore"
+    )
+}
+
 fn objective_increment(
     definition: &ObjectiveDef,
     required_amount: u32,
@@ -1693,8 +1815,14 @@ fn objective_increment(
         }
         (ObjectiveKind::BuildAny, ObjectiveEvent::BuildingBuilt(_))
         | (ObjectiveKind::KillAny, ObjectiveEvent::EnemyKilled(_)) => 1,
-        (ObjectiveKind::Collect, ObjectiveEvent::ResourceGained { resource, amount })
+        (ObjectiveKind::Collect, ObjectiveEvent::ResourceGathered { resource, amount })
             if definition.resource.as_ref() == Some(resource) =>
+        {
+            *amount
+        }
+        (ObjectiveKind::Collect, ObjectiveEvent::ResourceGained { resource, amount })
+            if definition.resource.as_ref() == Some(resource)
+                && !common_gathered_resource(resource) =>
         {
             *amount
         }
@@ -2484,6 +2612,18 @@ mod tests {
                 .record_objective_event(
                     &definitions,
                     &ObjectiveEvent::ResourceGained {
+                        resource: wood.clone(),
+                        amount: 10,
+                    },
+                )
+                .is_empty()
+        );
+        assert_eq!(simulation.active_goals[0].objectives[0].amount, 0);
+        assert!(
+            simulation
+                .record_objective_event(
+                    &definitions,
+                    &ObjectiveEvent::ResourceGathered {
                         resource: wood,
                         amount: 10,
                     },
@@ -2504,6 +2644,94 @@ mod tests {
         assert_eq!(
             ron::from_str::<WorldSimulation>(&encoded).unwrap(),
             simulation
+        );
+    }
+
+    #[test]
+    fn actor_appearances_are_seeded_varied_and_persisted() {
+        let mut simulation = WorldSimulation::new(77);
+        let first = id("twitch:first");
+        let second = id("twitch:second");
+        assert!(simulation.join_player(first.clone(), GridPos { x: 1, z: 1 }));
+        assert!(simulation.join_player(second.clone(), GridPos { x: 2, z: 1 }));
+        let first_appearance = simulation.actors[&first].customization;
+        assert_eq!(first_appearance, ActorCustomization::randomized(77, &first));
+        assert_ne!(first_appearance, simulation.actors[&second].customization);
+        assert!(u64::from(first_appearance.eyes) < ACTOR_EYE_VARIANTS);
+        assert!(u64::from(first_appearance.hair) < ACTOR_HAIR_VARIANTS);
+        assert!(u64::from(first_appearance.skin_color) < ACTOR_SKIN_COLOR_VARIANTS);
+
+        let encoded = ron::to_string(&simulation).unwrap();
+        let decoded = ron::from_str::<WorldSimulation>(&encoded).unwrap();
+        assert_eq!(decoded.actors[&first].customization, first_appearance);
+    }
+
+    #[test]
+    fn schema_five_randomizes_legacy_appearances_but_preserves_player_colors() {
+        let actor = id("twitch:legacy_appearance");
+        let mut simulation = WorldSimulation::new(91);
+        assert!(simulation.join_player(actor.clone(), GridPos { x: 3, z: 4 }));
+        simulation.schema_version = 4;
+        simulation.actors.get_mut(&actor).unwrap().customization = ActorCustomization {
+            name_color: Some([1, 2, 3]),
+            night_light_color: Some([4, 5, 6]),
+            ..ActorCustomization::default()
+        };
+
+        simulation.upgrade_time_schema(SHIPPING_SECONDS_PER_DAY);
+
+        let customization = simulation.actors[&actor].customization;
+        assert_eq!(customization.name_color, Some([1, 2, 3]));
+        assert_eq!(customization.night_light_color, Some([4, 5, 6]));
+        let mut expected = ActorCustomization::randomized(91, &actor);
+        expected.name_color = Some([1, 2, 3]);
+        expected.night_light_color = Some([4, 5, 6]);
+        assert_eq!(customization, expected);
+    }
+
+    #[test]
+    fn trade_spending_follows_gold_votes_and_active_objectives() {
+        let mut simulation = WorldSimulation::new(42);
+        let voter = id("twitch:voter");
+        let gold_technology = id("tech:gold");
+        let other_technology = id("tech:other");
+        let objective = id("objective:collect_gold");
+        let gold = id("resource:gold");
+        let definitions = BTreeMap::from([(
+            objective.clone(),
+            ObjectiveDef {
+                kind: ObjectiveKind::Collect,
+                required_amount: 100,
+                float_value_milli: 0,
+                resource: Some(gold),
+                building: None,
+                enemy: None,
+            },
+        )]);
+        assert!(simulation.join_player(voter.clone(), GridPos { x: 1, z: 1 }));
+        simulation
+            .start_technology_ballot(vec![gold_technology.clone(), other_technology], 1.0)
+            .unwrap();
+        simulation
+            .record_objective_event(&definitions, &ObjectiveEvent::TradeGoldSpent { amount: 37 });
+        simulation
+            .cast_technology_vote(&voter, gold_technology.clone())
+            .unwrap();
+        simulation.tick(1.0, SHIPPING_SECONDS_PER_DAY);
+        assert_eq!(
+            simulation.resolve_technology_vote(std::slice::from_ref(&objective), &definitions, 2,),
+            Some(gold_technology)
+        );
+        assert_eq!(
+            simulation.active_goals[0].objectives[0].required_amount,
+            137
+        );
+
+        simulation
+            .record_objective_event(&definitions, &ObjectiveEvent::TradeGoldSpent { amount: 13 });
+        assert_eq!(
+            simulation.active_goals[0].objectives[0].required_amount,
+            150
         );
     }
 
