@@ -206,6 +206,31 @@ impl NavGrid {
         goal: GridPos,
         walkable_exceptions: &HashSet<GridPos>,
     ) -> Result<Vec<GridPos>, NavigationError> {
+        self.find_path_with_exceptions_and_costs(
+            start,
+            goal,
+            walkable_exceptions,
+            10,
+            14,
+            |_, step_cost| step_cost,
+        )
+    }
+
+    /// Finds a route with caller-defined traversal costs.
+    ///
+    /// `minimum_*_cost` must be the lowest possible cost returned for a
+    /// cardinal or diagonal step. Keeping those lower bounds explicit leaves
+    /// the A* heuristic admissible while allowing surfaces such as roads to
+    /// make a slightly longer route faster overall.
+    pub fn find_path_with_exceptions_and_costs(
+        &self,
+        start: GridPos,
+        goal: GridPos,
+        walkable_exceptions: &HashSet<GridPos>,
+        minimum_cardinal_cost: u32,
+        minimum_diagonal_cost: u32,
+        mut traversal_cost: impl FnMut(GridPos, u32) -> u32,
+    ) -> Result<Vec<GridPos>, NavigationError> {
         if !self.contains(start) || !self.contains(goal) {
             return Err(NavigationError::OutsideGrid);
         }
@@ -225,7 +250,12 @@ impl NavGrid {
         let mut costs = HashMap::<GridPos, u32>::from([(start, 0)]);
         open.push(OpenNode {
             position: start,
-            estimated_total: octile_distance(start, goal),
+            estimated_total: octile_distance_with_costs(
+                start,
+                goal,
+                minimum_cardinal_cost,
+                minimum_diagonal_cost,
+            ),
             cost: 0,
         });
 
@@ -241,13 +271,20 @@ impl NavGrid {
                 .into_iter()
                 .flatten()
             {
-                let next_cost = current.cost + step_cost;
+                let next_cost = current
+                    .cost
+                    .saturating_add(traversal_cost(neighbour, step_cost).max(1));
                 if next_cost < *costs.get(&neighbour).unwrap_or(&u32::MAX) {
                     costs.insert(neighbour, next_cost);
                     came_from.insert(neighbour, current.position);
                     open.push(OpenNode {
                         position: neighbour,
-                        estimated_total: next_cost + octile_distance(neighbour, goal),
+                        estimated_total: next_cost.saturating_add(octile_distance_with_costs(
+                            neighbour,
+                            goal,
+                            minimum_cardinal_cost,
+                            minimum_diagonal_cost,
+                        )),
                         cost: next_cost,
                     });
                 }
@@ -314,11 +351,17 @@ fn offset(position: GridPos, x: i32, z: i32) -> Option<GridPos> {
     })
 }
 
-fn octile_distance(left: GridPos, right: GridPos) -> u32 {
+fn octile_distance_with_costs(
+    left: GridPos,
+    right: GridPos,
+    cardinal_cost: u32,
+    diagonal_cost: u32,
+) -> u32 {
     let x = u32::from(left.x.abs_diff(right.x));
     let z = u32::from(left.z.abs_diff(right.z));
     let diagonal = x.min(z);
-    diagonal * 14 + (x.max(z) - diagonal) * 10
+    diagonal.saturating_mul(diagonal_cost.min(cardinal_cost.saturating_mul(2)))
+        + (x.max(z) - diagonal).saturating_mul(cardinal_cost)
 }
 
 fn topology_cell_token(index: usize, blocked: bool, height_centimetres: i16) -> u64 {
@@ -425,6 +468,36 @@ mod tests {
         assert!(path.windows(2).all(|step| {
             step[0].x.abs_diff(step[1].x) == 1 && step[0].z.abs_diff(step[1].z) == 1
         }));
+    }
+
+    #[test]
+    fn weighted_paths_can_prefer_a_longer_faster_surface() {
+        let grid = NavGrid::new(7, 3, vec![false; 21], vec![0; 21]).unwrap();
+        let start = GridPos { x: 0, z: 1 };
+        let goal = GridPos { x: 6, z: 1 };
+        assert!(
+            grid.find_path(start, goal)
+                .unwrap()
+                .iter()
+                .all(|position| position.z == 1)
+        );
+        let path = grid
+            .find_path_with_exceptions_and_costs(
+                start,
+                goal,
+                &HashSet::new(),
+                5,
+                7,
+                |position, base_cost| {
+                    if position.z == 0 {
+                        base_cost / 2
+                    } else {
+                        base_cost
+                    }
+                },
+            )
+            .unwrap();
+        assert!(path.iter().any(|position| position.z == 0));
     }
 
     #[test]

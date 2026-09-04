@@ -1612,7 +1612,6 @@ impl WorldSimulation {
         }
         if self.active_vote.is_none()
             && self.active_goals.is_empty()
-            && self.ruler_vote.is_none()
             && self.active_event.is_none()
             && let Some(cooldown) = &mut self.technology_vote_cooldown_seconds
         {
@@ -1621,10 +1620,7 @@ impl WorldSimulation {
         if self.ruler_vote.is_none() && self.ruler_vote_scheduled {
             self.ruler_vote_cooldown_seconds =
                 (self.ruler_vote_cooldown_seconds - delta_seconds).max(0.0);
-            if self.ruler_vote_cooldown_seconds <= f32::EPSILON
-                && self.active_vote.is_none()
-                && self.active_event.is_none()
-            {
+            if self.ruler_vote_cooldown_seconds <= f32::EPSILON && self.active_event.is_none() {
                 let kind = if self.current_ruler.is_some() {
                     RulerVoteKind::KeepRuler
                 } else {
@@ -2201,6 +2197,35 @@ mod tests {
         );
         assert!(simulation.unlocked_technology.contains(&options[1]));
         assert_eq!(simulation.technology_vote_cooldown_seconds, Some(0.0));
+    }
+
+    #[test]
+    fn ruler_and_technology_ballots_run_and_accept_votes_concurrently() {
+        let mut simulation = WorldSimulation::new(43);
+        let voter = id("twitch:concurrent_voter");
+        assert!(simulation.join_player(voter.clone(), GridPos { x: 1, z: 1 }));
+        let technology = id("tech:concurrent");
+        simulation
+            .start_technology_ballot(vec![technology.clone()], 60.0)
+            .unwrap();
+        simulation
+            .start_ruler_vote(RulerVoteKind::NewRuler)
+            .unwrap();
+
+        simulation
+            .cast_technology_vote(&voter, technology.clone())
+            .unwrap();
+        simulation.cast_ruler_vote(&voter, voter.clone()).unwrap();
+        simulation.tick(RULER_VOTE_DURATION_SECONDS, SHIPPING_SECONDS_PER_DAY);
+
+        assert_eq!(
+            simulation
+                .active_vote
+                .as_ref()
+                .and_then(|vote| vote.option_votes.get(&voter)),
+            Some(&technology)
+        );
+        assert_eq!(simulation.current_ruler, Some(voter));
     }
 
     #[test]

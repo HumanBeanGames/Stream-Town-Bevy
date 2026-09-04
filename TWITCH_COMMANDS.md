@@ -101,7 +101,9 @@ freezing the current endpoint but is not required. A diagonal wall endpoint is r
 that exceeds available resources is not constructed. Paths cost 150 Wood and 130 Ore per fine-grid
 section at level 1, conform to the terrain, remain walkable, and do not consume building capacity.
 Each completed Path level gives citizens on that fine-grid section 5% additional movement speed. Path
-technologies form their own branch beginning in Age 1.
+technologies form their own branch beginning in Age 1. Citizen route planning prices that speed into
+its A* cost, so a faster path can be preferred over a slightly shorter unsurfaced route. Imported
+coarse path centres expand into complete one-cell-long straight strips and L-shaped corner coverage.
 
 ## Building IDs (BIDs)
 
@@ -169,7 +171,7 @@ that view. Both modes are visual only: they do not modify navigation, placement,
 
 | Command | Purpose |
 |---|---|
-| `!vote <option>` | Vote in the active ruler or technology vote using the displayed option number/name. |
+| `!vote <option>` | Vote in a technology ballot by number (`!vote 1`, `!vote 2`, or `!vote 3`), or in a simultaneous ruler ballot by player name. A keep-the-current-ruler ballot uses `!vote yes` or `!vote no`. |
 | `!rulervote` | Ruler/operator: start a ruler vote. |
 | `!resign` | Resign as ruler. |
 

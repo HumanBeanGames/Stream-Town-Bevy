@@ -352,8 +352,9 @@ mistaken for production-ready systems.
   stable player, preserve deterministic first-option tie behavior, and restore
   the previous role on replacement or resignation. Ruler identity, previous
   role, ballot tallies/order, and cooldown persist in native saves, while the
-  one-time importer restores Unity ruler names and cooldowns. `!vote` routes to
-  governance while a ruler ballot is active and to technology otherwise.
+  one-time importer restores Unity ruler names and cooldowns. Technology and
+  governance ballots can overlap: numeric `!vote` options route to technology,
+  while player names (or `yes`/`no` retention choices) route to governance.
   Broadcaster/moderator identity survives Twitch dispatch for permission checks;
   `!buy`, `!sell`, `!recruit`, `!recruits`, and `!save` enforce ruler-or-staff
   access, and `!rulervote`/forced `!event` are staff-only. Recruiting creates

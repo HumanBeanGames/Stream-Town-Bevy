@@ -317,8 +317,12 @@ messages, and operator moderation therefore use the streamer grant, while the
 bot retains only `chat:read` and `chat:edit`. The default
 stream-only mode renders the town once into a full-resolution offscreen target,
 makes at most one GPU readback request per configured output-frame interval,
-publishes completed readbacks in render order through a bounded latest-frame
-mailbox, and replaces the local game window with a separate 1100x680 operator dashboard and a
+and copies through four permanently bounded staging buffers. A two-frame CPU
+inbox and latest-frame mailbox discard stale work under pressure; capture never
+allocates another GPU buffer because an earlier mapping stalled. The encoder
+likewise rotates four reusable full-resolution input frames instead of allocating
+an 8.3 MB AVFrame every 1080p tick. The local game window is replaced with a
+separate 1100x680 operator dashboard and a
 low-resolution preview. The optional headed mode uses Windows Graphics Capture instead.
 WASAPI application loopback captures only Stream Town's Bevy audio. In
 stream-only mode, Bevy Tidal's bounded pre-monitor PCM tap feeds music directly
@@ -562,10 +566,10 @@ resource they restore. Their completed buildings provide Forester, Prospector,
 and Tender slots. Foresters plant first around recently depleted trees, then
 living trees, then deterministic reachable sites near their Nursery, scaling
 from five minutes to twenty seconds per tree. Prospectors repeatedly survey an
-outward 5–20-cell spiral around their hut, scaling from a 1-in-1,000 to a
-1-in-100 discovery roll per surveyed cell and creating 3–5-node ore deposits.
+outward 5–20-cell spiral around their hut, scaling from a 1-in-4,000 to a
+1-in-400 discovery roll per surveyed cell and creating 3–5-node ore deposits.
 Tenders choose open fields at least ten cells from buildings and five from trees,
-scaling from ten to two minutes per berry bush. New resources receive stable
+scaling from thirty to six minutes per berry bush. New resources receive stable
 IDs, deterministic central-half-cell offsets, navigation occupancy, runtime
 visuals, and native-save restoration.
 All seven combat roles—Defender, Necromancer, Paladin, Ranger, Ruler, Soldier,
@@ -1249,9 +1253,11 @@ Building-cap technologies are labelled `Max Lv` in this surface: Unity's
 three after their initially unlocked roots; they do not skip a level-up action.
 Closing a ballot explicitly resets its child rows and slider fills as well as
 hiding the sliced frame. Completing the winning technology's goal queues the
-next ballot. Ruler elections and
-retention votes show the Unity prompt, deterministic top-five/yes-no tally, and
-the persisted 120-second countdown. `STREAM_TOWN_SMOKE_VOTE=technology|ruler|keep`
+next ballot. Technology and ruler ballots may remain active together: technology
+uses numbered `!vote 1`–`!vote 3` choices, while ruler elections use player names
+and retention votes use `yes`/`no`. Ruler elections and retention votes show the
+Unity prompt, deterministic top-five/yes-no tally, and the persisted 120-second
+countdown. `STREAM_TOWN_SMOKE_VOTE=technology|ruler|keep`
 opens reproducible visual-acceptance fixtures without bypassing the real vote
 state or timer systems.
 

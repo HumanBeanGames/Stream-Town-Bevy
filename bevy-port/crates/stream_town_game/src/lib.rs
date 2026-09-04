@@ -21314,14 +21314,14 @@ fn regeneration_role_interval_seconds(role: &StableId, level: u16) -> Option<f64
     let progress = f64::from(level.saturating_sub(1).min(99)) / 99.0;
     match role.as_str() {
         "role:forester" => Some(300.0 + (20.0 - 300.0) * progress),
-        "role:tender" => Some(600.0 + (120.0 - 600.0) * progress),
+        "role:tender" => Some(1_800.0 + (360.0 - 1_800.0) * progress),
         _ => None,
     }
 }
 
 fn prospector_discovery_denominator(level: u16) -> u64 {
     let progress = u64::from(level.saturating_sub(1).min(99));
-    1_000_u64.saturating_sub(900 * progress / 99).max(100)
+    4_000_u64.saturating_sub(3_600 * progress / 99).max(400)
 }
 
 fn regeneration_role_level(actor: &ActorState) -> u16 {
@@ -24558,6 +24558,7 @@ fn try_fine_agent_path(
     navigation: &stream_town_domain::NavGrid,
     content: &ContentCatalog,
     simulation: &WorldSimulation,
+    paths: &PathSurfaceRuntime,
     kind: &ActorKind,
     start: GridPos,
     placement_goal: GridPos,
@@ -24573,15 +24574,35 @@ fn try_fine_agent_path(
     if navigation.contains(start) && !navigation.is_walkable(start) {
         exceptions.insert(start);
     }
-    navigation
-        .find_path_with_exceptions(start, goal, &exceptions)
-        .ok()
+    if *kind == ActorKind::Player {
+        let maximum_path_level = paths.levels.values().copied().max().unwrap_or_default();
+        navigation
+            .find_path_with_exceptions_and_costs(
+                start,
+                goal,
+                &exceptions,
+                path_route_step_cost(10, maximum_path_level),
+                path_route_step_cost(14, maximum_path_level),
+                |position, base_cost| {
+                    path_route_step_cost(
+                        base_cost,
+                        paths.levels.get(&position).copied().unwrap_or_default(),
+                    )
+                },
+            )
+            .ok()
+    } else {
+        navigation
+            .find_path_with_exceptions(start, goal, &exceptions)
+            .ok()
+    }
 }
 
 fn try_fine_agent_path_for_goal(
     navigation: &stream_town_domain::NavGrid,
     content: &ContentCatalog,
     simulation: &WorldSimulation,
+    paths: &PathSurfaceRuntime,
     enemy_navigation: Option<&EnemyNavigationField>,
     kind: &ActorKind,
     goal_kind: &AgentGoal,
@@ -24601,7 +24622,15 @@ fn try_fine_agent_path_for_goal(
     {
         return Some(path);
     }
-    try_fine_agent_path(navigation, content, simulation, kind, start, placement_goal)
+    try_fine_agent_path(
+        navigation,
+        content,
+        simulation,
+        paths,
+        kind,
+        start,
+        placement_goal,
+    )
 }
 
 fn agent_action_facing_grid(
@@ -24786,6 +24815,14 @@ fn actor_movement_speed_on_path(
                     .copied()
                     .unwrap_or_default(),
             ) * 0.05)
+}
+
+fn path_route_step_cost(base_cost: u32, path_level: u16) -> u32 {
+    let speed_milli = 1_000_u32.saturating_add(u32::from(path_level).saturating_mul(50));
+    base_cost
+        .saturating_mul(100_000)
+        .saturating_add(speed_milli.saturating_sub(1))
+        / speed_milli
 }
 
 fn predictive_speed_factors(
@@ -25503,6 +25540,7 @@ fn move_agents(
                     navigation,
                     &content.0,
                     &simulation.0,
+                    &movement_stats.path_surfaces,
                     enemy_navigation.field.as_ref(),
                     &agent.kind,
                     &candidate_goal,
@@ -25591,6 +25629,7 @@ fn move_agents(
                     navigation,
                     &content.0,
                     &simulation.0,
+                    &movement_stats.path_surfaces,
                     enemy_navigation.field.as_ref(),
                     &agent.kind,
                     &goal,
@@ -36010,7 +36049,6 @@ fn start_scheduled_technology_vote(
 ) {
     if simulation.0.active_vote.is_some()
         || !simulation.0.active_goals.is_empty()
-        || simulation.0.ruler_vote.is_some()
         || simulation.0.active_event.is_some()
     {
         return;
@@ -36511,6 +36549,41 @@ fn linear_neighbour_value(
     state: &BuildingState,
     building_id: &StableId,
 ) -> u8 {
+    if is_path_building(building_id) {
+        let Some(path_archetype) = content
+            .buildings
+            .get(building_id)
+            .map(|definition| &definition.archetype)
+        else {
+            return 0;
+        };
+        let centre = simulation
+            .path_navigation_positions
+            .get(&state.id)
+            .copied()
+            .unwrap_or_else(|| placement_to_navigation_centre(state.position));
+        return simulation
+            .buildings
+            .values()
+            .filter(|other| other.id != state.id && other.archetype == *path_archetype)
+            .fold(0_u8, |value, other| {
+                let other = simulation
+                    .path_navigation_positions
+                    .get(&other.id)
+                    .copied()
+                    .unwrap_or_else(|| placement_to_navigation_centre(other.position));
+                let delta_x = i32::from(other.x) - i32::from(centre.x);
+                let delta_z = i32::from(other.z) - i32::from(centre.z);
+                let connection = match (delta_x, delta_z) {
+                    (1..=3, 0) => 8,
+                    (-3..=-1, 0) => 2,
+                    (0, 1..=3) => 16,
+                    (0, -3..=-1) => 4,
+                    _ => 0,
+                };
+                value | connection
+            });
+    }
     let connects = |other: &BuildingState| {
         content.buildings.iter().any(|(id, definition)| {
             definition.archetype == other.archetype
@@ -36546,24 +36619,27 @@ fn linear_navigation_cells(
     state: &BuildingState,
     building_id: &StableId,
 ) -> Vec<GridPos> {
-    if is_path_building(building_id) {
-        return vec![
-            simulation
-                .path_navigation_positions
-                .get(&state.id)
-                .copied()
-                .unwrap_or_else(|| placement_to_navigation_centre(state.position)),
-        ];
-    }
-    let centre = placement_to_navigation_centre(state.position);
+    let path = is_path_building(building_id);
+    let centre = if path {
+        simulation
+            .path_navigation_positions
+            .get(&state.id)
+            .copied()
+            .unwrap_or_else(|| placement_to_navigation_centre(state.position))
+    } else {
+        placement_to_navigation_centre(state.position)
+    };
     let mut connections = linear_neighbour_value(content, simulation, state, building_id);
+    if path && connections == 0 {
+        return vec![centre];
+    }
     let horizontal = connections & (2 | 8) != 0;
     let vertical = connections & (4 | 16) != 0;
     if horizontal ^ vertical {
         // A line endpoint still spans its full placement cell, avoiding a one-third
         // gap between a wall/gate and the next non-linear obstruction.
         connections |= if horizontal { 2 | 8 } else { 4 | 16 };
-    } else if connections == 0 {
+    } else if !path && connections == 0 {
         // An isolated segment has no neighbours from which to infer its axis,
         // so retain the direction selected by the placement command.
         connections = if state.rotation_quarter_turns.rem_euclid(2) == 0 {
@@ -40415,7 +40491,26 @@ fn process_injected_commands(
                     })
                 }
                 ChatCommand::Vote(requested) => {
-                    if simulation.0.ruler_vote.is_some() {
+                    if requested.as_str().parse::<usize>().is_ok()
+                        && simulation.0.active_vote.is_some()
+                    {
+                        let technology = resolve_active_technology_vote_option(
+                            &content.0,
+                            &simulation.0,
+                            requested,
+                        )
+                        .ok_or_else(|| {
+                            format!("unknown technology vote option {}", requested.as_str())
+                        });
+                        technology.and_then(|technology| {
+                            let name = content.0.technology.nodes[&technology].display_name.clone();
+                            simulation
+                                .0
+                                .cast_technology_vote(&actor_id, technology)
+                                .map(|()| format!("voted for {name}"))
+                                .map_err(|error| error.to_string())
+                        })
+                    } else if simulation.0.ruler_vote.is_some() {
                         let option = resolve_ruler_vote_option(&simulation.0, requested)
                             .ok_or_else(|| {
                                 format!("unknown ruler candidate {}", requested.as_str())
@@ -40436,24 +40531,9 @@ fn process_injected_commands(
                                 .map_err(|error| error.to_string())
                         })
                     } else if simulation.0.active_vote.is_some() {
-                        let technology = resolve_active_technology_vote_option(
-                            &content.0,
-                            &simulation.0,
-                            requested,
-                        )
-                        .ok_or_else(|| {
-                            format!("unknown technology vote option {}", requested.as_str())
-                        });
-                        technology.and_then(|technology| {
-                            let name = content.0.technology.nodes[&technology].display_name.clone();
-                            simulation
-                                .0
-                                .cast_technology_vote(&actor_id, technology)
-                                .map(|()| format!("voted for {name}"))
-                                .map_err(|error| error.to_string())
-                        })
+                        Err("technology voting uses !vote 1, !vote 2, or !vote 3".to_owned())
                     } else {
-                        Err("there is no active technology vote".to_owned())
+                        Err("there is no active vote".to_owned())
                     }
                 }
                 ChatCommand::Recruit { role, amount } => {
@@ -54704,6 +54784,9 @@ mod tests {
             .min()
             .copied()
             .unwrap();
+        simulation
+            .start_ruler_vote(RulerVoteKind::NewRuler)
+            .expect("ruler ballot may overlap the scheduled technology ballot");
 
         let mut app = App::new();
         app.insert_resource(RuntimeContent(content.clone()))
@@ -54724,6 +54807,14 @@ mod tests {
             .active_vote
             .as_ref()
             .expect("the generated-world technology ballot starts after Unity's delay");
+        assert!(
+            app.world()
+                .resource::<SimulationRuntime>()
+                .0
+                .ruler_vote
+                .is_some(),
+            "starting the technology ballot must not dismiss the ruler ballot"
+        );
         assert_eq!(vote.options.len(), TECHNOLOGY_VOTE_OPTION_COUNT);
         assert_eq!(vote.technology, vote.options[0]);
         assert_eq!(depths[&vote.options[0]], deepest_available);
@@ -55718,6 +55809,17 @@ mod tests {
                 .abs()
                 < f64::EPSILON
         );
+        let tender = StableId::new("role:tender").unwrap();
+        assert_eq!(
+            regeneration_role_interval_seconds(&tender, 1),
+            Some(1_800.0)
+        );
+        assert_eq!(
+            regeneration_role_interval_seconds(&tender, 100),
+            Some(360.0)
+        );
+        assert_eq!(prospector_discovery_denominator(1), 4_000);
+        assert_eq!(prospector_discovery_denominator(100), 400);
 
         let (_, content, mut world, simulation, mut runtime, actor, hut) =
             regeneration_role_fixture("prospector", "prospector_hut");
@@ -59058,6 +59160,77 @@ mod tests {
                 .all(|position| (12..=14).contains(&position.x) && (21..=23).contains(&position.z))
         );
         assert_eq!(migrate_legacy_path_navigation_positions(&mut simulation), 0);
+    }
+
+    #[test]
+    fn legacy_path_centres_expand_into_straight_and_corner_connectors() {
+        let content = embedded_content();
+        let path_definition = &content.buildings[&StableId::new("building:path").unwrap()];
+        let mut simulation = WorldSimulation::new(10);
+        let mut add_path = |name: &str, coarse: GridPos, fine: GridPos| {
+            let id = StableId::new(format!("building:{name}")).unwrap();
+            simulation.buildings.insert(
+                id.clone(),
+                BuildingState {
+                    id: id.clone(),
+                    archetype: path_definition.archetype.clone(),
+                    position: coarse,
+                    rotation_quarter_turns: 0,
+                    level: 1,
+                    health: 100,
+                    complete: true,
+                },
+            );
+            simulation.path_navigation_positions.insert(id, fine);
+        };
+        add_path(
+            "path_corner",
+            GridPos { x: 3, z: 3 },
+            GridPos { x: 10, z: 10 },
+        );
+        add_path(
+            "path_right",
+            GridPos { x: 4, z: 3 },
+            GridPos { x: 13, z: 10 },
+        );
+        add_path("path_up", GridPos { x: 3, z: 4 }, GridPos { x: 10, z: 13 });
+        let path_id = StableId::new("building:path").unwrap();
+        let corner_id = StableId::new("building:path_corner").unwrap();
+        let corner = linear_navigation_cells(
+            &content,
+            &simulation,
+            &simulation.buildings[&corner_id],
+            &path_id,
+        );
+        assert_eq!(
+            corner,
+            vec![
+                GridPos { x: 10, z: 10 },
+                GridPos { x: 10, z: 11 },
+                GridPos { x: 11, z: 10 },
+            ]
+        );
+        let right_id = StableId::new("building:path_right").unwrap();
+        assert_eq!(
+            linear_navigation_cells(
+                &content,
+                &simulation,
+                &simulation.buildings[&right_id],
+                &path_id,
+            ),
+            vec![
+                GridPos { x: 12, z: 10 },
+                GridPos { x: 13, z: 10 },
+                GridPos { x: 14, z: 10 },
+            ]
+        );
+    }
+
+    #[test]
+    fn path_route_cost_matches_the_five_percent_per_level_speed_bonus() {
+        assert_eq!(path_route_step_cost(10, 0), 1_000);
+        assert_eq!(path_route_step_cost(10, 1), 953);
+        assert!(path_route_step_cost(10, 10) < path_route_step_cost(10, 1));
     }
 
     #[test]
