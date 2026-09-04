@@ -106,7 +106,8 @@ use stream_town_domain::{
     SavedActor, SavedTerrainMesh, Season, StableId, StationDef, StationUpdateMode, StorageModelDef,
     StreamUserType, TargetingScoreDef, TownEvent, VfxGradientDef, Weather, WorldGenerationStage,
     WorldSimulation, WorldSnapshot, foliage_visual_variant, foliage_visual_yaw_milliradians,
-    generate_world_with_content, generate_world_with_content_observed, resource_visual_variant,
+    generate_world_with_content, generate_world_with_content_observed, parse_chat_commands,
+    resource_visual_variant,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -156,8 +157,9 @@ const TRAVERSAL_WEAR_DECAY_INTERVAL_SECONDS: f32 = 1.0;
 const NAVIGATION_SUBDIVISIONS: u16 = 3;
 const NAVIGATION_TERRAIN_MIN_HEIGHT_CENTIMETRES: i16 = 45;
 const WORLD_DIAGNOSTIC_VIEW_SECONDS: f32 = 10.0;
-const WORLD_DIAGNOSTIC_OVERLAY_LIFT: f32 = 0.06;
+const WORLD_DIAGNOSTIC_OVERLAY_LIFT: f32 = 0.14;
 const WORLD_DIAGNOSTIC_TILE_SCALE: f32 = 0.94;
+const WORLD_DIAGNOSTIC_DEPTH_BIAS: f32 = 64.0;
 const TERRAIN_HIGH_DETAIL_RADIUS: f32 = 220.0;
 const TERRAIN_MEDIUM_DETAIL_RADIUS: f32 = 440.0;
 const TERRAIN_LOD_HYSTERESIS: f32 = 36.0;
@@ -1789,6 +1791,7 @@ struct BuildingMaterialUniform {
     surface_controls: Vec4,
     snow_damage: Vec4,
     main_scale_offset: Vec4,
+    tint_color_strength: Vec4,
 }
 
 #[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
@@ -4753,6 +4756,21 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
+                sync_guardhouse_defenders
+                    .after(process_injected_commands)
+                    .before(move_agents)
+                    .in_set(GameplaySimulationSet)
+                    .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
+                enforce_recruit_role_level_cap
+                    .after(move_agents)
+                    .in_set(GameplaySimulationSet)
+                    .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
                 follow_pet_closeup_camera
                     .after(move_agents)
                     .after(sync_active_pets)
@@ -7227,6 +7245,7 @@ fn building_material(
                     transform.offset[0],
                     transform.offset[1],
                 ),
+                tint_color_strength: Vec4::new(1.0, 1.0, 1.0, 0.0),
             },
             main_texture: texture,
         },
@@ -17953,7 +17972,7 @@ fn generate_and_spawn_world(
     let recruit_resource = StableId::new("resource:recruit").expect("static ID");
     simulation.town_resources.insert(
         recruit_resource,
-        u32::try_from(recruited_actor_ids(&simulation).len()).unwrap_or(u32::MAX),
+        u32::try_from(capacity_recruited_actor_ids(&simulation).len()).unwrap_or(u32::MAX),
     );
 
     spawn_hud(
@@ -18163,6 +18182,11 @@ fn generated_resource_world_position(
     );
     position.x += offset.x;
     position.z += offset.y;
+    // The visual offset can cross a sloped terrain triangle. Sampling before
+    // applying it left large trees and bushes hovering at their cell centre's
+    // elevation even though their visible X/Z position had moved elsewhere.
+    position.y = terrain_surface_height_at_world(world, config, position.x, position.z)
+        .unwrap_or(position.y);
     position
 }
 
@@ -20334,6 +20358,9 @@ fn enemy_route_buildings(
         .filter(|building| building.health > 0)
         .filter_map(|building| {
             let definition = building_def_for_archetype(content, &building.archetype)?;
+            if !building_blocks_navigation(definition) {
+                return None;
+            }
             let approaches = building_approaches(
                 world,
                 building.position,
@@ -20674,6 +20701,7 @@ fn next_agent_goal_with_station_runtime(
                 .buildings
                 .get(preferred)
                 .filter(|building| building.health > 0)
+                .filter(|building| enemy_can_attack_building(content, building))
                 .filter(|building| {
                     enemy_targets_kind(content, actor, "target:building")
                         || (!building.complete
@@ -20856,6 +20884,7 @@ fn next_agent_goal_with_station_runtime(
                     .buildings
                     .values()
                     .filter(|building| building.health > 0)
+                    .filter(|building| enemy_can_attack_building(content, building))
                     .filter(|building| {
                         within_enemy_target_search(
                             content,
@@ -20960,8 +20989,12 @@ fn next_agent_goal_with_station_runtime(
         }
     }
     let combat_target = if is_combat_role(&actor.role) {
-        let defender_anchor = (actor.role.as_str() == "role:defender")
-            .then(|| restored_town_hall_position(content, simulation, config));
+        let defender_anchor = (actor.role.as_str() == "role:defender").then(|| {
+            guardhouse_for_defender(simulation, &actor.id).map_or_else(
+                || restored_town_hall_position(content, simulation, config),
+                |building| building_visual_grid(content, building),
+            )
+        });
         simulation
             .actors
             .values()
@@ -22096,6 +22129,9 @@ fn complete_agent_goal_with_regeneration(
         AgentGoal::AttackBuilding(building_id) => {
             let attacker = simulation.actors.get(actor_id)?;
             let building = simulation.buildings.get(building_id)?;
+            if !enemy_can_attack_building(content, building) {
+                return None;
+            }
             if !attacker.alive
                 || building.health <= 0
                 || !within_enemy_building_attack_range(
@@ -26978,7 +27014,9 @@ fn sync_pooled_night_lights(
                 position: transform.translation() + Vec3::Y * cell_size * 0.9,
                 color,
                 intensity: 115_000.0 * level_multiplier,
-                range: cell_size * 5.0,
+                // Dense towns can overlap dozens of lights. Keep the authored
+                // local pool while bounding per-pixel clustered-light work.
+                range: cell_size * 4.0,
                 transition_delay_seconds: night_light_transition_delay(stable_id_hash(&agent.id)),
             };
             citizen_sources.push((
@@ -27015,7 +27053,7 @@ fn sync_pooled_night_lights(
             position: transform.translation() + Vec3::Y * cell_size * 1.5,
             color,
             intensity: 220_000.0,
-            range: cell_size * 8.0,
+            range: cell_size * 5.0,
             transition_delay_seconds: night_light_transition_delay(stable_id_hash(&building.id)),
         };
         building_sources.push((
@@ -27039,7 +27077,7 @@ fn sync_pooled_night_lights(
             position: transform.translation(),
             color,
             intensity: 90_000.0,
-            range: cell_size * 3.0,
+            range: cell_size * 2.5,
             transition_delay_seconds: night_light_transition_delay(
                 stable_id_hash(&projectile.target)
                     ^ match &projectile.source {
@@ -30914,6 +30952,15 @@ fn instantiate_building_materials(
                     building_max_health(&content.0, state)
                 });
             material.extension.parameters.snow_damage.z = building_damage_value(health, max_health);
+            if simulation
+                .0
+                .buildings
+                .get(&building)
+                .is_some_and(|state| state.archetype.as_str() == "archetype:building:guardhouse")
+            {
+                material.extension.parameters.tint_color_strength =
+                    Vec4::new(0.22, 0.62, 1.0, 0.72);
+            }
             let daylight = config
                 .0
                 .time
@@ -32241,6 +32288,10 @@ fn building_blocks_navigation(definition: &BuildingDef) -> bool {
     definition.archetype.as_str() != "archetype:building:path"
 }
 
+fn enemy_can_attack_building(content: &ContentCatalog, building: &BuildingState) -> bool {
+    building_def_for_archetype(content, &building.archetype).is_some_and(building_blocks_navigation)
+}
+
 fn wall_line_cells(start: GridPos, end: GridPos) -> Result<Vec<GridPos>, String> {
     if start.x != end.x && start.z != end.z {
         return Err("line endpoints must be orthogonal (same row or same column)".to_owned());
@@ -32268,9 +32319,10 @@ fn wall_line_cells(start: GridPos, end: GridPos) -> Result<Vec<GridPos>, String>
 
 fn placement_visual_cells(placement: &BuildingPlacement) -> Vec<GridPos> {
     if is_line_building(&placement.building)
-        && let (Some(start), Some(end)) = (placement.line_start, placement.line_end)
+        && let Some(start) = placement.line_start
     {
-        return wall_line_cells(start, end).unwrap_or_else(|_| vec![placement.position]);
+        return wall_line_cells(start, placement.position)
+            .unwrap_or_else(|_| vec![start, placement.position]);
     }
     vec![placement.position]
 }
@@ -34110,18 +34162,20 @@ fn handle_twitch_event(
                 });
                 return false;
             }
-            match message.message.parse::<ChatCommand>() {
-                Ok(command) => {
-                    injected.0.push_back(PendingChatCommand {
-                        actor_id: message.actor_id,
-                        login_name: message.login,
-                        display_name: message.display_name,
-                        command,
-                        is_broadcaster: message.is_broadcaster,
-                        is_moderator: message.is_moderator,
-                        is_subscriber: message.is_subscriber,
-                        origin: CommandOrigin::Twitch,
-                    });
+            match parse_chat_commands(&message.message) {
+                Ok(commands) => {
+                    for command in commands {
+                        injected.0.push_back(PendingChatCommand {
+                            actor_id: message.actor_id.clone(),
+                            login_name: message.login.clone(),
+                            display_name: message.display_name.clone(),
+                            command,
+                            is_broadcaster: message.is_broadcaster,
+                            is_moderator: message.is_moderator,
+                            is_subscriber: message.is_subscriber,
+                            origin: CommandOrigin::Twitch,
+                        });
+                    }
                     false
                 }
                 Err(parse_error) => {
@@ -34179,19 +34233,22 @@ fn process_runtime_console(
             is_broadcaster,
             is_moderator,
             is_subscriber,
-        } => match command.parse::<ChatCommand>() {
-            Ok(command) => {
-                injected.0.push_back(PendingChatCommand {
-                    actor_id,
-                    login_name,
-                    display_name,
-                    command,
-                    is_broadcaster,
-                    is_moderator,
-                    is_subscriber,
-                    origin: CommandOrigin::LocalDebug,
-                });
-                "Injected local debug command".to_owned()
+        } => match parse_chat_commands(&command) {
+            Ok(commands) => {
+                let count = commands.len();
+                for command in commands {
+                    injected.0.push_back(PendingChatCommand {
+                        actor_id: actor_id.clone(),
+                        login_name: login_name.clone(),
+                        display_name: display_name.clone(),
+                        command,
+                        is_broadcaster,
+                        is_moderator,
+                        is_subscriber,
+                        origin: CommandOrigin::LocalDebug,
+                    });
+                }
+                format!("Injected {count} local debug command(s)")
             }
             Err(error) => format!("Rejected invalid command: {error}"),
         },
@@ -36445,24 +36502,40 @@ fn floorplan_diagnostic_cells(
 }
 
 fn append_world_diagnostic_quad(
-    centre: Vec3,
-    size: f32,
+    corners: [Vec3; 4],
     positions: &mut Vec<[f32; 3]>,
     normals: &mut Vec<[f32; 3]>,
     uvs: &mut Vec<[f32; 2]>,
     indices: &mut Vec<u32>,
 ) {
-    let half = size * 0.5;
     let base = u32::try_from(positions.len()).expect("diagnostic overlay vertex count fits u32");
-    positions.extend_from_slice(&[
-        [centre.x - half, centre.y, centre.z - half],
-        [centre.x + half, centre.y, centre.z - half],
-        [centre.x + half, centre.y, centre.z + half],
-        [centre.x - half, centre.y, centre.z + half],
-    ]);
+    positions.extend(corners.map(|corner| corner.to_array()));
     normals.extend_from_slice(&[[0.0, 1.0, 0.0]; 4]);
     uvs.extend_from_slice(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
     indices.extend_from_slice(&[base, base + 3, base + 1, base + 1, base + 3, base + 2]);
+}
+
+fn diagnostic_surface_quad(
+    cell: GridPos,
+    size: f32,
+    config: &GameConfig,
+    world: &GeneratedWorld,
+    water_height: f32,
+) -> [Vec3; 4] {
+    let centre = grid_to_world_on_surface(cell, config, world);
+    let half = size * 0.5;
+    [
+        Vec2::new(centre.x - half, centre.z - half),
+        Vec2::new(centre.x + half, centre.z - half),
+        Vec2::new(centre.x + half, centre.z + half),
+        Vec2::new(centre.x - half, centre.z + half),
+    ]
+    .map(|point| {
+        let surface = terrain_surface_height_at_world(world, config, point.x, point.y)
+            .unwrap_or(centre.y)
+            .max(water_height);
+        Vec3::new(point.x, surface + WORLD_DIAGNOSTIC_OVERLAY_LIFT, point.y)
+    })
 }
 
 fn world_diagnostic_overlay_mesh(
@@ -36484,11 +36557,8 @@ fn world_diagnostic_overlay_mesh(
     let mut indices = Vec::with_capacity(estimated_cells.saturating_mul(6));
     let tile_size = config.world.cell_size * WORLD_DIAGNOSTIC_TILE_SCALE;
     for cell in floorplan_diagnostic_cells(content, simulation, world) {
-        let mut centre = grid_to_world_on_surface(cell, config, world);
-        centre.y = centre.y.max(water_height) + WORLD_DIAGNOSTIC_OVERLAY_LIFT;
         append_world_diagnostic_quad(
-            centre,
-            tile_size,
+            diagnostic_surface_quad(cell, tile_size, config, world, water_height),
             &mut positions,
             &mut normals,
             &mut uvs,
@@ -36677,7 +36747,7 @@ fn sync_world_diagnostic_view(
         let material = materials.add(StandardMaterial {
             base_color: Color::BLACK,
             unlit: true,
-            depth_bias: SELECTION_OUTLINE_DEPTH_BIAS,
+            depth_bias: WORLD_DIAGNOSTIC_DEPTH_BIAS,
             ..default()
         });
         runtime.black_material = Some(material.clone());
@@ -37847,19 +37917,51 @@ fn recruited_actor_ids(simulation: &WorldSimulation) -> Vec<StableId> {
     simulation
         .actors
         .keys()
-        .filter(|id| {
-            id.as_str().starts_with("npc:recruit_") || id.as_str().starts_with("npc:starting_")
-        })
+        .filter(|id| is_recruited_actor_id(id))
         .cloned()
         .collect()
 }
 
+fn capacity_recruited_actor_ids(simulation: &WorldSimulation) -> Vec<StableId> {
+    recruited_actor_ids(simulation)
+        .into_iter()
+        .filter(|id| !is_guardhouse_defender_id(id))
+        .collect()
+}
+
+fn is_guardhouse_defender_id(id: &StableId) -> bool {
+    id.as_str().starts_with("npc:guardhouse_")
+}
+
+fn guardhouse_defender_id(building: &StableId) -> StableId {
+    StableId::new(format!("npc:guardhouse_{}", building.as_str()))
+        .expect("runtime building IDs form valid guardhouse defender IDs")
+}
+
+fn guardhouse_for_defender<'a>(
+    simulation: &'a WorldSimulation,
+    actor: &StableId,
+) -> Option<&'a BuildingState> {
+    let building = actor.as_str().strip_prefix("npc:guardhouse_")?;
+    let building = StableId::new(building).ok()?;
+    simulation
+        .buildings
+        .get(&building)
+        .filter(|building| building.archetype.as_str() == "archetype:building:guardhouse")
+}
+
 fn is_recruited_actor_id(id: &StableId) -> bool {
-    id.as_str().starts_with("npc:recruit_") || id.as_str().starts_with("npc:starting_")
+    id.as_str().starts_with("npc:recruit_")
+        || id.as_str().starts_with("npc:starting_")
+        || id.as_str().starts_with("npc:guardhouse_")
+}
+
+fn is_level_capped_npc_id(id: &StableId) -> bool {
+    is_recruited_actor_id(id) || id.as_str().starts_with("actor:viewer_")
 }
 
 fn actor_role_level_cap(id: &StableId) -> u16 {
-    if is_recruited_actor_id(id) {
+    if is_level_capped_npc_id(id) {
         MAX_RECRUIT_ROLE_LEVEL
     } else {
         stream_town_domain::MAX_ROLE_LEVEL
@@ -37871,7 +37973,7 @@ fn normalize_recruit_role_progression(simulation: &mut WorldSimulation) -> usize
     for actor in simulation
         .actors
         .values_mut()
-        .filter(|actor| is_recruited_actor_id(&actor.id))
+        .filter(|actor| is_level_capped_npc_id(&actor.id))
     {
         for progress in actor.role_progression.values_mut() {
             if progress.level > MAX_RECRUIT_ROLE_LEVEL
@@ -37884,6 +37986,126 @@ fn normalize_recruit_role_progression(simulation: &mut WorldSimulation) -> usize
         }
     }
     adjusted
+}
+
+fn enforce_recruit_role_level_cap(mut simulation: ResMut<SimulationRuntime>) {
+    let adjusted = normalize_recruit_role_progression(&mut simulation.0);
+    if adjusted > 0 {
+        warn!(adjusted, "clamped recruit role progression to level 10");
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sync_guardhouse_defenders(
+    mut commands: Commands,
+    config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    world: Res<WorldRuntime>,
+    render: Res<RenderAssets>,
+    mut simulation: ResMut<SimulationRuntime>,
+    agents: Query<(Entity, &Agent)>,
+) {
+    let guardhouses = simulation
+        .0
+        .buildings
+        .values()
+        .filter(|building| {
+            building.complete
+                && building.health > 0
+                && building.archetype.as_str() == "archetype:building:guardhouse"
+        })
+        .map(|building| (building.id.clone(), building.position))
+        .collect::<Vec<_>>();
+    let live_ids = guardhouses
+        .iter()
+        .map(|(building, _)| guardhouse_defender_id(building))
+        .collect::<BTreeSet<_>>();
+    let orphaned = simulation
+        .0
+        .actors
+        .keys()
+        .filter(|id| is_guardhouse_defender_id(id) && !live_ids.contains(*id))
+        .cloned()
+        .collect::<Vec<_>>();
+    for actor in orphaned {
+        simulation.0.actors.remove(&actor);
+        if let Some((entity, _)) = agents.iter().find(|(_, agent)| agent.id == actor) {
+            commands.entity(entity).try_despawn();
+        }
+    }
+
+    let defender = StableId::new("role:defender").expect("static defender role ID");
+    let actor_archetype =
+        archetype_id_by_source(&content.0, ArchetypeKind::Player, "Player_Character.prefab")
+            .unwrap_or_else(|| {
+                StableId::new("archetype:viewer").expect("static viewer archetype ID")
+            });
+    let base_scale = Vec3::new(
+        config.0.world.cell_size * 0.3,
+        config.0.world.cell_size * 0.55,
+        config.0.world.cell_size * 0.3,
+    );
+    for (guardhouse, origin) in guardhouses {
+        let actor_id = guardhouse_defender_id(&guardhouse);
+        if !simulation.0.actors.contains_key(&actor_id) {
+            let position = nearest_walkable(&world.generated, origin).unwrap_or(origin);
+            if !simulation.0.join_player(actor_id.clone(), position) {
+                continue;
+            }
+        }
+        if simulation
+            .0
+            .actors
+            .get(&actor_id)
+            .is_some_and(|actor| actor.role != defender)
+        {
+            let _ = simulation.0.assign_role(&actor_id, defender.clone());
+        }
+        let Some(actor) = simulation.0.actors.get_mut(&actor_id) else {
+            continue;
+        };
+        actor.station = Some(guardhouse.clone());
+        actor.archetype = Some(actor_archetype.clone());
+        actor.display_name = Some("Guardhouse Defender".to_owned());
+        actor.login_name = None;
+        if agents.iter().any(|(_, agent)| agent.id == actor_id) {
+            continue;
+        }
+        let position = actor.position;
+        let target = deterministic_wander_target(&world.generated, &actor_id, position);
+        let world_position = grid_to_world_on_surface(position, &config.0, &world.generated);
+        commands.spawn((
+            WorldEntity,
+            GridLocation(position),
+            Agent {
+                id: actor_id,
+                kind: ActorKind::Player,
+                archetype: actor_archetype.clone(),
+                goal: AgentGoal::Wander,
+                spawn: position,
+                origin: position,
+                navigation_position: placement_to_navigation_centre(position),
+                path: Vec::new(),
+                path_index: 0,
+                target,
+                action_cooldown_seconds: 0.0,
+                action_started: false,
+                repath_remaining_seconds: 0.0,
+                health_regen_accumulator: 0.0,
+                wander_sequence: 0,
+                previous_wander_origin: None,
+            },
+            AgentLocomotion::default(),
+            AgentAnimation {
+                base_scale,
+                ..default()
+            },
+            Mesh3d(render.actor_lod.clone()),
+            MeshMaterial3d(actor_material(&render, &ActorKind::Player, false)),
+            Transform::from_translation(world_position + Vec3::Y * base_scale.y * 0.5)
+                .with_scale(base_scale),
+        ));
+    }
 }
 
 fn spawn_numbered_world_labels(commands: &mut Commands, targets: &[StableId]) {
@@ -37964,7 +38186,11 @@ fn role_is_available(
         let used = simulation
             .actors
             .values()
-            .filter(|actor| actor.role == *role && excluding != Some(&actor.id))
+            .filter(|actor| {
+                actor.role == *role
+                    && excluding != Some(&actor.id)
+                    && !is_guardhouse_defender_id(&actor.id)
+            })
             .count();
         used < usize::try_from(capacity).unwrap_or(usize::MAX)
     })
@@ -38375,7 +38601,7 @@ fn recruit_npcs(
     let current_in_role = simulation
         .actors
         .values()
-        .filter(|actor| actor.role == *role)
+        .filter(|actor| actor.role == *role && !is_guardhouse_defender_id(&actor.id))
         .count();
     let available_role_slots = role_capacity(content, simulation, role).map_or(usize::MAX, |max| {
         usize::try_from(max)
@@ -39259,7 +39485,7 @@ fn process_injected_commands(
                     placement.line_end = None;
                     placement.inactivity_seconds = 0.0;
                     Ok(format!(
-                        "{line_name} start set at {},{}; move to the other endpoint and use !endplace",
+                        "{line_name} start set at {},{}; move to the other endpoint and use !confirm",
                         placement.position.x, placement.position.z,
                     ))
                 }
@@ -39283,7 +39509,7 @@ fn process_injected_commands(
                     placement.line_end = Some(placement.position);
                     placement.inactivity_seconds = 0.0;
                     Ok(format!(
-                        "{line_name} endpoint set at {},{} ({} sections); review the ghost then use !confirm",
+                        "{line_name} endpoint set at {},{} ({} sections); !endplace is optional, review the ghost then use !confirm",
                         placement.position.x,
                         placement.position.z,
                         cells.len()
@@ -39303,14 +39529,10 @@ fn process_injected_commands(
                         return Err(format!("{} can no longer be placed", building.display_name));
                     }
                     let cells = if is_line_building(&placement.building) {
-                        let line_name = building.display_name.to_ascii_lowercase();
-                        let start = placement.line_start.ok_or_else(|| {
-                            format!("{line_name} placement requires !beginplace before !confirm")
-                        })?;
-                        let end = placement.line_end.ok_or_else(|| {
-                            format!("{line_name} placement requires !endplace before !confirm")
-                        })?;
-                        wall_line_cells(start, end)?
+                        placement.line_start.map_or_else(
+                            || Ok(vec![placement.position]),
+                            |start| wall_line_cells(start, placement.position),
+                        )?
                     } else {
                         vec![placement.position]
                     };
@@ -39403,7 +39625,11 @@ fn process_injected_commands(
                     Ok(if cells.len() == 1 {
                         format!("placed {} construction", building.display_name)
                     } else {
-                        format!("placed {} wall sections for construction", cells.len())
+                        format!(
+                            "placed {} {} sections for construction",
+                            cells.len(),
+                            building.display_name
+                        )
                     })
                 }
                 ChatCommand::CancelBuilding => queues
@@ -39715,6 +39941,9 @@ fn process_injected_commands(
                     require_ruler_or_staff(&simulation.0, &pending)?;
                     let id = recruit_id(&simulation.0, *recruit)
                         .ok_or_else(|| format!("unknown recruit ID {recruit}"))?;
+                    if is_guardhouse_defender_id(&id) {
+                        return Err("guardhouse defenders are permanently assigned".to_owned());
+                    }
                     let role = prefixed_id(role, "role:")
                         .filter(|role| content.0.roles.contains_key(role))
                         .ok_or_else(|| format!("unknown role {role}"))?;
@@ -39737,6 +39966,11 @@ fn process_injected_commands(
                     require_ruler_or_staff(&simulation.0, &pending)?;
                     let id = recruit_id(&simulation.0, *index)
                         .ok_or_else(|| format!("unknown recruit ID {index}"))?;
+                    if is_guardhouse_defender_id(&id) {
+                        return Err(
+                            "guardhouse defenders leave only with their guardhouse".to_owned()
+                        );
+                    }
                     simulation.0.actors.remove(&id);
                     let resource = StableId::new("resource:recruit").expect("static ID");
                     let current = simulation
@@ -41919,8 +42153,9 @@ fn sync_actor_name_overlays(
 }
 
 fn actor_health_bar_hide_seconds(content: &ContentCatalog, actor: &ActorState) -> Option<f32> {
-    actor_archetype(content, actor)?
-        .health_bar_hide_milliseconds
+    actor_archetype(content, actor)
+        .and_then(|archetype| archetype.health_bar_hide_milliseconds)
+        .or_else(|| (actor.role.as_str() == "role:enemy").then_some(3_000))
         .map(|milliseconds| Duration::from_millis(u64::from(milliseconds)).as_secs_f32())
 }
 
@@ -44072,6 +44307,18 @@ mod tests {
             offsets.len() > 480,
             "resource offsets must visibly distribute instead of returning to cell centres"
         );
+        for resource in world
+            .resources
+            .iter()
+            .filter(|resource| resource.target_kind.as_str() != "target:fish")
+            .take(512)
+        {
+            let position = generated_resource_world_position(resource, &config, &world);
+            let rendered_surface =
+                terrain_surface_height_at_world(&world, &config, position.x, position.z)
+                    .expect("generated resource jitter remains on the terrain mesh");
+            assert!((position.y - rendered_surface).abs() < 0.000_1);
+        }
 
         let foliage_offsets = world
             .foliage
@@ -49576,6 +49823,7 @@ mod tests {
             .unwrap();
         let town_hall_definition = &content.buildings[&StableId::new("building:townhall").unwrap()];
         let wall_definition = &content.buildings[&StableId::new("building:wall").unwrap()];
+        let path_definition = &content.buildings[&StableId::new("building:path").unwrap()];
         let town_hall = StableId::new("building:townhall").unwrap();
         let wall = StableId::new("building:wall_barrier").unwrap();
         let mut simulation = WorldSimulation::new(world.seed);
@@ -49603,6 +49851,23 @@ mod tests {
                 complete: true,
             },
         );
+        let path = StableId::new("building:path_decoy").unwrap();
+        simulation.buildings.insert(
+            path.clone(),
+            BuildingState {
+                id: path.clone(),
+                archetype: path_definition.archetype.clone(),
+                position: GridPos { x: 5, z: 4 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: 1_000,
+                complete: true,
+            },
+        );
+        assert!(!enemy_can_attack_building(
+            &content,
+            &simulation.buildings[&path]
+        ));
         let enemy = StableId::new("actor:sealed_town_attacker").unwrap();
         let goblin =
             archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_Goblin.prefab").unwrap();
@@ -50637,12 +50902,16 @@ mod tests {
     #[test]
     fn saved_recruits_are_normalized_to_level_ten_without_capping_players() {
         let recruit = StableId::new("npc:recruit_level_cap").unwrap();
+        let initial_viewer = StableId::new("actor:viewer_0005").unwrap();
+        let guard = StableId::new("npc:guardhouse_building:runtime_test").unwrap();
         let player = StableId::new("twitch:player_level_cap").unwrap();
         let role = StableId::new("role:defender").unwrap();
         let mut simulation = WorldSimulation::new(1);
         assert!(simulation.join_player(recruit.clone(), GridPos { x: 1, z: 1 }));
+        assert!(simulation.join_player(initial_viewer.clone(), GridPos { x: 1, z: 2 }));
+        assert!(simulation.join_player(guard.clone(), GridPos { x: 1, z: 3 }));
         assert!(simulation.join_player(player.clone(), GridPos { x: 2, z: 1 }));
-        for actor in [&recruit, &player] {
+        for actor in [&recruit, &initial_viewer, &guard, &player] {
             simulation
                 .actors
                 .get_mut(actor)
@@ -50657,7 +50926,7 @@ mod tests {
                 );
         }
 
-        assert_eq!(normalize_recruit_role_progression(&mut simulation), 1);
+        assert_eq!(normalize_recruit_role_progression(&mut simulation), 3);
         assert_eq!(
             simulation.actors[&recruit].role_progression[&role].level,
             10
@@ -50666,6 +50935,13 @@ mod tests {
             simulation.actors[&recruit].role_progression[&role].experience,
             0
         );
+        for actor in [&initial_viewer, &guard] {
+            assert_eq!(simulation.actors[actor].role_progression[&role].level, 10);
+            assert_eq!(
+                simulation.actors[actor].role_progression[&role].experience,
+                0
+            );
+        }
         assert_eq!(simulation.actors[&player].role_progression[&role].level, 42);
         assert_eq!(
             simulation.actors[&player].role_progression[&role].experience,
@@ -54533,7 +54809,7 @@ mod tests {
     #[test]
     fn embedded_unity_content_catalog_is_valid() {
         let content = embedded_content();
-        assert_eq!(content.archetypes.len(), 219);
+        assert_eq!(content.archetypes.len(), 220);
         assert_eq!(content.foliage.len(), 4);
         assert_eq!(
             content
@@ -54543,10 +54819,30 @@ mod tests {
                 .sum::<usize>(),
             21
         );
-        assert_eq!(content.buildings.len(), 30);
+        assert_eq!(content.buildings.len(), 31);
         assert_eq!(content.roles.len(), 18);
-        assert_eq!(content.technology.nodes.len(), 370);
+        assert_eq!(content.technology.nodes.len(), 371);
         assert_eq!(content.technology.groups.len(), 22);
+        let guardhouse_id = StableId::new("building:guardhouse").unwrap();
+        let guardhouse = &content.buildings[&guardhouse_id];
+        let tower = &content.buildings[&StableId::new("building:tower").unwrap()];
+        assert_eq!(guardhouse.footprint, tower.footprint);
+        assert_eq!(guardhouse.navigation_footprint_thirds, Some([3, 3]));
+        assert!(guardhouse.projectile_shooter.is_none());
+        for resource in ["food", "gold", "ore", "wood"] {
+            let resource = StableId::new(format!("resource:{resource}")).unwrap();
+            assert_eq!(guardhouse.cost[&resource], tower.cost[&resource] * 3);
+        }
+        let guardhouse_tech =
+            &content.technology.nodes[&StableId::new("tech:native_guardhouse").unwrap()];
+        assert_eq!(guardhouse_tech.age, "Age 1");
+        assert!(!guardhouse_tech.initially_unlocked);
+        assert!(guardhouse_tech.unlocked_buildings.contains(&guardhouse_id));
+        assert_eq!(
+            content.objectives[&StableId::new("objective:native_guardhouse:0").unwrap()]
+                .required_amount,
+            30_000
+        );
         let path = &content.buildings[&StableId::new("building:path").unwrap()];
         assert_eq!(path.display_name, "Path");
         assert_eq!(path.footprint, [1, 1]);
@@ -57918,6 +58214,67 @@ mod tests {
         let wood = StableId::new("resource:wood").unwrap();
         let cost = BTreeMap::from([(wood.clone(), 7)]);
         assert_eq!(scaled_building_cost(&cost, horizontal.len())[&wood], 35);
+
+        let mut placement = BuildingPlacement {
+            building: StableId::new("building:wall").unwrap(),
+            position: GridPos { x: 10, z: 10 },
+            rotation_quarter_turns: 0,
+            line_start: None,
+            line_end: None,
+            inactivity_seconds: 0.0,
+        };
+        assert_eq!(placement_visual_cells(&placement), vec![placement.position]);
+        placement.line_start = Some(placement.position);
+        placement.position = GridPos { x: 10, z: 14 };
+        assert_eq!(placement_visual_cells(&placement).len(), 5);
+    }
+
+    #[test]
+    fn enemies_receive_health_bars_without_a_player_only_authored_timeout() {
+        let content = embedded_content();
+        let enemy_archetype =
+            archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_Goblin.prefab")
+                .expect("shipping Goblin archetype");
+        let enemy = StableId::new("actor:enemy_health_bar").unwrap();
+        let mut simulation = WorldSimulation::new(1);
+        assert!(simulation.spawn_enemy(
+            enemy.clone(),
+            enemy_archetype,
+            GridPos { x: 1, z: 1 },
+            100,
+        ));
+        assert_eq!(
+            actor_health_bar_hide_seconds(&content, &simulation.actors[&enemy]),
+            Some(3.0)
+        );
+    }
+
+    #[test]
+    fn guardhouse_defenders_round_trip_to_their_station_without_using_recruit_capacity() {
+        let content = embedded_content();
+        let guardhouse = &content.buildings[&StableId::new("building:guardhouse").unwrap()];
+        let building_id = StableId::new("building:runtime_guardhouse_test").unwrap();
+        let mut simulation = WorldSimulation::new(1);
+        simulation.buildings.insert(
+            building_id.clone(),
+            BuildingState {
+                id: building_id.clone(),
+                archetype: guardhouse.archetype.clone(),
+                position: GridPos { x: 4, z: 5 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: 150,
+                complete: true,
+            },
+        );
+        let defender = guardhouse_defender_id(&building_id);
+        assert!(simulation.join_player(defender.clone(), GridPos { x: 3, z: 5 }));
+        assert_eq!(
+            guardhouse_for_defender(&simulation, &defender).unwrap().id,
+            building_id
+        );
+        assert_eq!(recruited_actor_ids(&simulation), vec![defender]);
+        assert!(capacity_recruited_actor_ids(&simulation).is_empty());
     }
 
     #[test]

@@ -22,7 +22,8 @@ pub use animation::{
 };
 pub use command::{
     BuildingAction, BuildingDirection, CameraAction, CameraDirection, ChatCommand,
-    CommandParseError, CustomizationKind, UNITY_CREATE_COMMAND_ALIASES, unity_command_usage,
+    CommandParseError, CustomizationKind, UNITY_CREATE_COMMAND_ALIASES, parse_chat_commands,
+    unity_command_usage,
 };
 pub use config::{
     AdaptiveMusicConfig, BroadcastConfig, BroadcastEncoderPreference, BroadcastRenderMode,

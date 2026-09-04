@@ -3,6 +3,9 @@
 Commands are case-insensitive and begin with `!`. Building type names are always written as one
 no-space PascalCase word, such as `TownHall`, `OreStorage`, `ProspectorHut`, and `FishingHut`.
 Run `!buildings` in chat for the building names unlocked in the current town.
+Several commands can be chained in one message and execute from left to right, for example
+`!cam right 3 !cam up 2` or `!build Wall !left 2 !beginplace !up 3 !confirm`. If any segment is
+not valid command syntax, the whole message is rejected before anything executes.
 
 ## Getting started
 
@@ -82,16 +85,18 @@ Square-footprint buildings can also be rotated after construction through their 
 
 ### Placing wall and path lines
 
-Walls and constructed paths deliberately cannot be confirmed immediately after `!build Wall` or
-`!build Path`.
+Immediately using `!confirm` after `!build Wall` or `!build Path` places one section. To place a
+line instead:
 
 1. Move the placement cursor to the first cell and use `!beginplace`.
-2. Move only horizontally or vertically to the other endpoint and use `!endplace`.
-3. Review the complete red/green line preview.
-4. Use `!confirm` to pay for and place every section, or `!cancel` to discard it.
+2. Move only horizontally or vertically toward the other endpoint. The complete red/green line
+   ghost updates after every movement command.
+3. Use `!confirm` to set the current cursor as the endpoint, pay for, and place every section; use
+   `!cancel` to discard it.
 
-Calling `!beginplace` or `!endplace` again replaces that endpoint. A diagonal endpoint is rejected,
-and a line that exceeds available resources is not constructed. Paths cost 150 Wood and 130 Ore
+Calling `!beginplace` again replaces the start. `!endplace` remains a compatibility alias for
+freezing the current endpoint but is not required. A diagonal endpoint is rejected, and a line that
+exceeds available resources is not constructed. Paths cost 150 Wood and 130 Ore
 per cell at level 1, conform to the terrain, remain walkable, and do not consume building capacity.
 Each completed Path level gives citizens on that cell 5% additional movement speed. Path
 technologies form their own branch beginning in Age 1.
@@ -169,6 +174,11 @@ that view. Both modes are visual only: they do not modify navigation, placement,
 The Nursery, ProspectorHut, and Greenhouse technologies begin locked but have no prerequisite
 technology, so each can appear in a technology vote immediately. Their post-vote objectives use a
 different resource from the one the unlocked worker restores.
+
+Guardhouse research becomes available from the Age 1 Tower branch and requires collecting 30,000
+Gold. A Guardhouse costs three times a Tower, uses the Tower footprint and blue-tinted model, and
+provides one permanent free Defender that does not consume recruit or Defender capacity. That guard
+prioritizes enemies nearest its own Guardhouse; unlike a Tower, the Guardhouse fires no projectiles.
 
 Each three-choice technology ballot contains one deepest eligible specialization, one shallowest
 eligible fundamental, and one random remaining technology. Equal-depth choices are tie-broken

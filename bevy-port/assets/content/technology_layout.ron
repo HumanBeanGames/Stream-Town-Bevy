@@ -1267,6 +1267,12 @@
                 y: 7559.0,
             ),
         ),
+        "tech:native_guardhouse": (
+            position: (
+                x: -2200.0,
+                y: 7700.0,
+            ),
+        ),
         "tech:8842caebaac17a041823e0a0a82091e6": (
             position: (
                 x: -614.0,

@@ -11,6 +11,7 @@ struct BuildingMaterialUniform {
     surface_controls: vec4<f32>,
     snow_damage: vec4<f32>,
     main_scale_offset: vec4<f32>,
+    tint_color_strength: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -69,6 +70,14 @@ fn fragment(
         vertex_color.r,
     );
     var authored_color = vec4<f32>(base_color.rgb * occlusion, base_color.a);
+    authored_color = vec4<f32>(
+        mix(
+            authored_color.rgb,
+            authored_color.rgb * building_material.tint_color_strength.rgb,
+            building_material.tint_color_strength.a,
+        ),
+        authored_color.a,
+    );
 
     let upward = clamp(building_material.snow_damage.x * max(in.world_normal.y, 0.0), 0.0, 1.0);
     let snow_exclusion = clamp(vertex_color.r * building_material.snow_damage.y, 0.0, 1.0);

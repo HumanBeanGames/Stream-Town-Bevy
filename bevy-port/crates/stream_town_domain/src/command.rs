@@ -318,6 +318,30 @@ pub enum CommandParseError {
     InvalidColor(String),
 }
 
+/// Parses every `!command` segment in one chat message, preserving its order.
+///
+/// Twitch messages are tokenized at command prefixes rather than punctuation so
+/// ordinary arguments such as colour hex codes remain part of their command.
+pub fn parse_chat_commands(input: &str) -> Result<Vec<ChatCommand>, CommandParseError> {
+    let mut segments = Vec::<Vec<&str>>::new();
+    for token in input.split_whitespace() {
+        if token.starts_with('!') {
+            segments.push(vec![token]);
+        } else if let Some(segment) = segments.last_mut() {
+            segment.push(token);
+        } else {
+            return Err(CommandParseError::MissingPrefix);
+        }
+    }
+    if segments.is_empty() {
+        return Err(CommandParseError::MissingPrefix);
+    }
+    segments
+        .into_iter()
+        .map(|segment| segment.join(" ").parse::<ChatCommand>())
+        .collect()
+}
+
 impl FromStr for ChatCommand {
     type Err = CommandParseError;
 
@@ -1241,6 +1265,44 @@ mod tests {
             "build house".parse::<ChatCommand>(),
             Err(CommandParseError::MissingPrefix)
         ));
+    }
+
+    #[test]
+    fn parses_chained_commands_in_order() {
+        assert_eq!(
+            parse_chat_commands("!cam right 3 !cam up 2"),
+            Ok(vec![
+                ChatCommand::Camera(vec![CameraAction {
+                    direction: CameraDirection::Right,
+                    amount: 3,
+                }]),
+                ChatCommand::Camera(vec![CameraAction {
+                    direction: CameraDirection::Up,
+                    amount: 2,
+                }]),
+            ])
+        );
+        assert_eq!(
+            parse_chat_commands("!build wall !left 2 !beginplace !up 3 !confirm")
+                .map(|commands| commands.len()),
+            Ok(5)
+        );
+        assert_eq!(
+            parse_chat_commands("!light #00AAFF !namecolor blue").map(|commands| commands.len()),
+            Ok(2)
+        );
+    }
+
+    #[test]
+    fn chained_commands_are_rejected_atomically_when_one_is_invalid() {
+        assert!(matches!(
+            parse_chat_commands("!cam right 3 !definitely-invalid"),
+            Err(CommandParseError::Unknown(_))
+        ));
+        assert_eq!(
+            parse_chat_commands("hello !cam right"),
+            Err(CommandParseError::MissingPrefix)
+        );
     }
 
     #[test]
