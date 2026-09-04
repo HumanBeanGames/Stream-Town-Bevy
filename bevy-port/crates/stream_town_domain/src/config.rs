@@ -76,7 +76,7 @@ impl Default for TerrainAppearanceConfig {
             },
             traversal_fade_start_per_minute: 5.0,
             traversal_full_tint_per_minute: 50.0,
-            traversal_half_life_seconds: 7.5 * 60.0,
+            traversal_half_life_seconds: 120.0 * 60.0,
             traversal_decay_pause_seconds: 5.0,
             traversal_prune_score: 0.01,
         }
@@ -654,7 +654,7 @@ mod tests {
     fn default_configuration_is_valid_and_round_trips_ron() {
         let config = GameConfig::default();
         config.validate().unwrap();
-        assert!((config.terrain.traversal_half_life_seconds - 450.0).abs() < f32::EPSILON);
+        assert!((config.terrain.traversal_half_life_seconds - 7_200.0).abs() < f32::EPSILON);
         let encoded = ron::to_string(&config).unwrap();
         assert_eq!(ron::from_str::<GameConfig>(&encoded).unwrap(), config);
     }
