@@ -59,6 +59,13 @@ enum Command {
         #[arg(long)]
         save: std::path::PathBuf,
     },
+    /// One-time removal of overproduced role-placed ore deposits and berry bushes.
+    PrunePlacedResources {
+        #[arg(long)]
+        save: std::path::PathBuf,
+        #[arg(long, default_value_t = 80)]
+        percent: u8,
+    },
     /// Rebuild a town from its seed while retaining technology and Twitch citizens.
     ResetTownForFineNavigation {
         #[arg(long)]
@@ -132,6 +139,7 @@ fn main() -> Result<()> {
             update_baseline,
         } => visual_acceptance(&capture_dir, &scenario, update_baseline),
         Command::PurgeSaveEnemies { save } => purge_save_enemies(&save),
+        Command::PrunePlacedResources { save, percent } => prune_placed_resources(&save, percent),
         Command::ResetTownForFineNavigation {
             save,
             resources,
@@ -523,6 +531,155 @@ fn purge_save_enemies(path: &Path) -> Result<()> {
         archived_backups,
     );
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum PlacedResourceKind {
+    Ore,
+    BerryBush,
+}
+
+impl PlacedResourceKind {
+    const ALL: [Self; 2] = [Self::Ore, Self::BerryBush];
+
+    const fn id_prefix(self) -> &'static str {
+        match self {
+            Self::Ore => "resource:regrown_ore_",
+            Self::BerryBush => "resource:regrown_bush_",
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Ore => "ore deposits",
+            Self::BerryBush => "berry bushes",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PlacedResourcePruneCount {
+    before: usize,
+    removed: usize,
+}
+
+fn prune_placed_resources(path: &Path, percent: u8) -> Result<()> {
+    if !path.is_file() {
+        bail!("save does not exist: {}", path.display());
+    }
+    if percent > 100 {
+        bail!("placed-resource prune percentage must be between 0 and 100");
+    }
+    let recovery =
+        std::path::PathBuf::from(format!("{}.pre-placed-resource-prune", path.display()));
+    if recovery.exists() {
+        bail!(
+            "placed-resource cleanup has already been applied to {}; recovery copy exists at {}",
+            path.display(),
+            recovery.display()
+        );
+    }
+
+    let store = NativeSaveStore::new(path);
+    let mut snapshot = store
+        .load()
+        .with_context(|| format!("failed to validate save {}", path.display()))?;
+    let (removed_ids, counts) =
+        placed_resource_prune_selection(&snapshot.resource_nodes, snapshot.world_seed, percent);
+    if removed_ids.is_empty() {
+        println!(
+            "No active role-placed ore deposits or berry bushes require pruning in {}",
+            path.display()
+        );
+        return Ok(());
+    }
+
+    fs::copy(path, &recovery).with_context(|| {
+        format!(
+            "failed to create pre-cleanup recovery copy {}",
+            recovery.display()
+        )
+    })?;
+    snapshot
+        .resource_nodes
+        .retain(|id, _| !removed_ids.contains(id));
+    store
+        .write(&snapshot)
+        .with_context(|| format!("failed to write cleaned save {}", path.display()))?;
+    let verified = store
+        .load()
+        .with_context(|| format!("cleaned save did not reload: {}", path.display()))?;
+    if removed_ids
+        .iter()
+        .any(|id| verified.resource_nodes.contains_key(id))
+    {
+        bail!("cleaned save still contains a selected placed resource");
+    }
+
+    let summary = PlacedResourceKind::ALL
+        .into_iter()
+        .map(|kind| {
+            let count = counts.get(&kind).copied().unwrap_or_default();
+            format!(
+                "{} {} -> {} (removed {})",
+                kind.label(),
+                count.before,
+                count.before.saturating_sub(count.removed),
+                count.removed
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    println!(
+        "Pruned {percent}% of active role-placed resources from {}: {summary}; recovery copy: {}",
+        path.display(),
+        recovery.display()
+    );
+    Ok(())
+}
+
+fn placed_resource_prune_selection(
+    resource_nodes: &BTreeMap<StableId, u32>,
+    world_seed: u64,
+    percent: u8,
+) -> (
+    BTreeSet<StableId>,
+    BTreeMap<PlacedResourceKind, PlacedResourcePruneCount>,
+) {
+    let mut removed = BTreeSet::new();
+    let mut counts = BTreeMap::new();
+    for kind in PlacedResourceKind::ALL {
+        let mut candidates = resource_nodes
+            .iter()
+            .filter(|(id, amount)| **amount > 0 && id.as_str().starts_with(kind.id_prefix()))
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|id| (placed_resource_prune_rank(world_seed, id), id.clone()));
+        let remove_count = candidates.len().saturating_mul(usize::from(percent)) / 100;
+        removed.extend(candidates.into_iter().take(remove_count));
+        counts.insert(
+            kind,
+            PlacedResourcePruneCount {
+                before: resource_nodes
+                    .iter()
+                    .filter(|(id, amount)| {
+                        **amount > 0 && id.as_str().starts_with(kind.id_prefix())
+                    })
+                    .count(),
+                removed: remove_count,
+            },
+        );
+    }
+    (removed, counts)
+}
+
+fn placed_resource_prune_rank(world_seed: u64, id: &StableId) -> u64 {
+    let mut value = stable_string_hash(id.as_str()) ^ world_seed.rotate_left(19);
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
 }
 
 fn archive_purge_backup_history(store: &NativeSaveStore, recovery: &Path) -> Result<usize> {
@@ -1937,5 +2094,56 @@ mod tests {
             reset.simulation.town_resources[&StableId::new(format!("resource:{resource}")).unwrap()]
                 == 300_000
         }));
+    }
+
+    #[test]
+    fn placed_resource_prune_is_exact_deterministic_and_preserves_generated_nodes() {
+        let mut resources = BTreeMap::new();
+        for serial in 0..10 {
+            resources.insert(
+                StableId::new(format!(
+                    "resource:regrown_ore_123_{}_7_{serial:08x}",
+                    serial + 1
+                ))
+                .unwrap(),
+                100,
+            );
+            resources.insert(
+                StableId::new(format!(
+                    "resource:regrown_bush_123_{}_9_{serial:08x}",
+                    serial + 1
+                ))
+                .unwrap(),
+                100,
+            );
+        }
+        let generated = StableId::new("resource:generated_ore_123_1_1").unwrap();
+        let planted_tree = StableId::new("resource:regrown_tree_123_2_2_00000001").unwrap();
+        let depleted_ore = StableId::new("resource:regrown_ore_123_3_3_00000002").unwrap();
+        resources.insert(generated.clone(), 100);
+        resources.insert(planted_tree.clone(), 100);
+        resources.insert(depleted_ore.clone(), 0);
+
+        let (first, counts) = placed_resource_prune_selection(&resources, 123, 80);
+        let (second, _) = placed_resource_prune_selection(&resources, 123, 80);
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 16);
+        assert_eq!(
+            counts[&PlacedResourceKind::Ore],
+            PlacedResourcePruneCount {
+                before: 10,
+                removed: 8
+            }
+        );
+        assert_eq!(
+            counts[&PlacedResourceKind::BerryBush],
+            PlacedResourcePruneCount {
+                before: 10,
+                removed: 8
+            }
+        );
+        assert!(!first.contains(&generated));
+        assert!(!first.contains(&planted_tree));
+        assert!(!first.contains(&depleted_ore));
     }
 }

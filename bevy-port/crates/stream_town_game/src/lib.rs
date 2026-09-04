@@ -3457,6 +3457,9 @@ struct TechnologyVoteOptionRow(u8);
 #[derive(Component, Clone, Copy)]
 struct TechnologyVoteTitleBar;
 
+#[derive(Component, Clone, Copy)]
+struct TechnologyVoteDepthBadge(u8);
+
 #[derive(Component)]
 struct TechnologyVoteTimerTrack;
 
@@ -3498,7 +3501,17 @@ type TechnologyVoteRowQuery<'w, 's> = Query<
         &'static mut Visibility,
         &'static mut Node,
     ),
-    (Without<VotePanelKind>, Without<VoteFillKind>),
+    (
+        Without<VotePanelKind>,
+        Without<VoteFillKind>,
+        Without<TechnologyVoteDepthBadge>,
+    ),
+>;
+type TechnologyVoteDepthBadgeQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static TechnologyVoteDepthBadge, &'static mut Visibility),
+    (Without<VotePanelKind>, Without<TechnologyVoteOptionRow>),
 >;
 type TownCameraMutQuery<'w, 's> = Query<
     'w,
@@ -11123,7 +11136,6 @@ fn spawn_technology_vote_option_row(
                 left: px(32),
                 right: px(32),
                 height: px(92),
-                overflow: Overflow::clip(),
                 ..default()
             },
         ))
@@ -11197,29 +11209,38 @@ fn spawn_technology_vote_option_row(
                 },
             ));
             row.spawn((
-                VoteTextKind::TechnologyOptionDepthTag(index),
-                UiDisplayFont,
-                Text::new("Fundamental!"),
-                TextFont {
-                    font_size: FontSize::Px(9.0),
-                    ..default()
-                },
-                TextLayout::new(Justify::Right, LineBreak::NoWrap),
-                TextColor(Color::srgb(0.97, 0.78, 0.32)),
-                TextShadow {
-                    offset: Vec2::splat(1.0),
-                    color: Color::linear_rgba(0.0, 0.0, 0.0, 0.95),
-                },
+                TechnologyVoteDepthBadge(index),
+                Visibility::Hidden,
+                ZIndex(3),
                 Pickable::IGNORE,
+                BackgroundColor(Color::srgb(0.96, 0.76, 0.20)),
                 Node {
                     position_type: PositionType::Absolute,
-                    top: px(9),
-                    right: px(3),
-                    width: px(70),
+                    top: px(4),
+                    left: px(-78),
+                    width: px(80),
+                    height: px(20),
+                    border_radius: BorderRadius::all(px(10)),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
                     overflow: Overflow::clip(),
                     ..default()
                 },
-            ));
+            ))
+            .with_children(|badge| {
+                badge.spawn((
+                    VoteTextKind::TechnologyOptionDepthTag(index),
+                    UiDisplayFont,
+                    Text::new("Fundamental"),
+                    TextFont {
+                        font_size: FontSize::Px(9.0),
+                        ..default()
+                    },
+                    TextLayout::new(Justify::Center, LineBreak::NoWrap),
+                    TextColor(Color::srgb(0.06, 0.08, 0.16)),
+                    Pickable::IGNORE,
+                ));
+            });
             row.spawn((
                 VoteTextKind::TechnologyOptionRequirements(index),
                 Text::new("Requirements"),
@@ -33739,6 +33760,7 @@ fn update_vote_panels(
     mut fills: Query<(&VoteFillKind, &mut Node)>,
     mut technology_icons: TechnologyVoteIconQuery,
     mut technology_rows: TechnologyVoteRowQuery,
+    mut technology_depth_badges: TechnologyVoteDepthBadgeQuery,
     ruler_options: Query<(Entity, Option<&Children>), With<RulerOptionsContainer>>,
 ) {
     if !simulation.is_changed() {
@@ -33782,6 +33804,15 @@ fn update_vote_panels(
             if let Some(top) = row_tops.get(usize::from(row.0)) {
                 node.top = px(*top);
             }
+        }
+        for (badge, mut visibility) in &mut technology_depth_badges {
+            *visibility = if options.get(usize::from(badge.0)).is_some()
+                && !technology_vote_depth_tag(options.len(), badge.0).is_empty()
+            {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            };
         }
         for (kind, mut text) in &mut texts {
             text.0 = match kind {
@@ -33846,6 +33877,9 @@ fn update_vote_panels(
         // This avoids stale absolute-positioned slider fills surviving the
         // frame where a completed ballot is removed from the simulation.
         for (_, mut visibility, _) in &mut technology_rows {
+            *visibility = Visibility::Hidden;
+        }
+        for (_, mut visibility) in &mut technology_depth_badges {
             *visibility = Visibility::Hidden;
         }
         for (kind, mut node) in &mut fills {
@@ -36036,9 +36070,9 @@ fn technology_ballot_options(
 
 fn technology_vote_depth_tag(option_count: usize, index: u8) -> &'static str {
     match (option_count, index) {
-        (1, 0) => "Specialized! / Fundamental!",
-        (_, 0) => "Specialized!",
-        (_, 1) => "Fundamental!",
+        (1, 0) => "Both",
+        (_, 0) => "Specialized",
+        (_, 1) => "Fundamental",
         _ => "",
     }
 }
@@ -54841,9 +54875,35 @@ mod tests {
                 Some((*index, text.0.clone()))
             })
             .collect::<BTreeMap<_, _>>();
-        assert_eq!(vote_tags.get(&0).map(String::as_str), Some("Specialized!"));
-        assert_eq!(vote_tags.get(&1).map(String::as_str), Some("Fundamental!"));
+        assert_eq!(vote_tags.get(&0).map(String::as_str), Some("Specialized"));
+        assert_eq!(vote_tags.get(&1).map(String::as_str), Some("Fundamental"));
         assert_eq!(vote_tags.get(&2).map(String::as_str), Some(""));
+        let mut depth_badges = app.world_mut().query::<(
+            &TechnologyVoteDepthBadge,
+            &Visibility,
+            &Node,
+            &BackgroundColor,
+        )>();
+        let depth_badges = depth_badges.iter(app.world()).collect::<Vec<_>>();
+        assert_eq!(depth_badges.len(), TECHNOLOGY_VOTE_OPTION_COUNT);
+        for (badge, visibility, node, background) in depth_badges {
+            assert_eq!(node.left, px(-78));
+            assert_eq!(node.top, px(4));
+            assert_eq!(node.width, px(80));
+            assert_eq!(node.height, px(20));
+            assert_eq!(node.border_radius, BorderRadius::all(px(10)));
+            assert_eq!(node.align_items, AlignItems::Center);
+            assert_eq!(node.justify_content, JustifyContent::Center);
+            assert_eq!(background.0, Color::srgb(0.96, 0.76, 0.20));
+            assert_eq!(
+                *visibility,
+                if badge.0 < 2 {
+                    Visibility::Visible
+                } else {
+                    Visibility::Hidden
+                }
+            );
+        }
         let mut panels = app
             .world_mut()
             .query_filtered::<
