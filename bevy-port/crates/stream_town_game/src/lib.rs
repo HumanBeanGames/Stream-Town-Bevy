@@ -48,7 +48,10 @@ use bevy::{
         FocusCause, InputFocus, InputFocusVisible,
         tab_navigation::{TabGroup, TabIndex, TabNavigationPlugin},
     },
-    light::{DirectionalLightShadowMap, NotShadowCaster},
+    light::{
+        DirectionalLightShadowMap, NotShadowCaster,
+        cluster::{ClusterConfig, ClusterFarZMode, ClusterZConfig},
+    },
     math::Affine2,
     mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes},
     mesh::{Indices, VertexAttributeValues},
@@ -4088,6 +4091,9 @@ struct AgentAnimation {
 struct AgentEquipmentPresentation;
 
 #[derive(Component, Default)]
+struct EquipmentNodeProcessed;
+
+#[derive(Component, Default)]
 struct TransientCarryVisibility(bool);
 
 #[derive(Component)]
@@ -4097,19 +4103,16 @@ struct EquipmentNode {
 }
 
 #[derive(Component, Default)]
-struct AgentEnemyModelPresentation;
-
-#[derive(Component)]
-struct EnemyModelNode {
-    actor_root: Entity,
-    name: String,
-}
+struct EnemyModelNodeProcessed;
 
 #[derive(Component)]
 struct BuildingModelNode {
     building_root: Entity,
     name: String,
 }
+
+#[derive(Component, Default)]
+struct BuildingModelNodeProcessed;
 
 #[derive(Component)]
 struct AuthoredRotatingNode {
@@ -4118,6 +4121,9 @@ struct AuthoredRotatingNode {
     axis: Vec3,
     radians_per_second: f32,
 }
+
+#[derive(Component, Default)]
+struct AuthoredRotatingNodeProcessed;
 
 #[derive(Component)]
 struct MainMenuRotatingDefinitions(Vec<stream_town_domain::RotatingNodeDef>);
@@ -4142,6 +4148,9 @@ struct MainMenuRotatingNode {
     radians_per_second: f32,
 }
 
+#[derive(Component, Default)]
+struct MainMenuRotatingNodeProcessed;
+
 #[derive(Component)]
 struct TownSun;
 
@@ -4159,6 +4168,9 @@ struct CosmeticNode {
     kind: CosmeticNodeKind,
     index: u8,
 }
+
+#[derive(Component, Default)]
+struct CosmeticNodeProcessed;
 
 #[derive(Component)]
 struct CosmeticRenderer {
@@ -4693,7 +4705,6 @@ impl Plugin for StreamTownGamePlugin {
                         .after(animate_agents)
                         .after(drive_converted_animations),
                     tag_enemy_model_nodes,
-                    sync_enemy_model_nodes.after(tag_enemy_model_nodes),
                     tag_cosmetic_nodes,
                     sync_cosmetic_nodes.after(tag_cosmetic_nodes),
                     tag_cosmetic_renderers.after(apply_material_overrides),
@@ -5498,6 +5509,19 @@ fn setup_rendering(
         TownCamera,
         TownCameraControllerRuntime::new(initial_camera_transform),
         Camera3d::default(),
+        // The shipping camera is orthographic and all local lights occupy a
+        // shallow top-down depth band. Spending Bevy's default 24 slices on Z
+        // leaves very coarse screen tiles, causing each night light to be
+        // evaluated across far more fragments than it can affect.
+        ClusterConfig::FixedZ {
+            total: 4_096,
+            z_slices: 1,
+            z_config: ClusterZConfig {
+                first_slice_depth: 5.0,
+                far_z_mode: ClusterFarZMode::Constant(4_000.0),
+            },
+            dynamic_resizing: true,
+        },
         IsDefaultUiCamera,
         SpatialListener::new(0.2),
         initial_projection,
@@ -10560,10 +10584,14 @@ fn tag_main_menu_rotating_nodes(
     mut commands: Commands,
     parents: Query<&ChildOf>,
     definitions: Query<&MainMenuRotatingDefinitions>,
-    nodes: Query<(Entity, &Name), Without<MainMenuRotatingNode>>,
+    nodes: Query<(Entity, &Name), Without<MainMenuRotatingNodeProcessed>>,
 ) {
+    if nodes.is_empty() {
+        return;
+    }
     for (entity, name) in &nodes {
         let mut ancestor = entity;
+        let mut traversed_parent = false;
         for _ in 0..64 {
             if let Ok(definitions) = definitions.get(ancestor) {
                 if let Some(rotation) = definitions
@@ -10576,11 +10604,20 @@ fn tag_main_menu_rotating_nodes(
                         radians_per_second: rotation.degrees_per_second.to_radians(),
                     });
                 }
+                commands
+                    .entity(entity)
+                    .insert(MainMenuRotatingNodeProcessed);
                 break;
             }
             let Ok(parent) = parents.get(ancestor) else {
+                if traversed_parent {
+                    commands
+                        .entity(entity)
+                        .insert(MainMenuRotatingNodeProcessed);
+                }
                 break;
             };
+            traversed_parent = true;
             ancestor = parent.parent();
         }
     }
@@ -26496,24 +26533,40 @@ fn tag_building_model_nodes(
     content: Res<RuntimeContent>,
     buildings: Query<Entity, With<RuntimeBuilding>>,
     parents: Query<&ChildOf>,
-    nodes: Query<(Entity, &Name), (Without<BuildingModelNode>, Without<RuntimeBuilding>)>,
+    nodes: Query<
+        (Entity, &Name),
+        (
+            Without<BuildingModelNodeProcessed>,
+            Without<RuntimeBuilding>,
+        ),
+    >,
 ) {
+    if nodes.is_empty() {
+        return;
+    }
     let names = building_model_node_names(&content.0);
     for (entity, name) in &nodes {
         if !names.contains(name.as_str()) {
+            commands.entity(entity).insert(BuildingModelNodeProcessed);
             continue;
         }
         let mut ancestor = entity;
+        let mut traversed_parent = false;
         for _ in 0..64 {
             let Ok(parent) = parents.get(ancestor) else {
+                if traversed_parent {
+                    commands.entity(entity).insert(BuildingModelNodeProcessed);
+                }
                 break;
             };
+            traversed_parent = true;
             ancestor = parent.parent();
             if buildings.contains(ancestor) {
                 commands.entity(entity).insert(BuildingModelNode {
                     building_root: ancestor,
                     name: name.as_str().to_owned(),
                 });
+                commands.entity(entity).insert(BuildingModelNodeProcessed);
                 break;
             }
         }
@@ -26540,18 +26593,37 @@ fn tag_authored_rotating_nodes(
     simulation: Res<SimulationRuntime>,
     buildings: Query<&RuntimeBuilding>,
     parents: Query<&ChildOf>,
-    nodes: Query<(Entity, &Name), (Without<AuthoredRotatingNode>, Without<RuntimeBuilding>)>,
+    nodes: Query<
+        (Entity, &Name),
+        (
+            Without<AuthoredRotatingNodeProcessed>,
+            Without<RuntimeBuilding>,
+        ),
+    >,
 ) {
+    if nodes.is_empty() {
+        return;
+    }
     let names = authored_rotating_node_names(&content.0);
     for (entity, name) in &nodes {
         if !names.contains(name.as_str()) {
+            commands
+                .entity(entity)
+                .insert(AuthoredRotatingNodeProcessed);
             continue;
         }
         let mut ancestor = entity;
+        let mut traversed_parent = false;
         for _ in 0..64 {
             let Ok(parent) = parents.get(ancestor) else {
+                if traversed_parent {
+                    commands
+                        .entity(entity)
+                        .insert(AuthoredRotatingNodeProcessed);
+                }
                 break;
             };
+            traversed_parent = true;
             ancestor = parent.parent();
             let Ok(runtime) = buildings.get(ancestor) else {
                 continue;
@@ -26580,6 +26652,9 @@ fn tag_authored_rotating_nodes(
                     radians_per_second: rotating.degrees_per_second.to_radians(),
                 });
             }
+            commands
+                .entity(entity)
+                .insert(AuthoredRotatingNodeProcessed);
             break;
         }
     }
@@ -26813,11 +26888,14 @@ fn sync_building_model_nodes(
         ) else {
             continue;
         };
-        *visibility = if visible {
+        let desired = if visible {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         };
+        if *visibility != desired {
+            *visibility = desired;
+        }
     }
 }
 
@@ -26838,13 +26916,17 @@ fn sync_tiled_building_rotation(
         else {
             continue;
         };
-        let tile_value = tiled_neighbor_value(&content.0, &simulation.0, state);
         let quarter_turns = match building_id.as_str() {
-            "building:wall" => wall_tiling(tile_value).1,
-            "building:gate" => gate_tiling(tile_value),
+            "building:wall" => {
+                wall_tiling(tiled_neighbor_value(&content.0, &simulation.0, state)).1
+            }
+            "building:gate" => gate_tiling(tiled_neighbor_value(&content.0, &simulation.0, state)),
             _ => state.rotation_quarter_turns,
         };
-        transform.rotation = quarter_turn_rotation(quarter_turns);
+        let desired = quarter_turn_rotation(quarter_turns);
+        if transform.rotation.angle_between(desired) > 1.0e-6 {
+            transform.rotation = desired;
+        }
     }
 }
 
@@ -28776,37 +28858,51 @@ fn tag_enemy_model_nodes(
     content: Res<RuntimeContent>,
     agents: Query<&Agent>,
     parents: Query<&ChildOf>,
-    nodes: Query<(Entity, &Name), (Without<EnemyModelNode>, Without<Agent>)>,
+    nodes: Query<(Entity, &Name), (Without<EnemyModelNodeProcessed>, Without<Agent>)>,
 ) {
+    if nodes.is_empty() {
+        return;
+    }
     let names = enemy_model_node_names(&content.0);
     for (entity, name) in &nodes {
         if !names.contains(name.as_str()) {
+            commands.entity(entity).insert(EnemyModelNodeProcessed);
             continue;
         }
         let mut ancestor = entity;
+        let mut traversed_parent = false;
         for _ in 0..64 {
             let Ok(parent) = parents.get(ancestor) else {
+                if traversed_parent {
+                    commands.entity(entity).insert(EnemyModelNodeProcessed);
+                }
                 break;
             };
+            traversed_parent = true;
             ancestor = parent.parent();
             let Ok(agent) = agents.get(ancestor) else {
                 continue;
             };
-            if content
+            let Some(models) = content
                 .0
                 .archetypes
                 .get(&agent.archetype)
-                .is_some_and(|archetype| archetype.enemy_models.is_some())
-            {
-                commands.entity(entity).insert(EnemyModelNode {
-                    actor_root: ancestor,
-                    name: name.as_str().to_owned(),
-                });
-                commands
-                    .entity(ancestor)
-                    .insert(AgentEnemyModelPresentation);
+                .and_then(|archetype| archetype.enemy_models.as_ref())
+            else {
                 break;
-            }
+            };
+            let visible = enemy_model_node_visible(
+                models,
+                &enemy_model_selection(&agent.id, models),
+                name.as_str(),
+            );
+            commands.entity(entity).insert(if visible {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            });
+            commands.entity(entity).insert(EnemyModelNodeProcessed);
+            break;
         }
     }
 }
@@ -28851,44 +28947,17 @@ fn enemy_model_node_visible(
         .any(|(index, model)| selection.base_model == Some(index) && model == name)
 }
 
-fn sync_enemy_model_nodes(
-    content: Res<RuntimeContent>,
-    simulation: Res<SimulationRuntime>,
-    agents: Query<&Agent, With<AgentEnemyModelPresentation>>,
-    mut nodes: Query<(&EnemyModelNode, &mut Visibility)>,
-) {
-    for (node, mut visibility) in &mut nodes {
-        let Ok(agent) = agents.get(node.actor_root) else {
-            continue;
-        };
-        let Some(actor) = simulation.0.actors.get(&agent.id) else {
-            continue;
-        };
-        let visible = actor_archetype(&content.0, actor)
-            .and_then(|archetype| archetype.enemy_models.as_ref())
-            .is_some_and(|models| {
-                enemy_model_node_visible(
-                    models,
-                    &enemy_model_selection(&agent.id, models),
-                    &node.name,
-                )
-            });
-        *visibility = if visible {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-    }
-}
-
 #[allow(clippy::type_complexity)]
 fn tag_equipment_nodes(
     mut commands: Commands,
     content: Res<RuntimeContent>,
     agents: Query<Entity, (With<Agent>, With<PlayerAnimatedRig>)>,
     parents: Query<&ChildOf>,
-    nodes: Query<(Entity, &Name), (Without<EquipmentNode>, Without<Agent>)>,
+    nodes: Query<(Entity, &Name), (Without<EquipmentNodeProcessed>, Without<Agent>)>,
 ) {
+    if nodes.is_empty() {
+        return;
+    }
     let names = equipment_node_names(&content.0);
     for (entity, name) in &nodes {
         // Characters.glb includes a handful of model slots that are inactive
@@ -28900,19 +28969,26 @@ fn tag_equipment_nodes(
         if !names.contains(canonical_equipment_node_name(name.as_str()))
             && !player_equipment_slot_node(name.as_str())
         {
+            commands.entity(entity).insert(EquipmentNodeProcessed);
             continue;
         }
         let mut ancestor = entity;
+        let mut traversed_parent = false;
         for _ in 0..64 {
             let Ok(parent) = parents.get(ancestor) else {
+                if traversed_parent {
+                    commands.entity(entity).insert(EquipmentNodeProcessed);
+                }
                 break;
             };
+            traversed_parent = true;
             ancestor = parent.parent();
             if agents.contains(ancestor) {
                 commands.entity(entity).insert(EquipmentNode {
                     actor_root: ancestor,
                     name: name.as_str().to_owned(),
                 });
+                commands.entity(entity).insert(EquipmentNodeProcessed);
                 commands.entity(ancestor).insert(AgentEquipmentPresentation);
                 break;
             }
@@ -28990,11 +29066,14 @@ fn sync_equipment_nodes(
                 )
             },
         );
-        *visibility = if visible {
+        let desired = if visible {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         };
+        if *visibility != desired {
+            *visibility = desired;
+        }
     }
 }
 
@@ -29037,17 +29116,26 @@ fn tag_cosmetic_nodes(
     mut commands: Commands,
     agents: Query<Entity, With<Agent>>,
     parents: Query<&ChildOf>,
-    nodes: Query<(Entity, &Name), (Without<CosmeticNode>, Without<Agent>)>,
+    nodes: Query<(Entity, &Name), (Without<CosmeticNodeProcessed>, Without<Agent>)>,
 ) {
+    if nodes.is_empty() {
+        return;
+    }
     for (entity, name) in &nodes {
         let Some((kind, index)) = cosmetic_node(name.as_str()) else {
+            commands.entity(entity).insert(CosmeticNodeProcessed);
             continue;
         };
         let mut ancestor = entity;
+        let mut traversed_parent = false;
         for _ in 0..64 {
             let Ok(parent) = parents.get(ancestor) else {
+                if traversed_parent {
+                    commands.entity(entity).insert(CosmeticNodeProcessed);
+                }
                 break;
             };
+            traversed_parent = true;
             ancestor = parent.parent();
             if agents.contains(ancestor) {
                 commands.entity(entity).insert(CosmeticNode {
@@ -29055,6 +29143,7 @@ fn tag_cosmetic_nodes(
                     kind,
                     index,
                 });
+                commands.entity(entity).insert(CosmeticNodeProcessed);
                 break;
             }
         }
@@ -29095,12 +29184,15 @@ fn sync_cosmetic_nodes(
             .and_then(|role| role.equipment.as_ref())
             .and_then(|equipment| equipment.helmet_node.as_ref())
             .is_some();
-        *visibility =
+        let desired =
             if cosmetic_node_visible(actor.customization, node.kind, node.index, helmet_equipped) {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
             };
+        if *visibility != desired {
+            *visibility = desired;
+        }
     }
 }
 

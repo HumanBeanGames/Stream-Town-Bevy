@@ -92,6 +92,8 @@ const BROADCAST_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const BROADCAST_IO_TIMEOUT_MICROSECONDS: &str = "3000000";
 const STREAM_CAPTURE_STAGING_BUFFERS: usize = 4;
 const STREAM_CAPTURE_CPU_QUEUE_CAPACITY: usize = 2;
+const STREAM_CAPTURE_RECYCLED_PIXEL_BUFFERS: usize =
+    STREAM_CAPTURE_STAGING_BUFFERS + STREAM_CAPTURE_CPU_QUEUE_CAPACITY + 2;
 const ENCODER_VIDEO_FRAME_BUFFERS: usize = 4;
 
 #[derive(Clone)]
@@ -492,6 +494,7 @@ struct StreamOnlyCapturedFrame {
     height: u32,
     captured_at: Instant,
     pixels: Vec<u8>,
+    recycle_pool: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
 #[derive(Default)]
@@ -518,6 +521,7 @@ struct GpuStreamCaptureRing {
     sender: SyncSender<StreamOnlyCapturedFrame>,
     shared: GpuStreamCaptureShared,
     slots: Vec<GpuStreamCaptureSlot>,
+    recycled_pixels: Arc<Mutex<Vec<Vec<u8>>>>,
     width: u32,
     height: u32,
     aligned_row_bytes: u32,
@@ -531,6 +535,7 @@ impl GpuStreamCaptureRing {
             sender,
             shared,
             slots: Vec::new(),
+            recycled_pixels: Arc::new(Mutex::new(Vec::new())),
             width: 0,
             height: 0,
             aligned_row_bytes: 0,
@@ -1781,7 +1786,8 @@ fn receive_stream_only_captured_frames(
     };
     while let Ok(frame) = receiver.try_recv() {
         shared.0.queued.fetch_sub(1, Ordering::Relaxed);
-        if newest.replace(frame).is_some() {
+        if let Some(replaced) = newest.replace(frame) {
+            recycle_stream_capture_pixels(replaced.recycle_pool, replaced.pixels);
             shared.0.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -1789,6 +1795,9 @@ fn receive_stream_only_captured_frames(
     let dropped = shared.0.dropped.swap(0, Ordering::Relaxed);
     let map_failures = shared.0.map_failures.swap(0, Ordering::Relaxed);
     let Some(controller) = runtime.controller.as_ref() else {
+        if let Some(frame) = newest {
+            recycle_stream_capture_pixels(frame.recycle_pool, frame.pixels);
+        }
         return;
     };
     if dropped > 0 {
@@ -1804,12 +1813,63 @@ fn receive_stream_only_captured_frames(
     controller
         .metrics
         .observe_capture_latency(frame.captured_at.elapsed());
+    let StreamOnlyCapturedFrame {
+        width,
+        height,
+        pixels,
+        recycle_pool,
+        ..
+    } = frame;
     let _ = controller.send_video(VideoFrame {
-        width: frame.width,
-        height: frame.height,
+        width,
+        height,
         pixel_format: VideoPixelFormat::Bgra,
-        pixels: frame.pixels,
+        pixels,
+        recycle_pool: Some(recycle_pool),
     });
+}
+
+fn take_stream_capture_pixels(pool: &Arc<Mutex<Vec<Vec<u8>>>>, length: usize) -> Vec<u8> {
+    let mut pixels = pool
+        .lock()
+        .ok()
+        .and_then(|mut buffers| buffers.pop())
+        .unwrap_or_default();
+    pixels.resize(length, 0);
+    pixels
+}
+
+fn recycle_stream_capture_pixels(pool: Arc<Mutex<Vec<Vec<u8>>>>, mut pixels: Vec<u8>) {
+    pixels.clear();
+    if let Ok(mut buffers) = pool.lock()
+        && buffers.len() < STREAM_CAPTURE_RECYCLED_PIXEL_BUFFERS
+    {
+        buffers.push(pixels);
+    }
+}
+
+fn copy_gpu_rows_into(data: &[u8], width: u32, height: u32, pixels: &mut Vec<u8>) -> bool {
+    let row_bytes = usize::try_from(width).unwrap_or_default().saturating_mul(4);
+    let aligned_row_bytes = row_bytes.div_ceil(256).saturating_mul(256);
+    let height = usize::try_from(height).unwrap_or_default();
+    let source_length = aligned_row_bytes.saturating_mul(height);
+    let target_length = row_bytes.saturating_mul(height);
+    if row_bytes == 0 || height == 0 || data.len() < source_length {
+        pixels.clear();
+        return false;
+    }
+    pixels.resize(target_length, 0);
+    if row_bytes == aligned_row_bytes {
+        pixels.copy_from_slice(&data[..target_length]);
+    } else {
+        for row in 0..height {
+            let source = row.saturating_mul(aligned_row_bytes);
+            let destination = row.saturating_mul(row_bytes);
+            pixels[destination..destination + row_bytes]
+                .copy_from_slice(&data[source..source + row_bytes]);
+        }
+    }
+    true
 }
 
 fn configure_stream_capture_ring(
@@ -1923,33 +1983,44 @@ fn capture_stream_only_target(
     let busy = Arc::clone(&slot.busy);
     let sender = ring.sender.clone();
     let shared = ring.shared.clone();
+    let recycle_pool = Arc::clone(&ring.recycled_pixels);
     let width = extracted.width;
     let height = extracted.height;
+    let pixel_bytes = usize::try_from(width)
+        .unwrap_or_default()
+        .saturating_mul(usize::try_from(height).unwrap_or_default())
+        .saturating_mul(4);
     let captured_at = now;
     let callback_buffer = buffer.clone();
     buffer.slice(..).map_async(MapMode::Read, move |result| {
         if result.is_ok() {
             let mapped = callback_buffer.slice(..).get_mapped_range();
-            let pixels = remove_gpu_row_padding(mapped.to_vec(), width, height);
+            let mut pixels = take_stream_capture_pixels(&recycle_pool, pixel_bytes);
+            let copied = copy_gpu_rows_into(&mapped, width, height, &mut pixels);
             drop(mapped);
             callback_buffer.unmap();
-            if pixels.is_empty() {
-                shared.0.dropped.fetch_add(1, Ordering::Relaxed);
-            } else {
+            if copied {
                 match sender.try_send(StreamOnlyCapturedFrame {
                     width,
                     height,
                     captured_at,
                     pixels,
+                    recycle_pool: Arc::clone(&recycle_pool),
                 }) {
                     Ok(()) => {
                         shared.0.queued.fetch_add(1, Ordering::Relaxed);
                     }
-                    Err(TrySendError::Full(_)) => {
+                    Err(TrySendError::Full(frame)) => {
+                        recycle_stream_capture_pixels(frame.recycle_pool, frame.pixels);
                         shared.0.dropped.fetch_add(1, Ordering::Relaxed);
                     }
-                    Err(TrySendError::Disconnected(_)) => {}
+                    Err(TrySendError::Disconnected(frame)) => {
+                        recycle_stream_capture_pixels(frame.recycle_pool, frame.pixels);
+                    }
                 }
+            } else {
+                recycle_stream_capture_pixels(Arc::clone(&recycle_pool), pixels);
+                shared.0.dropped.fetch_add(1, Ordering::Relaxed);
             }
         } else {
             shared.0.map_failures.fetch_add(1, Ordering::Relaxed);
@@ -3072,27 +3143,6 @@ const fn camera_targets_primary_window(target: &RenderTarget) -> bool {
     matches!(target, RenderTarget::Window(WindowRef::Primary))
 }
 
-fn remove_gpu_row_padding(mut data: Vec<u8>, width: u32, height: u32) -> Vec<u8> {
-    let row_bytes = usize::try_from(width).unwrap_or_default().saturating_mul(4);
-    let aligned_row_bytes = row_bytes.div_ceil(256).saturating_mul(256);
-    let height = usize::try_from(height).unwrap_or_default();
-    let expected = aligned_row_bytes.saturating_mul(height);
-    if row_bytes == 0 || height == 0 || data.len() < expected {
-        return Vec::new();
-    }
-    if row_bytes == aligned_row_bytes {
-        data.truncate(row_bytes.saturating_mul(height));
-        return data;
-    }
-    for row in 1..height {
-        let source = row.saturating_mul(aligned_row_bytes);
-        let destination = row.saturating_mul(row_bytes);
-        data.copy_within(source..source + row_bytes, destination);
-    }
-    data.truncate(row_bytes.saturating_mul(height));
-    data
-}
-
 fn capture_direct_broadcast_frame(
     time: Res<Time>,
     config: Res<RuntimeConfig>,
@@ -3138,6 +3188,7 @@ fn capture_direct_broadcast_frame(
             height,
             pixel_format: VideoPixelFormat::Rgba,
             pixels: rgba,
+            recycle_pool: None,
         })
     });
 }
@@ -3460,12 +3511,33 @@ fn build_ingest_url(template: &str, stream_key: &str, bandwidth_test: bool) -> R
     Ok(url)
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct VideoFrame {
     width: u32,
     height: u32,
     pixel_format: VideoPixelFormat,
     pixels: Vec<u8>,
+    recycle_pool: Option<Arc<Mutex<Vec<Vec<u8>>>>>,
+}
+
+impl Clone for VideoFrame {
+    fn clone(&self) -> Self {
+        Self {
+            width: self.width,
+            height: self.height,
+            pixel_format: self.pixel_format,
+            pixels: self.pixels.clone(),
+            recycle_pool: None,
+        }
+    }
+}
+
+impl Drop for VideoFrame {
+    fn drop(&mut self) {
+        if let Some(pool) = self.recycle_pool.take() {
+            recycle_stream_capture_pixels(pool, std::mem::take(&mut self.pixels));
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3688,6 +3760,7 @@ impl GraphicsCaptureApiHandler for WindowCaptureHandler {
                 height,
                 pixel_format: VideoPixelFormat::Bgra,
                 pixels,
+                recycle_pool: None,
             },
         );
         Ok(())
@@ -3936,6 +4009,7 @@ impl BroadcastController {
                 height: self.height,
                 pixel_format: VideoPixelFormat::Rgba,
                 pixels: offline_rgba_frame(self.width, self.height),
+                recycle_pool: None,
             });
         }
         self.graceful_stop.store(true, Ordering::Release);
@@ -4961,6 +5035,7 @@ pub fn inspect_broadcast_prerequisites(config: &BroadcastConfig) -> Result<Broad
                 height: u32::from(config.height),
                 pixel_format: VideoPixelFormat::Rgba,
                 pixels: rgba.clone(),
+                recycle_pool: None,
             },
             pts,
             &metrics,
@@ -5258,11 +5333,31 @@ mod tests {
         padded[..row_bytes].fill(0x11);
         padded[aligned_row_bytes..aligned_row_bytes + row_bytes].fill(0x22);
 
-        let pixels = remove_gpu_row_padding(padded, width, height);
+        let mut pixels = Vec::new();
+        assert!(copy_gpu_rows_into(&padded, width, height, &mut pixels));
 
         assert_eq!(pixels.len(), row_bytes * usize::try_from(height).unwrap());
         assert!(pixels[..row_bytes].iter().all(|byte| *byte == 0x11));
         assert!(pixels[row_bytes..].iter().all(|byte| *byte == 0x22));
+    }
+
+    #[test]
+    fn streamed_capture_pixels_return_to_the_bounded_reuse_pool() {
+        let pool = Arc::new(Mutex::new(Vec::new()));
+        let pixels = vec![0x44; 64];
+        let allocation_capacity = pixels.capacity();
+        drop(VideoFrame {
+            width: 4,
+            height: 4,
+            pixel_format: VideoPixelFormat::Bgra,
+            pixels,
+            recycle_pool: Some(Arc::clone(&pool)),
+        });
+
+        let recycled = take_stream_capture_pixels(&pool, 64);
+        assert_eq!(recycled.len(), 64);
+        assert!(recycled.capacity() >= allocation_capacity);
+        assert!(pool.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -5600,14 +5695,21 @@ mod tests {
             height: 1,
             pixel_format: VideoPixelFormat::Bgra,
             pixels: vec![1, 2, 3, 4],
+            recycle_pool: None,
         };
         let second = VideoFrame {
+            width: first.width,
+            height: first.height,
+            pixel_format: first.pixel_format,
             pixels: vec![5, 6, 7, 8],
-            ..first.clone()
+            recycle_pool: None,
         };
         mailbox.lock().unwrap().replace(first);
         mailbox.lock().unwrap().replace(second);
-        assert_eq!(take_latest_video(&mailbox).unwrap().pixels, [5, 6, 7, 8]);
+        assert_eq!(
+            take_latest_video(&mailbox).unwrap().pixels.as_slice(),
+            [5, 6, 7, 8]
+        );
         assert!(take_latest_video(&mailbox).is_none());
     }
 
@@ -5633,6 +5735,7 @@ mod tests {
             height: 1,
             pixel_format: VideoPixelFormat::Rgba,
             pixels: vec![0, 0, 0, 255],
+            recycle_pool: None,
         };
         let mailbox = Mutex::new(Some(terminal.clone()));
         let stop = AtomicBool::new(true);
@@ -5645,11 +5748,17 @@ mod tests {
             &metrics,
             &ready,
             VideoFrame {
+                width: terminal.width,
+                height: terminal.height,
+                pixel_format: terminal.pixel_format,
                 pixels: vec![255, 0, 0, 255],
-                ..terminal.clone()
+                recycle_pool: None,
             }
         ));
-        assert_eq!(take_latest_video(&mailbox).unwrap().pixels, terminal.pixels);
+        assert_eq!(
+            take_latest_video(&mailbox).unwrap().pixels.as_slice(),
+            terminal.pixels.as_slice()
+        );
     }
 
     #[test]
@@ -5675,10 +5784,14 @@ mod tests {
             height: 1,
             pixel_format: VideoPixelFormat::Bgra,
             pixels: vec![1, 2, 3, 4],
+            recycle_pool: None,
         };
         let second = VideoFrame {
+            width: first.width,
+            height: first.height,
+            pixel_format: first.pixel_format,
             pixels: vec![5, 6, 7, 8],
-            ..first.clone()
+            recycle_pool: None,
         };
         assert!(controller.send_video(first));
         assert!(controller.send_video(second));
@@ -5686,7 +5799,10 @@ mod tests {
         assert_eq!(snapshot.replaced_video, 1);
         assert_eq!(snapshot.dropped_video, 0);
         assert_eq!(
-            take_latest_video(&controller.video).unwrap().pixels,
+            take_latest_video(&controller.video)
+                .unwrap()
+                .pixels
+                .as_slice(),
             [5, 6, 7, 8]
         );
     }
@@ -5736,6 +5852,7 @@ mod tests {
             height: 1,
             pixel_format: VideoPixelFormat::Bgra,
             pixels: vec![1, 2, 3, 4],
+            recycle_pool: None,
         };
 
         assert!(publish_latest_video(
@@ -5828,6 +5945,7 @@ mod tests {
                     .saturating_mul(usize::from(config.height))
                     .saturating_mul(4)
             ],
+            recycle_pool: None,
         };
         let frame_count = 120_u32;
         let metrics = BroadcastMetrics::default();
@@ -5914,6 +6032,7 @@ mod tests {
                             height: u32::from(config.height),
                             pixel_format: VideoPixelFormat::Rgba,
                             pixels: rgba.clone(),
+                            recycle_pool: None,
                         },
                         video_pts,
                         &metrics,
