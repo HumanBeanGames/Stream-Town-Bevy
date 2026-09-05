@@ -1728,7 +1728,7 @@ fn sync_stream_only_capture(
     ];
     let operator_was_open = operator_entities.iter().any(Option::is_some);
     for entity in operator_entities.into_iter().flatten() {
-        commands.entity(entity).despawn();
+        commands.entity(entity).try_despawn();
     }
     if operator_was_open {
         info!("local stream operator panel closed");

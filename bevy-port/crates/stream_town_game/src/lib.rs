@@ -123,6 +123,7 @@ const MAX_ACTIVE_PROJECTILE_NIGHT_LIGHTS: usize = 12;
 const NIGHT_LIGHT_POOL_CAPACITY: usize = MAX_ACTIVE_CITIZEN_NIGHT_LIGHTS
     + MAX_ACTIVE_BUILDING_NIGHT_LIGHTS
     + MAX_ACTIVE_PROJECTILE_NIGHT_LIGHTS;
+const MAX_BUILDING_MATERIAL_UPDATES_PER_FRAME: usize = 2;
 const NIGHT_LIGHT_TRANSITION_SECONDS: f32 = 10.0;
 const PROJECTILE_MAX_LIFETIME_SECONDS: f32 = 12.0;
 const UNITY_AUTHORED_GRID_CELL_SIZE: f32 = 2.0;
@@ -1735,6 +1736,16 @@ struct PostProcessPresentation {
 
 #[derive(Resource, Default)]
 struct BuildingMaterialInstances(BTreeMap<StableId, BuildingMaterialInstance>);
+
+#[derive(Resource, Default)]
+struct BuildingMaterialUpdateRuntime {
+    order: Vec<StableId>,
+    next_index: usize,
+}
+
+fn round_robin_indices(total: usize, start: usize) -> impl Iterator<Item = usize> {
+    (0..total).map(move |offset| (start + offset) % total)
+}
 
 struct BuildingMaterialInstance {
     handle: Handle<BuildingMaterial>,
@@ -4470,6 +4481,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<EnvironmentPresentation>()
             .init_resource::<PostProcessPresentation>()
             .init_resource::<BuildingMaterialInstances>()
+            .init_resource::<BuildingMaterialUpdateRuntime>()
             .init_resource::<CosmeticMaterialCache>()
             .init_resource::<CharacterBaseMaterialCache>()
             .init_resource::<RoleActionAudioCache>()
@@ -6452,7 +6464,7 @@ fn drive_world_audio(
         #[cfg(target_os = "windows")]
         native_audio.clear_looping();
         for entity in &ambience_players {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
         return;
     }
@@ -22875,7 +22887,7 @@ fn animate_combat_effects(
         trail.elapsed_seconds += time.delta_secs();
         let progress = trail.elapsed_seconds / trail.duration_seconds;
         if progress >= 1.0 {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         }
         transform.scale = trail.base_scale * (1.0 - progress);
@@ -22884,7 +22896,7 @@ fn animate_combat_effects(
         impact.elapsed_seconds += time.delta_secs();
         let progress = impact.elapsed_seconds / impact.duration_seconds;
         if progress >= 1.0 {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         }
         transform.translation = impact.origin
@@ -23098,7 +23110,7 @@ fn animate_building_effects(
         effect.elapsed_seconds += time.delta_secs();
         let progress = effect.elapsed_seconds / effect.duration_seconds;
         if progress >= 1.0 {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         }
         let envelope = (std::f32::consts::PI * progress).sin().max(0.0);
@@ -23502,7 +23514,7 @@ fn animate_healing_effects(
     for (entity, mut effect, mut transform, mut material) in &mut rings {
         effect.elapsed_seconds += time.delta_secs();
         if effect.elapsed_seconds >= effect.duration_seconds {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         }
         if let Some(target) = effect.follow_target.as_ref()
@@ -23529,7 +23541,7 @@ fn animate_healing_effects(
     for (entity, mut effect, mut transform, mut material) in &mut motes {
         effect.elapsed_seconds += time.delta_secs();
         if effect.elapsed_seconds >= effect.duration_seconds {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         }
         if let Some(target) = effect.follow_target.as_ref()
@@ -23589,7 +23601,7 @@ fn move_combat_projectiles(
     for (entity, mut projectile, mut transform) in &mut projectiles {
         projectile.remaining_seconds -= time.delta_secs();
         if projectile.remaining_seconds <= 0.0 {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         }
         let source_valid = match &projectile.source {
@@ -23605,15 +23617,15 @@ fn move_combat_projectiles(
                 .is_some_and(|building| building.complete),
         };
         let Some(target) = simulation.0.actors.get(&projectile.target) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         let Some(target_position) = positions.get(&projectile.target).copied() else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         if !source_valid || !target.alive {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         }
         let target_position = target_position + Vec3::Y * config.0.world.cell_size * 0.35;
@@ -23635,7 +23647,7 @@ fn move_combat_projectiles(
                 projectile.visual,
                 config.0.world.cell_size,
             );
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         } else {
             transform.translation += delta.normalize_or_zero() * step;
             transform.look_to(delta.normalize_or_zero(), Vec3::Y);
@@ -23684,7 +23696,7 @@ fn update_enemy_encounters(
         .map(|(entity, agent)| (entity, agent.id.clone()))
         .collect();
     for (entity, enemy) in dead_enemies {
-        commands.entity(entity).despawn();
+        commands.entity(entity).try_despawn();
         simulation.0.actors.remove(&enemy);
         for camp in simulation.0.enemy_camps.values_mut() {
             camp.spawned_enemies.remove(&enemy);
@@ -23983,7 +23995,7 @@ fn sync_fish_god_presentation(
                     });
                 }
             } else {
-                commands.entity(entity).despawn();
+                commands.entity(entity).try_despawn();
             }
         }
         return;
@@ -24304,7 +24316,7 @@ fn animate_falling_fish(
 ) {
     for (entity, mut fish, mut transform) in &mut fish {
         let Some(effect) = presentation.0.raining_fish_effects.get(&fish.effect) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         let sequence = fish.sequence;
@@ -24319,7 +24331,7 @@ fn animate_falling_fish(
             time.delta_secs(),
         );
         if fish.age_seconds >= fish.lifetime_seconds {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }
@@ -24375,7 +24387,7 @@ fn drive_fish_god_exit(
         }
         exit.remaining_seconds -= time.delta_secs();
         if exit.remaining_seconds <= 0.0 {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }
@@ -25521,7 +25533,7 @@ fn move_agents(
                                 if let Some((entity, _)) =
                                     buildings.iter().find(|(_, runtime)| runtime.id == building)
                                 {
-                                    commands.entity(entity).despawn();
+                                    commands.entity(entity).try_despawn();
                                 }
                             }
                         }
@@ -26063,7 +26075,7 @@ fn sync_resource_nodes(
     let mut spawned_ids = HashSet::with_capacity(resources.iter().len());
     for (entity, node, location, pending_grounding, mut visibility) in &mut resources {
         if !live_ids.contains(node.id.as_str()) {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         }
         spawned_ids.insert(node.id.clone());
@@ -26485,7 +26497,7 @@ fn animate_chimney_smoke_particles(
         particle.elapsed_seconds += time.delta_secs();
         let progress = particle.elapsed_seconds / particle.duration_seconds;
         if progress >= 1.0 {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         }
         transform.translation = particle.origin + particle.velocity * particle.elapsed_seconds;
@@ -27087,7 +27099,7 @@ fn update_environment_presentation(
     }
     if environment_changed {
         for entity in &particles {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
         spawn_weather_particles(
             &mut commands,
@@ -27345,14 +27357,28 @@ fn sync_pooled_night_lights(
             )
         });
         if let Some(spec) = active {
-            transform.translation = spec.position;
-            light.color = spec.color;
-            light.intensity = spec.intensity;
-            light.range = spec.range;
-            *visibility = Visibility::Visible;
+            if transform.translation != spec.position {
+                transform.translation = spec.position;
+            }
+            if light.color != spec.color {
+                light.color = spec.color;
+            }
+            if light.intensity.to_bits() != spec.intensity.to_bits() {
+                light.intensity = spec.intensity;
+            }
+            if light.range.to_bits() != spec.range.to_bits() {
+                light.range = spec.range;
+            }
+            if *visibility != Visibility::Visible {
+                *visibility = Visibility::Visible;
+            }
         } else {
-            light.intensity = 0.0;
-            *visibility = Visibility::Hidden;
+            if light.intensity != 0.0 {
+                light.intensity = 0.0;
+            }
+            if *visibility != Visibility::Hidden {
+                *visibility = Visibility::Hidden;
+            }
         }
         slot_count += 1;
     }
@@ -31260,6 +31286,7 @@ fn sync_building_material_instances(
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
     mut instances: ResMut<BuildingMaterialInstances>,
+    mut update_runtime: ResMut<BuildingMaterialUpdateRuntime>,
     mut materials: Option<ResMut<Assets<BuildingMaterial>>>,
 ) {
     let Some(materials) = materials.as_deref_mut() else {
@@ -31275,7 +31302,34 @@ fn sync_building_material_instances(
         materials.remove(handle);
         instances.0.remove(&id);
     }
-    for (id, instance) in &mut instances.0 {
+    if update_runtime.order.len() != instances.0.len()
+        || update_runtime
+            .order
+            .iter()
+            .any(|id| !instances.0.contains_key(id))
+    {
+        update_runtime.order.clear();
+        update_runtime.order.extend(instances.0.keys().cloned());
+        update_runtime.next_index = update_runtime
+            .next_index
+            .min(update_runtime.order.len().saturating_sub(1));
+    }
+    if update_runtime.order.is_empty() {
+        update_runtime.next_index = 0;
+        return;
+    }
+
+    let mut visited = 0_usize;
+    let mut updated = 0_usize;
+    for index in round_robin_indices(update_runtime.order.len(), update_runtime.next_index) {
+        if updated >= MAX_BUILDING_MATERIAL_UPDATES_PER_FRAME {
+            break;
+        }
+        let id = &update_runtime.order[index];
+        visited += 1;
+        let Some(instance) = instances.0.get_mut(id) else {
+            continue;
+        };
         let Some(building) = simulation.0.buildings.get(id) else {
             continue;
         };
@@ -31315,7 +31369,9 @@ fn sync_building_material_instances(
         instance.applied_season = simulation.0.season;
         instance.applied_season_blend_bits = season_blend_bits;
         instance.applied_daylight_bits = daylight_bits;
+        updated += 1;
     }
+    update_runtime.next_index = (update_runtime.next_index + visited) % update_runtime.order.len();
 }
 
 fn building_damage_value(health: i32, max_health: i32) -> f32 {
@@ -32228,14 +32284,14 @@ fn sync_active_pets(
         let key = (visual.owner.clone(), visual.pet.clone());
         existing.insert(key.clone());
         let Some(position) = owner_positions.get(&visual.owner) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         if desired.get(&visual.owner) == Some(&visual.pet) {
             visual.movement_speed =
                 pet_follow_step(&mut transform, *position, pet_definition, time.delta_secs());
         } else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
     let Some(server) = asset_server.as_deref() else {
@@ -32480,7 +32536,7 @@ fn apply_agent_commands(
                     .iter_mut()
                     .find(|(_, agent, _, _, _)| agent.id == actor)
                 {
-                    commands.entity(entity).despawn();
+                    commands.entity(entity).try_despawn();
                 }
             }
         }
@@ -32501,7 +32557,7 @@ fn animate_ping_pointers(
             .iter()
             .find(|(agent, _, _)| agent.id == pointer.actor)
         else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         if pointer.elapsed_seconds >= PING_POINTER_DURATION_SECONDS
@@ -32511,7 +32567,7 @@ fn animate_ping_pointers(
                 .get(&pointer.actor)
                 .is_some_and(|actor| actor.alive)
         {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         }
         let actor_height = if animation.native {
@@ -32539,7 +32595,7 @@ fn apply_building_commands(
                 if let Some((entity, _)) =
                     buildings.iter().find(|(_, runtime)| runtime.id == building)
                 {
-                    commands.entity(entity).despawn();
+                    commands.entity(entity).try_despawn();
                 }
             }
         }
@@ -32708,15 +32764,15 @@ fn sync_building_placers(
     let mut active_visuals = BTreeSet::new();
     for (entity, visual, mut transform, mut material) in &mut visuals {
         let Some(placement) = placers.0.get(&visual.owner) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         let Some(definition) = content.0.buildings.get(&placement.building) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         if !placement_visual_cells(placement).contains(&visual.cell) {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         }
         let cell_placement = placement_at_cell(placement, visual.cell);
@@ -32785,11 +32841,11 @@ fn sync_building_placers(
     let mut active_ghosts = BTreeSet::new();
     for (entity, ghost, mut transform) in &mut ghosts {
         let Some(placement) = placers.0.get(&ghost.owner) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         let Some(definition) = content.0.buildings.get(&placement.building) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         let age = building_age(&content.0, &simulation.0, &placement.building);
@@ -32802,7 +32858,7 @@ fn sync_building_placers(
             || scene.is_none_or(|scene| scene.asset_path != ghost.scene_asset_path)
             || !placement_visual_cells(placement).contains(&ghost.cell)
         {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         }
         let cell_placement = placement_at_cell(placement, ghost.cell);
@@ -33104,11 +33160,11 @@ fn sync_building_placement_overlays(
     for (entity, overlay, mut text, mut node, mut visibility) in &mut overlays {
         existing.insert(overlay.owner.clone());
         let Some(placement) = placers.0.get(&overlay.owner) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         let Some(definition) = content.0.buildings.get(&placement.building) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         let world_position = building_placement_overlay_world_position(
@@ -34014,7 +34070,7 @@ fn update_vote_panels(
         if let Ok((container, children)) = ruler_options.single() {
             if let Some(children) = children {
                 for child in children {
-                    commands.entity(*child).despawn();
+                    commands.entity(*child).try_despawn();
                 }
             }
             let lines = ruler_vote_option_lines(&simulation.0);
@@ -42241,10 +42297,10 @@ fn update_credits_fireworks(
 ) {
     if settings.is_some_and(|settings| settings.0.interface.reduced_motion) {
         for (entity, ..) in &mut particles {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
         for (entity, _) in &mut bursts {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
         return;
     }
@@ -42256,7 +42312,7 @@ fn update_credits_fireworks(
             timeline.elapsed_seconds,
         );
         let Some(effect) = presentation.0.fireworks_effects.get(&emitter.effect) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         let expected_launches = if active {
@@ -42310,7 +42366,7 @@ fn update_credits_fireworks(
                     particle.color_index,
                 ));
             }
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 
@@ -42359,7 +42415,7 @@ fn update_credits_fireworks(
             continue;
         }
         let Some(effect) = presentation.0.fireworks_effects.get(&burst.effect) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         for burst_index in 0..burst.remaining {
@@ -42379,7 +42435,7 @@ fn update_credits_fireworks(
                 );
             }
         }
-        commands.entity(entity).despawn();
+        commands.entity(entity).try_despawn();
     }
 }
 
@@ -42860,11 +42916,11 @@ fn sync_actor_name_overlays(
     for (entity, overlay, mut text, mut color, mut node, mut visibility) in &mut overlays {
         existing.insert(overlay.actor.clone());
         let Some(actor) = simulation.0.actors.get(&overlay.actor) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         let Some(position) = actor_positions.get(&overlay.actor) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         let show = actor.alive
@@ -43026,15 +43082,15 @@ fn sync_actor_health_overlays(
     for (entity, mut overlay, children, mut node, mut visibility) in &mut overlays {
         existing.insert(overlay.actor.clone());
         let Some(actor) = simulation.0.actors.get(&overlay.actor) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         let Some(position) = actor_positions.get(&overlay.actor) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         let Some(hide_delay) = actor_health_bar_hide_seconds(&content.0, actor) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         let show = actor.alive
@@ -43157,11 +43213,11 @@ fn sync_temporary_world_labels(
     );
     for (entity, mut label, mut node, mut visibility) in &mut labels {
         if !temporary_world_label_is_live(&mut label, time.delta_secs()) {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         }
         let Some(position) = target_positions.get(&label.target) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         let Some(screen) = overlay_viewport_position(
@@ -43217,11 +43273,11 @@ fn sync_building_health_overlays(
     for (entity, overlay, children, mut node, mut visibility) in &mut overlays {
         existing.insert(overlay.building.clone());
         let Some(building) = simulation.0.buildings.get(&overlay.building) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         let Some(position) = building_positions.get(&overlay.building) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         let max_health = building_max_health(&content.0, building).max(1);
@@ -45307,6 +45363,24 @@ mod tests {
             in_game_sun_transform_for_daylight(first).rotation,
             in_game_sun_transform_for_daylight(second).rotation
         );
+    }
+
+    #[test]
+    fn building_material_round_robin_covers_every_instance_with_a_bounded_batch() {
+        let total = 83;
+        let mut cursor = 0;
+        let mut visited = vec![false; total];
+        for _ in 0..total.div_ceil(MAX_BUILDING_MATERIAL_UPDATES_PER_FRAME) {
+            let batch = round_robin_indices(total, cursor)
+                .take(MAX_BUILDING_MATERIAL_UPDATES_PER_FRAME)
+                .collect::<Vec<_>>();
+            for index in &batch {
+                visited[*index] = true;
+            }
+            cursor = (cursor + batch.len()) % total;
+        }
+
+        assert!(visited.into_iter().all(|was_visited| was_visited));
     }
 
     #[test]
