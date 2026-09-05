@@ -117,6 +117,7 @@ use stream_town_domain::{
 const MAX_TOWN_GOALS: usize = 2;
 const MAX_RECRUIT_ROLE_LEVEL: u16 = 10;
 const AUTOMATIC_PLAYER_RESPAWN_SECONDS: f64 = 10.0 * 60.0;
+const REGENERATION_TARGET_RETRY_SECONDS: f64 = 30.0;
 const MAX_ACTIVE_CITIZEN_NIGHT_LIGHTS: usize = 32;
 const MAX_ACTIVE_BUILDING_NIGHT_LIGHTS: usize = 20;
 const MAX_ACTIVE_PROJECTILE_NIGHT_LIGHTS: usize = 12;
@@ -21480,10 +21481,11 @@ struct RegenerationSpatialIndex {
     resources: HashSet<GridPos>,
     trees: HashSet<GridPos>,
     actors: HashSet<GridPos>,
+    buildings: HashSet<GridPos>,
 }
 
 impl RegenerationSpatialIndex {
-    fn new(world: &GeneratedWorld, simulation: &WorldSimulation) -> Self {
+    fn new(content: &ContentCatalog, world: &GeneratedWorld, simulation: &WorldSimulation) -> Self {
         Self {
             resources: world
                 .resources
@@ -21504,6 +21506,23 @@ impl RegenerationSpatialIndex {
                 .values()
                 .filter(|actor| actor.alive)
                 .map(|actor| actor.position)
+                .collect(),
+            buildings: simulation
+                .buildings
+                .values()
+                .filter_map(|building| {
+                    let definition = building_def_for_archetype(content, &building.archetype)?;
+                    building_region(
+                        building.position,
+                        rotated_footprint(definition.footprint, building.rotation_quarter_turns),
+                        world,
+                    )
+                })
+                .flat_map(|region| {
+                    (region.min.z..=region.max.z).flat_map(move |z| {
+                        (region.min.x..=region.max.x).map(move |x| GridPos { x, z })
+                    })
+                })
                 .collect(),
         }
     }
@@ -21541,8 +21560,6 @@ fn nearest_resource_distance_capped(
 }
 
 fn valid_regeneration_cell_indexed(
-    content: &ContentCatalog,
-    simulation: &WorldSimulation,
     world: &GeneratedWorld,
     spatial: &RegenerationSpatialIndex,
     position: GridPos,
@@ -21550,7 +21567,7 @@ fn valid_regeneration_cell_indexed(
     world.navigation.is_walkable(position)
         && !spatial.resources.contains(&position)
         && !spatial.actors.contains(&position)
-        && cell_is_clear_of_buildings(content, simulation, world, position, 1)
+        && !spatial.buildings.contains(&position)
 }
 
 fn valid_regeneration_cell(
@@ -21560,10 +21577,8 @@ fn valid_regeneration_cell(
     position: GridPos,
 ) -> bool {
     valid_regeneration_cell_indexed(
-        content,
-        simulation,
         world,
-        &RegenerationSpatialIndex::new(world, simulation),
+        &RegenerationSpatialIndex::new(content, world, simulation),
         position,
     )
 }
@@ -21637,7 +21652,7 @@ fn forester_planting_cell(
     hut: GridPos,
     from: GridPos,
 ) -> Option<(GridPos, GridPos)> {
-    let spatial = RegenerationSpatialIndex::new(world, simulation);
+    let spatial = RegenerationSpatialIndex::new(content, world, simulation);
     let mut recent = runtime
         .recently_fallen_trees
         .iter()
@@ -21665,7 +21680,7 @@ fn forester_planting_cell(
             let Some(candidate) = offset_grid(fallen, x, z, world) else {
                 continue;
             };
-            if valid_regeneration_cell_indexed(content, simulation, world, &spatial, candidate)
+            if valid_regeneration_cell_indexed(world, &spatial, candidate)
                 && let Some(approach) =
                     planting_approach(content, simulation, world, candidate, from)
             {
@@ -21684,9 +21699,7 @@ fn forester_planting_cell(
                 .skip(1)
                 .filter_map(|(x, z)| offset_grid(tree.position, x, z, world))
         })
-        .filter(|candidate| {
-            valid_regeneration_cell_indexed(content, simulation, world, &spatial, *candidate)
-        })
+        .filter(|candidate| valid_regeneration_cell_indexed(world, &spatial, *candidate))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
@@ -21711,9 +21724,7 @@ fn forester_planting_cell(
     let mut fallback = (-radius..=radius)
         .flat_map(|z| (-radius..=radius).map(move |x| (x, z)))
         .filter_map(|(x, z)| offset_grid(hut, x, z, world))
-        .filter(|candidate| {
-            valid_regeneration_cell_indexed(content, simulation, world, &spatial, *candidate)
-        })
+        .filter(|candidate| valid_regeneration_cell_indexed(world, &spatial, *candidate))
         .filter(|candidate| cell_is_clear_of_buildings(content, simulation, world, *candidate, 3))
         .collect::<Vec<_>>();
     fallback.sort_by_key(|candidate| {
@@ -21739,14 +21750,12 @@ fn tender_planting_cell(
     hut: GridPos,
     from: GridPos,
 ) -> Option<(GridPos, GridPos)> {
-    let spatial = RegenerationSpatialIndex::new(world, simulation);
+    let spatial = RegenerationSpatialIndex::new(content, world, simulation);
     let radius = 24_i32;
     let mut fields = (-radius..=radius)
         .flat_map(|z| (-radius..=radius).map(move |x| (x, z)))
         .filter_map(|(x, z)| offset_grid(hut, x, z, world))
-        .filter(|candidate| {
-            valid_regeneration_cell_indexed(content, simulation, world, &spatial, *candidate)
-        })
+        .filter(|candidate| valid_regeneration_cell_indexed(world, &spatial, *candidate))
         .filter(|candidate| cell_is_clear_of_buildings(content, simulation, world, *candidate, 10))
         .filter(|candidate| {
             let nearest_tree = nearest_resource_distance_capped(&spatial.trees, *candidate, 37);
@@ -21828,6 +21837,10 @@ fn regeneration_agent_goal(
         if runtime.elapsed_seconds < worker.next_ready_seconds {
             return None;
         }
+        // A mature town may have no valid planting cells. Bound the next
+        // expensive spatial search even when target selection or path planning
+        // fails; successful work replaces this with the full authored interval.
+        worker.next_ready_seconds = runtime.elapsed_seconds + REGENERATION_TARGET_RETRY_SECONDS;
     }
     let reserved_planting_cells = runtime
         .workers
@@ -56310,6 +56323,38 @@ mod tests {
                     != Some(forbidden_resource)
             }));
         }
+    }
+
+    #[test]
+    fn failed_regeneration_target_search_is_backed_off() {
+        let (_, content, mut world, simulation, mut runtime, actor, _) =
+            regeneration_role_fixture("forester", "nursery");
+        let from = simulation.actors[&actor].position;
+        let blocked_world = stream_town_domain::DirtyRegion {
+            min: GridPos { x: 0, z: 0 },
+            max: GridPos {
+                x: world.navigation.width() - 1,
+                z: world.navigation.height() - 1,
+            },
+        };
+        world.navigation.set_blocked(blocked_world, true).unwrap();
+
+        assert!(
+            regeneration_agent_goal(&content, &simulation, &world, &mut runtime, &actor, from)
+                .is_none()
+        );
+        let retry_at = runtime.workers[&actor].next_ready_seconds;
+        assert!(
+            (retry_at - (runtime.elapsed_seconds + REGENERATION_TARGET_RETRY_SECONDS)).abs()
+                <= f64::EPSILON
+        );
+
+        runtime.elapsed_seconds += 1.0;
+        assert!(
+            regeneration_agent_goal(&content, &simulation, &world, &mut runtime, &actor, from)
+                .is_none()
+        );
+        assert!((runtime.workers[&actor].next_ready_seconds - retry_at).abs() <= f64::EPSILON);
     }
 
     #[test]
