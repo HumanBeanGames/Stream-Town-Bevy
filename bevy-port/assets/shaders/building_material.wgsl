@@ -1,5 +1,6 @@
 #import bevy_pbr::{
     forward_io::{FragmentOutput, VertexOutput},
+    mesh_view_bindings as view_bindings,
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
 }
@@ -12,6 +13,7 @@ struct BuildingMaterialUniform {
     snow_damage: vec4<f32>,
     main_scale_offset: vec4<f32>,
     tint_color_strength: vec4<f32>,
+    time_cycle: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -33,6 +35,36 @@ fn roof_color(seed: f32) -> vec3<f32> {
         return mix(ochre, red, (seed - 0.34) / 0.34);
     }
     return mix(red, olive, (seed - 0.68) / 0.32);
+}
+
+fn ease_in_out_cubic(value: f32) -> f32 {
+    if value < 0.5 {
+        return 4.0 * value * value * value;
+    }
+    return 1.0 - pow(-2.0 * value + 2.0, 3.0) / 2.0;
+}
+
+fn building_daylight() -> f32 {
+    let cycle = building_material.time_cycle.x;
+    if cycle <= 0.0 {
+        return 1.0;
+    }
+    let transition = max(building_material.time_cycle.z, 0.0001);
+    let daylight_end = building_material.time_cycle.y;
+    let day_end = max(daylight_end - transition, 0.0);
+    let night_end = max(cycle - transition, daylight_end);
+    let elapsed = view_bindings::globals.time + building_material.time_cycle.w;
+    let phase = elapsed - floor(elapsed / cycle) * cycle;
+    if phase < day_end {
+        return 1.0;
+    }
+    if phase < daylight_end {
+        return 1.0 - ease_in_out_cubic((phase - day_end) / transition);
+    }
+    if phase < night_end {
+        return 0.0;
+    }
+    return ease_in_out_cubic((phase - night_end) / transition);
 }
 
 @fragment
@@ -117,6 +149,7 @@ fn fragment(
     pbr_input.material.base_color = alpha_discard(pbr_input.material, authored_color);
     pbr_input.material.emissive = emission_source
         * building_material.surface_controls.z
+        * (1.0 - building_daylight())
         * vertex_color.b;
     pbr_input.material.metallic = clamp(
         building_material.surface_controls.w * vertex_color.g,

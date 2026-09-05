@@ -1753,7 +1753,26 @@ struct BuildingMaterialInstance {
     applied_health: i32,
     applied_season: Season,
     applied_season_blend_bits: u32,
-    applied_daylight_bits: u32,
+    applied_time_cycle: BuildingTimeCycleSignature,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BuildingTimeCycleSignature {
+    seconds_per_day: u32,
+    daylight_per_thousand: u16,
+    transition_seconds: u32,
+    max_building_emission_milli: u16,
+}
+
+impl From<&stream_town_domain::TimeCycleConfig> for BuildingTimeCycleSignature {
+    fn from(config: &stream_town_domain::TimeCycleConfig) -> Self {
+        Self {
+            seconds_per_day: config.seconds_per_day,
+            daylight_per_thousand: config.daylight_per_thousand,
+            transition_seconds: config.transition_seconds,
+            max_building_emission_milli: config.max_building_emission_milli,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, ShaderType)]
@@ -1840,6 +1859,7 @@ struct BuildingMaterialUniform {
     snow_damage: Vec4,
     main_scale_offset: Vec4,
     tint_color_strength: Vec4,
+    time_cycle: Vec4,
 }
 
 #[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
@@ -7334,6 +7354,11 @@ fn building_material(
                     transform.offset[1],
                 ),
                 tint_color_strength: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                // A zero cycle keeps menu and migration-preview materials in
+                // full daylight. Runtime instances replace this with a phase
+                // aligned cycle that the shader can advance without dirtying
+                // every material asset on every dusk/dawn frame.
+                time_cycle: Vec4::ZERO,
             },
             main_texture: texture,
         },
@@ -27049,18 +27074,15 @@ fn update_environment_presentation(
         water.extension.parameters.scale_foam_ice.w = water_ice_strength(season_from)
             + (water_ice_strength(season_to) - water_ice_strength(season_from)) * season_blend;
     }
-    if let Some(building_materials) = building_materials.as_deref_mut()
+    if (environment_changed || season_visual_changed)
+        && let Some(building_materials) = building_materials.as_deref_mut()
         && let Some(mut building) = building_materials.get_mut(&render.authored_building)
     {
-        if environment_changed || season_visual_changed {
-            let snow = building_snow_strength(season_from)
-                + (building_snow_strength(season_to) - building_snow_strength(season_from))
-                    * season_blend;
-            building.extension.parameters.snow_damage.x = snow;
-            building.extension.parameters.snow_damage.y = snow;
-        }
-        building.extension.parameters.surface_controls.z =
-            f32::from(config.0.time.max_building_emission_milli) / 1_000.0 * (1.0 - daylight);
+        let snow = building_snow_strength(season_from)
+            + (building_snow_strength(season_to) - building_snow_strength(season_from))
+                * season_blend;
+        building.extension.parameters.snow_damage.x = snow;
+        building.extension.parameters.snow_damage.y = snow;
     }
     if (environment_changed || season_visual_changed)
         && let Some(tree_materials) = tree_materials.as_deref_mut()
@@ -27488,6 +27510,26 @@ fn player_night_light_level_multiplier(actor: &ActorState) -> f32 {
 
 fn daylight_signature(value: f32) -> u32 {
     value.clamp(0.0, 1.0).to_bits()
+}
+
+fn building_material_time_cycle(
+    config: &stream_town_domain::TimeCycleConfig,
+    simulation_elapsed_seconds: f64,
+    app_elapsed_wrapped_seconds: f64,
+) -> Vec4 {
+    let cycle_seconds = u64::from(config.seconds_per_day.max(1));
+    let cycle = Duration::from_secs(cycle_seconds).as_secs_f32();
+    let phase_offset = Duration::from_secs_f64(
+        (simulation_elapsed_seconds - app_elapsed_wrapped_seconds)
+            .rem_euclid(f64::from(config.seconds_per_day.max(1))),
+    )
+    .as_secs_f32();
+    Vec4::new(
+        cycle,
+        cycle * f32::from(config.daylight_per_thousand) / 1_000.0,
+        Duration::from_secs(u64::from(config.transition_seconds)).as_secs_f32(),
+        phase_offset,
+    )
 }
 
 fn spawn_weather_particles(
@@ -31203,6 +31245,7 @@ fn instantiate_building_materials(
     mut commands: Commands,
     simulation: Res<SimulationRuntime>,
     config: Res<RuntimeConfig>,
+    time: Res<Time>,
     content: Res<RuntimeContent>,
     parents: Query<&ChildOf>,
     buildings: Query<&RuntimeBuilding>,
@@ -31233,67 +31276,64 @@ fn instantiate_building_materials(
             commands.entity(entity).insert(BuildingMaterialInstanced);
             continue;
         };
-        let handle = if let Some(instance) = instances.0.get(&building) {
-            instance.handle.clone()
-        } else {
-            let Some(mut material) = materials.get(&source.0).cloned() else {
-                continue;
+        let handle =
+            if let Some(instance) = instances.0.get(&building) {
+                instance.handle.clone()
+            } else {
+                let Some(mut material) = materials.get(&source.0).cloned() else {
+                    continue;
+                };
+                let health = simulation
+                    .0
+                    .buildings
+                    .get(&building)
+                    .map_or(BUILDING_MAX_HEALTH, |state| state.health);
+                let season = simulation.0.season;
+                let (season_from, season_to, season_blend) = season_visual_blend(
+                    simulation.0.elapsed_seconds,
+                    config.0.time.seconds_per_day,
+                    season,
+                );
+                let snow = building_snow_strength(season_from)
+                    + (building_snow_strength(season_to) - building_snow_strength(season_from))
+                        * season_blend;
+                material.extension.parameters.snow_damage.x = snow;
+                material.extension.parameters.snow_damage.y = snow;
+                let max_health = simulation
+                    .0
+                    .buildings
+                    .get(&building)
+                    .map_or(BUILDING_MAX_HEALTH, |state| {
+                        building_max_health(&content.0, state)
+                    });
+                material.extension.parameters.snow_damage.z =
+                    building_damage_value(health, max_health);
+                if simulation.0.buildings.get(&building).is_some_and(|state| {
+                    state.archetype.as_str() == "archetype:building:guardhouse"
+                }) {
+                    material.extension.parameters.tint_color_strength =
+                        Vec4::new(0.22, 0.62, 1.0, 0.72);
+                }
+                material.extension.parameters.surface_controls.z =
+                    f32::from(config.0.time.max_building_emission_milli) / 1_000.0;
+                material.extension.parameters.time_cycle = building_material_time_cycle(
+                    &config.0.time,
+                    simulation.0.elapsed_seconds,
+                    time.elapsed_secs_wrapped_f64(),
+                );
+                let handle = materials.add(material);
+                instances.0.insert(
+                    building,
+                    BuildingMaterialInstance {
+                        handle: handle.clone(),
+                        applied_health: health,
+                        applied_season: season,
+                        applied_season_blend_bits: daylight_signature(season_blend),
+                        applied_time_cycle: BuildingTimeCycleSignature::from(&config.0.time),
+                    },
+                );
+                handle
             };
-            let health = simulation
-                .0
-                .buildings
-                .get(&building)
-                .map_or(BUILDING_MAX_HEALTH, |state| state.health);
-            let season = simulation.0.season;
-            let (season_from, season_to, season_blend) = season_visual_blend(
-                simulation.0.elapsed_seconds,
-                config.0.time.seconds_per_day,
-                season,
-            );
-            let snow = building_snow_strength(season_from)
-                + (building_snow_strength(season_to) - building_snow_strength(season_from))
-                    * season_blend;
-            material.extension.parameters.snow_damage.x = snow;
-            material.extension.parameters.snow_damage.y = snow;
-            let max_health = simulation
-                .0
-                .buildings
-                .get(&building)
-                .map_or(BUILDING_MAX_HEALTH, |state| {
-                    building_max_health(&content.0, state)
-                });
-            material.extension.parameters.snow_damage.z = building_damage_value(health, max_health);
-            if simulation
-                .0
-                .buildings
-                .get(&building)
-                .is_some_and(|state| state.archetype.as_str() == "archetype:building:guardhouse")
-            {
-                material.extension.parameters.tint_color_strength =
-                    Vec4::new(0.22, 0.62, 1.0, 0.72);
-            }
-            let daylight = config
-                .0
-                .time
-                .sample(simulation.0.elapsed_seconds)
-                .daylight
-                .clamp(0.0, 1.0);
-            let daylight_bits = daylight_signature(daylight);
-            material.extension.parameters.surface_controls.z =
-                f32::from(config.0.time.max_building_emission_milli) / 1_000.0 * (1.0 - daylight);
-            let handle = materials.add(material);
-            instances.0.insert(
-                building,
-                BuildingMaterialInstance {
-                    handle: handle.clone(),
-                    applied_health: health,
-                    applied_season: season,
-                    applied_season_blend_bits: daylight_signature(season_blend),
-                    applied_daylight_bits: daylight_bits,
-                },
-            );
-            handle
-        };
         commands
             .entity(entity)
             .insert((MeshMaterial3d(handle), BuildingMaterialInstanced));
@@ -31303,6 +31343,7 @@ fn instantiate_building_materials(
 fn sync_building_material_instances(
     simulation: Res<SimulationRuntime>,
     config: Res<RuntimeConfig>,
+    time: Res<Time>,
     content: Res<RuntimeContent>,
     mut instances: ResMut<BuildingMaterialInstances>,
     mut update_runtime: ResMut<BuildingMaterialUpdateRuntime>,
@@ -31352,23 +31393,17 @@ fn sync_building_material_instances(
         let Some(building) = simulation.0.buildings.get(id) else {
             continue;
         };
-        let daylight = config
-            .0
-            .time
-            .sample(simulation.0.elapsed_seconds)
-            .daylight
-            .clamp(0.0, 1.0);
-        let daylight_bits = daylight_signature(daylight);
         let (season_from, season_to, season_blend) = season_visual_blend(
             simulation.0.elapsed_seconds,
             config.0.time.seconds_per_day,
             simulation.0.season,
         );
         let season_blend_bits = daylight_signature(season_blend);
+        let time_cycle_signature = BuildingTimeCycleSignature::from(&config.0.time);
         if instance.applied_health == building.health
             && instance.applied_season == simulation.0.season
             && instance.applied_season_blend_bits == season_blend_bits
-            && instance.applied_daylight_bits == daylight_bits
+            && instance.applied_time_cycle == time_cycle_signature
         {
             continue;
         }
@@ -31380,14 +31415,21 @@ fn sync_building_material_instances(
                 * season_blend;
         material.extension.parameters.snow_damage.x = snow;
         material.extension.parameters.snow_damage.y = snow;
-        material.extension.parameters.surface_controls.z =
-            f32::from(config.0.time.max_building_emission_milli) / 1_000.0 * (1.0 - daylight);
+        if instance.applied_time_cycle != time_cycle_signature {
+            material.extension.parameters.surface_controls.z =
+                f32::from(config.0.time.max_building_emission_milli) / 1_000.0;
+            material.extension.parameters.time_cycle = building_material_time_cycle(
+                &config.0.time,
+                simulation.0.elapsed_seconds,
+                time.elapsed_secs_wrapped_f64(),
+            );
+        }
         material.extension.parameters.snow_damage.z =
             building_damage_value(building.health, building_max_health(&content.0, building));
         instance.applied_health = building.health;
         instance.applied_season = simulation.0.season;
         instance.applied_season_blend_bits = season_blend_bits;
-        instance.applied_daylight_bits = daylight_bits;
+        instance.applied_time_cycle = time_cycle_signature;
         updated += 1;
     }
     update_runtime.next_index = (update_runtime.next_index + visited) % update_runtime.order.len();
@@ -42830,6 +42872,9 @@ fn clear_loading_runtime(commands: &mut Commands) {
 fn cleanup_world(
     mut commands: Commands,
     entities: Query<Entity, With<WorldEntity>>,
+    mut building_instances: ResMut<BuildingMaterialInstances>,
+    mut building_update_runtime: ResMut<BuildingMaterialUpdateRuntime>,
+    mut building_materials: Option<ResMut<Assets<BuildingMaterial>>>,
     mut diagnostic_view: ResMut<WorldDiagnosticRuntime>,
     mut station_targets: ResMut<StationTargetRuntime>,
     mut ruler_announcements: ResMut<RulerVoteAnnouncementRuntime>,
@@ -42839,6 +42884,13 @@ fn cleanup_world(
     for entity in &entities {
         commands.entity(entity).try_despawn();
     }
+    if let Some(materials) = building_materials.as_deref_mut() {
+        for instance in building_instances.0.values() {
+            materials.remove(&instance.handle);
+        }
+    }
+    building_instances.0.clear();
+    *building_update_runtime = BuildingMaterialUpdateRuntime::default();
     commands.remove_resource::<WorldRuntime>();
     commands.insert_resource(FineNavigationRuntime::default());
     *diagnostic_view = WorldDiagnosticRuntime::default();
@@ -45422,6 +45474,29 @@ mod tests {
             in_game_sun_transform_for_daylight(first).rotation,
             in_game_sun_transform_for_daylight(second).rotation
         );
+    }
+
+    #[test]
+    fn building_material_cycle_stays_phase_aligned_without_cpu_asset_updates() {
+        let config = GameConfig::default();
+        let app_elapsed_seconds = 2_345.25;
+        for simulation_elapsed_seconds in [0.0, 2_297.0, 2_347.0, 2_400.0, 3_550.0, 85_440.5] {
+            let parameters = building_material_time_cycle(
+                &config.time,
+                simulation_elapsed_seconds,
+                app_elapsed_seconds,
+            );
+            let app_elapsed = Duration::from_secs_f64(app_elapsed_seconds).as_secs_f32();
+            let shader_phase =
+                f64::from(app_elapsed + parameters.w).rem_euclid(f64::from(parameters.x));
+            let cpu = config.time.sample(simulation_elapsed_seconds).daylight;
+            let shader_equivalent = config.time.sample(shader_phase).daylight;
+            assert!((cpu - shader_equivalent).abs() < 0.000_1);
+        }
+
+        let shader = include_str!("../../../assets/shaders/building_material.wgsl");
+        assert!(shader.contains("view_bindings::globals.time"));
+        assert!(shader.contains("(1.0 - building_daylight())"));
     }
 
     #[test]
