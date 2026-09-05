@@ -90,6 +90,10 @@ const NATIVE_GAME_AUDIO_QUEUE_CAPACITY: usize = 64;
 const OFFLINE_FRAME_HOLD: Duration = Duration::from_secs(1);
 const BROADCAST_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const BROADCAST_IO_TIMEOUT_MICROSECONDS: &str = "3000000";
+// At roughly 77 interleaved audio/video packets per second this gives the RTMP
+// writer more than six seconds to absorb a transient ingest stall without
+// blocking capture or the hardware encoder.
+const BROADCAST_FIFO_QUEUE_PACKETS: &str = "512";
 const STREAM_CAPTURE_STAGING_BUFFERS: usize = 4;
 const STREAM_CAPTURE_CPU_QUEUE_CAPACITY: usize = 2;
 const STREAM_CAPTURE_RECYCLED_PIXEL_BUFFERS: usize =
@@ -4526,27 +4530,48 @@ fn discard_pending_audio(receiver: &Receiver<AudioInput>, metrics: &BroadcastMet
     stopped
 }
 
+fn broadcast_output_options(url: &str) -> (&'static str, Dictionary<'static>) {
+    let mut options = Dictionary::new();
+    if url.starts_with("rtmp://") || url.starts_with("rtmps://") {
+        // FFmpeg's FIFO pseudo-muxer owns the potentially blocking RTMP writes
+        // on a separate bounded thread. A full queue deliberately blocks the
+        // encoder instead of silently dropping packets, so sustained bandwidth
+        // failures remain visible to the health monitor.
+        options.set("fifo_format", "flv");
+        options.set("queue_size", BROADCAST_FIFO_QUEUE_PACKETS);
+        options.set("drop_pkts_on_overflow", "0");
+        options.set("attempt_recovery", "1");
+        options.set("recover_any_error", "1");
+        options.set("max_recovery_attempts", "3");
+        options.set("recovery_wait_time", "1");
+        options.set("recovery_wait_streamtime", "0");
+        options.set("restart_with_keyframe", "1");
+        options.set(
+            "format_opts",
+            &format!(
+                "rw_timeout={BROADCAST_IO_TIMEOUT_MICROSECONDS}:rtmp_live=live:tcp_keepalive=1:flvflags=no_duration_filesize"
+            ),
+        );
+        ("fifo", options)
+    } else {
+        options.set("rw_timeout", BROADCAST_IO_TIMEOUT_MICROSECONDS);
+        ("flv", options)
+    }
+}
+
 impl BroadcastEncoder {
     fn open(
         target: &BroadcastTarget,
         config: &BroadcastConfig,
     ) -> Result<(Self, VideoEncoderSelection)> {
-        let mut output_options = Dictionary::new();
-        // FFmpeg protocol timeout is in microseconds. Keep a dead ingest from
-        // pinning the encoder worker indefinitely; reconnect owns the retry.
-        output_options.set("rw_timeout", BROADCAST_IO_TIMEOUT_MICROSECONDS);
-        if target.url.starts_with("rtmp://") || target.url.starts_with("rtmps://") {
-            // Publish as a live source and flush packets promptly. The default
-            // protocol buffering is useful for playback clients, but it adds
-            // avoidable latency and turns a brief ingest stall into a visible
-            // burst for an always-live game producer.
-            output_options.set("rtmp_live", "live");
-            output_options.set("tcp_nodelay", "1");
-            output_options.set("flush_packets", "1");
-            output_options.set("flvflags", "no_duration_filesize");
-        }
-        let mut output = format::output_as_with(&target.url, "flv", output_options)
-            .context("could not connect to the selected Twitch RTMP ingest")?;
+        let (muxer, output_options) = broadcast_output_options(&target.url);
+        let live_network_output = muxer == "fifo";
+        let mut output = if live_network_output {
+            stream_town_ffmpeg_bridge::allocate_fifo_output(&target.url)?
+        } else {
+            format::output_as_with(&target.url, muxer, output_options.clone())
+                .context("could not open the local FLV broadcast target")?
+        };
         let global_header = output
             .format()
             .flags()
@@ -4572,9 +4597,18 @@ impl BroadcastEncoder {
             stream.set_parameters(&audio);
             stream.index()
         };
-        output
-            .write_header()
-            .context("Twitch rejected the FLV stream header")?;
+        if live_network_output {
+            let unused = output
+                .write_header_with(output_options)
+                .context("Twitch rejected the buffered FLV stream header")?;
+            if let Some((option, _)) = unused.iter().next() {
+                bail!("linked FFmpeg FIFO muxer rejected broadcast option '{option}'");
+            }
+        } else {
+            output
+                .write_header()
+                .context("could not write the local FLV stream header")?;
+        }
         let video_time_base = output
             .stream(video_stream)
             .context("FLV video stream disappeared after header write")?
@@ -5072,6 +5106,49 @@ pub fn inspect_broadcast_prerequisites(config: &BroadcastConfig) -> Result<Broad
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_broadcast_uses_a_bounded_recovering_fifo_muxer() {
+        let (muxer, options) =
+            broadcast_output_options("rtmp://example.invalid/app/live_secret_value");
+
+        assert_eq!(muxer, "fifo");
+        assert_eq!(options.get("fifo_format"), Some("flv"));
+        assert_eq!(
+            options.get("queue_size"),
+            Some(BROADCAST_FIFO_QUEUE_PACKETS)
+        );
+        assert_eq!(options.get("drop_pkts_on_overflow"), Some("0"));
+        assert_eq!(options.get("attempt_recovery"), Some("1"));
+        assert_eq!(options.get("restart_with_keyframe"), Some("1"));
+        let format_options = options.get("format_opts").unwrap_or_default();
+        assert!(format_options.contains("rtmp_live=live"));
+        assert!(format_options.contains("tcp_keepalive=1"));
+        assert!(!format_options.contains("tcp_nodelay=1"));
+        assert!(!format_options.contains("flush_packets=1"));
+    }
+
+    #[test]
+    fn linked_ffmpeg_runtime_contains_the_fifo_muxer() {
+        ffmpeg::init().unwrap();
+        let output =
+            stream_town_ffmpeg_bridge::allocate_fifo_output("rtmp://example.invalid/app/test")
+                .unwrap();
+
+        assert_eq!(output.format().name(), "fifo");
+    }
+
+    #[test]
+    fn local_diagnostics_keep_the_direct_flv_muxer() {
+        let (muxer, options) = broadcast_output_options("diagnostic.flv");
+
+        assert_eq!(muxer, "flv");
+        assert_eq!(
+            options.get("rw_timeout"),
+            Some(BROADCAST_IO_TIMEOUT_MICROSECONDS)
+        );
+        assert_eq!(options.get("fifo_format"), None);
+    }
 
     #[test]
     fn reconnect_diagnostics_redact_the_rtmp_target_and_stream_key() {

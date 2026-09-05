@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/stream_town_domain",
+    "crates/stream_town_ffmpeg_bridge",
     "crates/stream_town_game",
     "crates/stream_town_tools",
     "crates/stream_town_migrate",

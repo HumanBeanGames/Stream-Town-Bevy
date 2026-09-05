@@ -6703,6 +6703,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "stream_town_ffmpeg_bridge"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ffmpeg-next",
+]
+
+[[package]]
 name = "stream_town_game"
 version = "0.1.0"
 dependencies = [
@@ -6719,6 +6727,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "stream_town_domain",
+ "stream_town_ffmpeg_bridge",
  "tempfile",
  "tokio",
  "twitch-irc",

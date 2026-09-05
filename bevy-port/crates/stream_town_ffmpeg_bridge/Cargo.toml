@@ -1,0 +1,19 @@
+[package]
+name = "stream_town_ffmpeg_bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# This tiny crate is the audited FFI boundary needed because ffmpeg-next's safe
+# output constructors always open AVIO themselves, which is invalid for the
+# FIFO pseudo-muxer. The rest of the workspace continues to forbid unsafe code.
+[target.'cfg(target_os = "windows")'.dependencies]
+anyhow.workspace = true
+ffmpeg-next.workspace = true
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
