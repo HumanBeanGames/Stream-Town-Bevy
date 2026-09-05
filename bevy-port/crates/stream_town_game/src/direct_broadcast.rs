@@ -4534,12 +4534,13 @@ fn broadcast_output_options(url: &str) -> (&'static str, Dictionary<'static>) {
     let mut options = Dictionary::new();
     if url.starts_with("rtmp://") || url.starts_with("rtmps://") {
         // FFmpeg's FIFO pseudo-muxer owns the potentially blocking RTMP writes
-        // on a separate bounded thread. A full queue deliberately blocks the
-        // encoder instead of silently dropping packets, so sustained bandwidth
-        // failures remain visible to the health monitor.
+        // on a separate bounded thread. The queue absorbs short ingest stalls;
+        // once full it discards stale packets instead of backpressuring capture,
+        // audio, and the hardware encoder. Recovery waits for a keyframe below,
+        // so viewers resume on a decodable boundary after a longer outage.
         options.set("fifo_format", "flv");
         options.set("queue_size", BROADCAST_FIFO_QUEUE_PACKETS);
-        options.set("drop_pkts_on_overflow", "0");
+        options.set("drop_pkts_on_overflow", "1");
         options.set("attempt_recovery", "1");
         options.set("recover_any_error", "1");
         options.set("max_recovery_attempts", "3");
@@ -5118,7 +5119,7 @@ mod tests {
             options.get("queue_size"),
             Some(BROADCAST_FIFO_QUEUE_PACKETS)
         );
-        assert_eq!(options.get("drop_pkts_on_overflow"), Some("0"));
+        assert_eq!(options.get("drop_pkts_on_overflow"), Some("1"));
         assert_eq!(options.get("attempt_recovery"), Some("1"));
         assert_eq!(options.get("restart_with_keyframe"), Some("1"));
         let format_options = options.get("format_opts").unwrap_or_default();
