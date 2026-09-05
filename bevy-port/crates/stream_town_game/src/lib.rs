@@ -37463,6 +37463,20 @@ fn foliage_clearance_regions(
     building_regions.chain(camp_regions).collect()
 }
 
+fn foliage_clearance_cells(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+) -> HashSet<GridPos> {
+    foliage_clearance_regions(content, simulation, world)
+        .into_iter()
+        .flat_map(|region| {
+            (region.min.z..=region.max.z)
+                .flat_map(move |z| (region.min.x..=region.max.x).map(move |x| GridPos { x, z }))
+        })
+        .collect()
+}
+
 fn region_contains_grid_position(
     region: stream_town_domain::DirtyRegion,
     position: GridPos,
@@ -37484,16 +37498,18 @@ fn sync_foliage_clearance(
     mut stats: ResMut<WorldRenderStats>,
     mut foliage: FoliageClearanceQuery,
 ) {
-    let regions = foliage_clearance_regions(&content.0, &simulation.0, &world.generated);
+    // A generated town contains many more foliage entities than occupied
+    // structural cells. Expanding the small set of building/camp rectangles
+    // once avoids testing every foliage entity against every rectangle on every
+    // frame while preserving the exact placement-cell clearance semantics.
+    let structural_cells = foliage_clearance_cells(&content.0, &simulation.0, &world.generated);
     let mut visible_instances = 0;
     for (location, batch, pending_grounding, mut visibility) in &mut foliage {
         if let Some(batch) = batch {
             debug_assert_eq!(batch.0.chunk_x, location.0.x / FOLIAGE_BATCH_CHUNK_CELLS);
             debug_assert_eq!(batch.0.chunk_z, location.0.z / FOLIAGE_BATCH_CHUNK_CELLS);
         }
-        let structure_hidden = regions
-            .iter()
-            .any(|region| region_contains_grid_position(*region, location.0));
+        let structure_hidden = structural_cells.contains(&location.0);
         let wear_score = traversal_wear
             .cells
             .get(&location.0)
@@ -44284,6 +44300,30 @@ mod tests {
         ));
         assert!(foliage_should_be_hidden(true, false, 0.0, &settings));
         assert!(foliage_should_be_hidden(false, true, 0.0, &settings));
+    }
+
+    #[test]
+    fn foliage_clearance_cell_set_matches_structural_regions() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world(&config.world);
+        let mut simulation = WorldSimulation::new(world.seed);
+        ensure_town_hall_state(&content, &config, &mut simulation);
+
+        let regions = foliage_clearance_regions(&content, &simulation, &world);
+        let cells = foliage_clearance_cells(&content, &simulation, &world);
+        for z in 0..world.navigation.height() {
+            for x in 0..world.navigation.width() {
+                let position = GridPos { x, z };
+                assert_eq!(
+                    cells.contains(&position),
+                    regions
+                        .iter()
+                        .any(|region| region_contains_grid_position(*region, position)),
+                    "clearance mismatch at {position:?}"
+                );
+            }
+        }
     }
 
     #[test]
