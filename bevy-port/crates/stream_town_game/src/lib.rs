@@ -26559,7 +26559,9 @@ fn tag_building_model_nodes(
     let names = building_model_node_names(&content.0);
     for (entity, name) in &nodes {
         if !names.contains(name.as_str()) {
-            commands.entity(entity).insert(BuildingModelNodeProcessed);
+            commands
+                .entity(entity)
+                .try_insert(BuildingModelNodeProcessed);
             continue;
         }
         let mut ancestor = entity;
@@ -26567,18 +26569,22 @@ fn tag_building_model_nodes(
         for _ in 0..64 {
             let Ok(parent) = parents.get(ancestor) else {
                 if traversed_parent {
-                    commands.entity(entity).insert(BuildingModelNodeProcessed);
+                    commands
+                        .entity(entity)
+                        .try_insert(BuildingModelNodeProcessed);
                 }
                 break;
             };
             traversed_parent = true;
             ancestor = parent.parent();
             if buildings.contains(ancestor) {
-                commands.entity(entity).insert(BuildingModelNode {
+                commands.entity(entity).try_insert(BuildingModelNode {
                     building_root: ancestor,
                     name: name.as_str().to_owned(),
                 });
-                commands.entity(entity).insert(BuildingModelNodeProcessed);
+                commands
+                    .entity(entity)
+                    .try_insert(BuildingModelNodeProcessed);
                 break;
             }
         }
