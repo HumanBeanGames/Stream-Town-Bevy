@@ -1403,11 +1403,11 @@ pub(crate) fn update_placer_visual(
     let fine = definition
         .placement_footprint_thirds
         .unwrap_or_else(|| definition.footprint.map(|axis| axis.saturating_mul(3)));
-    let legacy = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
+    let model_footprint = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
     let effective = rotated_footprint(fine, placement.rotation_quarter_turns);
     let centre = GridPos {
-        x: placement.position.x.saturating_add(legacy[0] / 2),
-        z: placement.position.z.saturating_add(legacy[1] / 2),
+        x: placement.position.x.saturating_add(model_footprint[0] / 2),
+        z: placement.position.z.saturating_add(model_footprint[1] / 2),
     };
     let fine_cell_size = config.world.cell_size / f32::from(NAVIGATION_SUBDIVISIONS);
     let size = Vec3::new(

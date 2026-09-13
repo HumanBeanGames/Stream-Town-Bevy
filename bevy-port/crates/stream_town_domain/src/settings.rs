@@ -191,9 +191,8 @@ impl Default for PlayerSettings {
                 high_contrast: false,
                 reduced_motion: false,
             },
-            // Temporarily favor short recovery windows while the migrated
-            // runtime is being hardened. The authored Unity intervals remain
-            // available in the settings menu.
+            // Favor short recovery windows for an unattended broadcast. Longer
+            // intervals remain available in the settings menu.
             autosave_minutes: 1,
             timelapse: TimelapseSettings::default(),
         }

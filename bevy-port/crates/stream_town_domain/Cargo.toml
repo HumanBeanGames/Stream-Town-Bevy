@@ -7,7 +7,6 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-flate2.workspace = true
 hex.workspace = true
 indexmap.workspace = true
 ron.workspace = true

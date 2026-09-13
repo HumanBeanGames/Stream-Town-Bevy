@@ -128,7 +128,7 @@ pub fn default_resource_generation_layers() -> Vec<ResourceGenerationLayerDef> {
             habitat: ResourceGenerationHabitat::Land,
             resource: id("resource:wood"),
             target_kind: id("target:tree"),
-            visual_asset_path: "migrated/models/Models/Resources/Env_Tree.glb".to_owned(),
+            visual_asset_path: "shipping/models/Models/Resources/Env_Tree.glb".to_owned(),
             source_size: 300,
             seed: -1_165_233_549,
             noise_scale: 17.0,
@@ -148,7 +148,7 @@ pub fn default_resource_generation_layers() -> Vec<ResourceGenerationLayerDef> {
             habitat: ResourceGenerationHabitat::Land,
             resource: id("resource:ore"),
             target_kind: id("target:ore"),
-            visual_asset_path: "migrated/models/Models/Resources/Env_Ore.glb".to_owned(),
+            visual_asset_path: "shipping/models/Models/Resources/Env_Ore.glb".to_owned(),
             source_size: 300,
             seed: -1_165_233_548,
             noise_scale: 7.0,
@@ -168,7 +168,7 @@ pub fn default_resource_generation_layers() -> Vec<ResourceGenerationLayerDef> {
             habitat: ResourceGenerationHabitat::Land,
             resource: id("resource:food"),
             target_kind: id("target:bush"),
-            visual_asset_path: "migrated/models/Models/Resources/Env_Bush.glb".to_owned(),
+            visual_asset_path: "shipping/models/Models/Resources/Env_Bush.glb".to_owned(),
             source_size: 300,
             seed: -1_165_233_547,
             noise_scale: 7.0,
@@ -188,7 +188,7 @@ pub fn default_resource_generation_layers() -> Vec<ResourceGenerationLayerDef> {
             habitat: ResourceGenerationHabitat::ShorelineWater,
             resource: id("resource:food"),
             target_kind: id("target:fish"),
-            visual_asset_path: "migrated/models/Models/Critters/Fish1.glb".to_owned(),
+            visual_asset_path: "shipping/models/Models/Critters/Fish1.glb".to_owned(),
             source_size: 300,
             seed: 0,
             noise_scale: 1.0,
@@ -1030,7 +1030,7 @@ impl ContentCatalog {
                 return Err(ContentError::InvalidRotatingNode(id.clone()));
             }
             for scene in &archetype.scenes {
-                if !scene.asset_path.starts_with("migrated/models/")
+                if !scene.asset_path.starts_with("shipping/models/")
                     || !Path::new(&scene.asset_path)
                         .extension()
                         .is_some_and(|extension| extension.eq_ignore_ascii_case("glb"))
@@ -1327,7 +1327,7 @@ impl ContentCatalog {
 }
 
 fn valid_asset_path(path: &str) -> bool {
-    path.starts_with("migrated/models/")
+    path.starts_with("shipping/models/")
         && Path::new(path)
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("glb"))

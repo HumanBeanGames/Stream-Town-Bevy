@@ -51,8 +51,10 @@ pub(crate) fn snapshot_world(
             .map(|resource| (resource.id.clone(), resource.amount))
             .collect(),
         traversal_wear: traversal_wear.saved_cells(),
-        legacy_terrain_mesh: world.legacy_terrain_mesh.clone(),
-        legacy_migration: world.legacy_migration.clone(),
+        // Retired importer fields remain empty solely to preserve the native
+        // save envelope's schema-3 checksum contract.
+        legacy_terrain_mesh: None,
+        legacy_migration: None,
     }
 }
 

@@ -1089,7 +1089,7 @@ impl PresentationCatalog {
             };
             let valid = valid_unity_source(&effect.source_guid, &effect.source_path, "prefab")
                 && effect.model_source.starts_with("Assets/")
-                && effect.model_asset_path.starts_with("migrated/models/")
+                && effect.model_asset_path.starts_with("shipping/models/")
                 && portable(&effect.model_source)
                 && portable(&effect.model_asset_path)
                 && finite_positive(effect.duration_seconds)
@@ -1188,7 +1188,7 @@ impl PresentationCatalog {
             let valid = valid_unity_source(&effect.source_guid, &effect.source_path, "prefab")
                 && valid_unity_source(&effect.graph_guid, &effect.graph_source, "vfx")
                 && effect.plus_model_source.starts_with("Assets/")
-                && effect.plus_model_asset_path.starts_with("migrated/models/")
+                && effect.plus_model_asset_path.starts_with("shipping/models/")
                 && portable_path(&effect.plus_model_source)
                 && portable_path(&effect.plus_model_asset_path)
                 && finite_positive(effect.duration_seconds)
@@ -1227,7 +1227,7 @@ impl PresentationCatalog {
                     .all(|byte| byte.is_ascii_hexdigit())
                 && effect.source_path.starts_with("Assets/")
                 && effect.model_source.starts_with("Assets/")
-                && effect.model_asset_path.starts_with("migrated/models/")
+                && effect.model_asset_path.starts_with("shipping/models/")
                 && portable_path(&effect.source_path)
                 && portable_path(&effect.model_source)
                 && portable_path(&effect.model_asset_path);
@@ -1549,7 +1549,7 @@ impl PresentationCatalog {
                         "png" | "tga" | "jpg" | "jpeg"
                     )
                 });
-            if !texture.asset_path.starts_with("migrated/textures/")
+            if !texture.asset_path.starts_with("shipping/textures/")
                 || texture.asset_path.contains("..")
                 || texture.asset_path.contains('\\')
                 || !extension_valid
@@ -1616,7 +1616,7 @@ impl PresentationCatalog {
         }
         for (id, clip) in &self.clips {
             if let Some(path) = &clip.converted_asset_path
-                && (!path.starts_with("migrated/models/")
+                && (!path.starts_with("shipping/models/")
                     || !is_glb_path(path)
                     || path.contains("..")
                     || path.contains('\\'))
@@ -1627,7 +1627,7 @@ impl PresentationCatalog {
                 });
             }
             if let Some(path) = &clip.rig_asset_path
-                && (!path.starts_with("migrated/models/")
+                && (!path.starts_with("shipping/models/")
                     || !is_glb_path(path)
                     || path.contains("..")
                     || path.contains('\\'))
@@ -1831,7 +1831,7 @@ impl PresentationCatalog {
                 });
             }
             if let Some(path) = &binding.animated_scene
-                && (!path.starts_with("migrated/models/")
+                && (!path.starts_with("shipping/models/")
                     || !is_glb_path(path)
                     || path.contains("..")
                     || path.contains('\\'))
@@ -1842,7 +1842,7 @@ impl PresentationCatalog {
                 });
             }
             if let Some(path) = &binding.rig_scene
-                && (!path.starts_with("migrated/models/")
+                && (!path.starts_with("shipping/models/")
                     || !is_glb_path(path)
                     || path.contains("..")
                     || path.contains('\\'))
@@ -2400,7 +2400,7 @@ mod tests {
             source_guid: "a".repeat(32),
             source_path: "Assets/Prefabs/VFX/Environment/VFX_RainingFish.prefab".into(),
             model_source: "Assets/Models/Critters/Critter_Fish3.fbx".into(),
-            model_asset_path: "migrated/models/Models/Critters/Critter_Fish3.glb".into(),
+            model_asset_path: "shipping/models/Models/Critters/Critter_Fish3.glb".into(),
             material: material.clone(),
             duration_seconds: 15.0,
             emission_rate_per_second: 500.0,

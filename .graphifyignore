@@ -12,7 +12,7 @@
 /bevy-port/tests/generated/
 /bevy-port/dist/
 /bevy-port/vcpkg_installed/
-/bevy-port/assets/migrated/
+/bevy-port/assets/shipping/
 
 # Graphify's own derived data beyond the portable checked-in graph.
 /graphify-out/cache/

@@ -32,7 +32,7 @@ cargo run -p stream_town_tools -- --validate-authoring
 | Workflow | Project data | Local/runtime data |
 |---|---|---|
 | Game Authority and World + Nav | `assets/config/game.ron` | `.stream-town/config.ron` |
-| Models, textures, materials, animation, buildings, roles, resource/foliage/camp generation | `assets/content/catalog.ron`, `assets/content/presentation.ron`, `assets/user/models/*.glb`, `assets/migrated/textures/user/*` | None |
+| Models, textures, materials, animation, buildings, roles, resource/foliage/camp generation | `assets/content/catalog.ron`, `assets/content/presentation.ron`, `assets/user/models/*.glb`, `assets/shipping/textures/user/*` | None |
 | Technology content, vote requirements, and graph layout | `assets/content/catalog.ron`, `assets/content/technology_layout.ron` | None |
 | Player settings | None | `.stream-town/settings.ron`, edited from the local operator panel or game menus |
 | Twitch accounts and credentials | None | Main Menu > Secrets and the OS credential vault |

@@ -9,9 +9,10 @@ sets; authored gameplay data is loaded from validated RON catalogs.
 - `stream_town_domain` owns deterministic simulation, commands, configuration,
   authored content schemas, world generation, and native save/settings formats.
   It does not depend on Bevy rendering or Twitch transport.
-- `stream_town_game` adapts the domain to Bevy. `app.rs` is the composition root
-  and schedule, `runtime/` contains focused ECS plugins such as city timelapse,
-  and the broadcast, profiling, music, and Twitch modules own their respective
+- `stream_town_game` adapts the domain to Bevy. `app.rs` is the compact
+  composition root; lifecycle schedule ownership is split across the plugins in
+  `app/`. `runtime/` contains focused ECS features such as city timelapse, and
+  the broadcast, profiling, music, and Twitch modules own their respective
   external boundaries.
 - `stream_town_tools` is the native authoring application for game balance,
   buildings, roles, technology, assets, terrain, music, and validation.
@@ -30,7 +31,8 @@ the simulation, and presentation systems reconcile ECS entities from that state.
 Cross-feature reactions should use typed Bevy messages or observers. For
 example, a confirmed build emits `CityTimelapseBuildConfirmed`; the timelapse
 plugin consumes it without the command processor knowing timer internals.
-Systems that require strict ordering belong to named `SystemSet`s in `app.rs`.
+Systems that require strict ordering belong to named `SystemSet`s and focused
+lifecycle plugins under `app/`.
 
 ## Design rules
 
@@ -46,7 +48,8 @@ Systems that require strict ordering belong to named `SystemSet`s in `app.rs`.
 - Preserve native save-schema upgrades needed by existing towns. Historical
   source-engine provenance in authored data may remain metadata, but no runtime
   or tool may require the retired source project.
-- Put tests in a module file rather than embedding them in the runtime source.
+- Put tests in focused files under `src/tests/` rather than embedding them in
+  runtime source or collecting them in a monolith.
 
 ## Verification
 

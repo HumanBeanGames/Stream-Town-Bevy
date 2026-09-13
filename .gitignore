@@ -14,20 +14,20 @@
 
 # Converted runtime assets are allow-listed by distributable format. Conversion
 # reports, source intermediates, and logs are intentionally not source inputs.
-/bevy-port/assets/migrated/*
-!/bevy-port/assets/migrated/models/
-/bevy-port/assets/migrated/models/*
-!/bevy-port/assets/migrated/models/**/
-!/bevy-port/assets/migrated/models/**/*.glb
-!/bevy-port/assets/migrated/fonts/
-!/bevy-port/assets/migrated/fonts/*.ttf
-!/bevy-port/assets/migrated/textures/
-/bevy-port/assets/migrated/textures/*
-!/bevy-port/assets/migrated/textures/**/
-!/bevy-port/assets/migrated/textures/**/*.png
-!/bevy-port/assets/migrated/textures/**/*.tga
-!/bevy-port/assets/migrated/textures/**/*.jpg
-!/bevy-port/assets/migrated/textures/**/*.jpeg
+/bevy-port/assets/shipping/*
+!/bevy-port/assets/shipping/models/
+/bevy-port/assets/shipping/models/*
+!/bevy-port/assets/shipping/models/**/
+!/bevy-port/assets/shipping/models/**/*.glb
+!/bevy-port/assets/shipping/fonts/
+!/bevy-port/assets/shipping/fonts/*.ttf
+!/bevy-port/assets/shipping/textures/
+/bevy-port/assets/shipping/textures/*
+!/bevy-port/assets/shipping/textures/**/
+!/bevy-port/assets/shipping/textures/**/*.png
+!/bevy-port/assets/shipping/textures/**/*.tga
+!/bevy-port/assets/shipping/textures/**/*.jpg
+!/bevy-port/assets/shipping/textures/**/*.jpeg
 
 # Local Codex and graphify caches. The portable graph, report, and manifest stay
 # versioned.

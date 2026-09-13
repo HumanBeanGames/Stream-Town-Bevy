@@ -17,9 +17,9 @@ test, package, or run the game.
   Technology is a graph-first editor with add/select/right-click/keyboard edge
   connections and typed vote
   requirements; World + Nav edits and previews land/water resources, foliage,
-  and enemy-camp ranges without a redundant A* probe.
-  Runtime, player-settings, Twitch, and generic ECS-inspector tabs were removed
-  in favor of the shipping menus and local operator panel.
+  and enemy-camp ranges without a redundant A* probe. Player Settings, Runtime,
+  and Twitch expose the local configuration and operator workflows directly;
+  the generic ECS inspector remains intentionally absent from the shipping tool.
 - `xtask`: repository validation and repeatable developer automation.
 
 The Technology tab is an interactive editor rather than only a record inspector.
@@ -45,6 +45,18 @@ resource layers, every foliage-noise layer, and enemy-camp placement,
 then renders elevation, occupancy, resource, foliage, camp-range, and GLB model
 previews using the production deterministic generator. See
 [`AUTHORING.md`](AUTHORING.md) for paths and the safe-save workflow.
+
+## Runtime architecture
+
+The Bevy app is composed from focused lifecycle plugins under
+`crates/stream_town_game/src/app/`: boot, shared runtime, main menu, world
+loading, gameplay, presentation, and credits. Persistent simulation state lives
+in `stream_town_domain`; presentation, input, broadcast, and runtime-control
+systems remain separate consumers. Cross-subsystem persistence requests and
+timelapse build confirmations use Bevy messages, while menu-local edit state
+stays in scoped resources. Large presentation, control, broadcast, tool, and
+test surfaces are grouped into named subsystem folders rather than monolithic
+source files.
 
 ## Commands
 
@@ -350,11 +362,6 @@ source-driven parity test reads Unity's shipping `CommandDictionary.cs` and
 requires every registered command to retain both a Bevy parser path and an entry
 in the public `!help` reference.
 
-For an automated legacy-load smoke test, set `STREAM_TOWN_SAVE_PATH` to an
-imported `.stbevy` file and `STREAM_TOWN_AUTO_LOAD=1`. A retained schema-1
-terrain mesh is validated during conversion and native-save reads, rebuilt as a
-Bevy render mesh and Avian collider on load, and preserved by later native saves.
-
 Building type arguments use one no-space PascalCase name (`OreStorage`,
 `ProspectorHut`, and so on). `!build` starts a Unity-style per-player placement preview at the last successful
 position, `!move`/direction aliases and `!rotate` adjust
@@ -376,8 +383,8 @@ cells where the centreline steps diagonally.
 one-based per-type BID numbers; `!upgrade <BuildingName> <BID> [levels]`,
 `!rotatebuilding`, `!buildinglight`, and Ruler-only `!remove` consume those same
 numbers. An untouched placement expires after 60 seconds. Placed rotation, occupancy, station/target
-geometry, and last player placement round-trip through native saves; the legacy
-importer retains authored building Y rotation. Confirmed structures spawn the
+geometry, and last player placement round-trip through native saves, including
+authored building Y rotation. Confirmed structures spawn the
 converted building GLB with a primitive fallback. New
 structures start at Unity's 10% construction health; Builder agents path to a
 reachable perimeter cell—including every diagonal corner and open fine-grid
@@ -432,8 +439,8 @@ Ruler governance follows the shipping Unity rules: the first election is
 scheduled after 30 seconds, ballots wait indefinitely for the first vote and
 then run for 120 seconds, each joined player votes once, and elected rulers face
 an hourly yes/no retention vote. Ruler identity, previous role, active ballot,
-tallies, and cooldown survive native saves; the legacy importer restores ruler
-names and vote cooldowns. Election wins assign `role:ruler`, while replacement
+tallies, ruler names, and cooldown survive native saves. Election wins assign
+`role:ruler`, while replacement
 or `!resign` restores the prior role. `!buy`, `!sell`, `!recruit`, `!recruits`,
 and `!save` enforce ruler-or-staff access, while `!rulervote` remains a
 broadcaster/moderator command. Any viewer can use `!event` once per shared
@@ -554,8 +561,8 @@ requires land, a clear building footprint, and a route to the active Town Hall;
 the maximum is an upper bound when the generated island cannot satisfy every
 attempt. Camp footprints block enemy navigation and clear overlapping resource
 and foliage presentation. Native saves created before schema 34 receive the
-same seed-derived camps when their saved camp map is empty; no legacy-save
-coordinates are read to generate them.
+same seed-derived camps when their saved camp map is empty; imported coordinates
+are not used to generate them.
 
 The clock retains Unity's shipping 3,600-second day, 66.6% daylight boundary,
 and 100-second dusk/dawn transitions; its 10/5 day/night light values drive sun,
@@ -606,11 +613,11 @@ enemies across eligible camp spawn points, and the final Minotaur Boss has at
 least 1,000 health or 50 health per active player/recruit. The next wave waits
 for every tracked member to die. Enemy archetype, camp timers and members, wave
 progress, tracked enemies, and the next stable enemy ID survive native saves;
-legacy enemy and camp names resolve back to catalog archetypes.
+historical enemy and camp aliases resolve back to catalog archetypes.
 Native load also repositions the persistent Town Hall ECS root, presentation
 origin, rotation, and lower-left grid location from the saved footprint. Its
 rendered position therefore stays aligned with navigation occupancy, worker
-stations, selection, combat targeting, and legacy-imported transforms.
+stations, selection, combat targeting, and persisted transforms.
 Actor restore uses the same player-only completed-gate exception as live pathing.
 When a saved actor must otherwise move off a blocked cell, the relocated grid
 position is written to both the ECS agent and authoritative simulation state.
@@ -691,13 +698,13 @@ at half its authored repetition frequency so each visible square covers one
 complete logical cell. Runtime-generated terrain now follows the
 shipping Unity scale: 200x200 samples, two-unit cells, half-unit height
 quantization, the authored terrain curve and island falloff, and globally
-normalized multi-octave noise generated from Unity-compatible `System.Random`
+normalized multi-octave noise generated from the shipping-compatible random
 offsets. It is emitted as one mesh and one full-resolution Avian collider, as
 Unity's `ProceduralMeshGenerator` did. Removing independently shaded and
 LOD-switched render chunks eliminates visible cracks and lighting changes at
-former chunk boundaries without changing navigation or save hashes. Schema-1
-saves with an explicit Unity terrain mesh retain that mesh as one exact legacy
-surface. A second PBR
+former chunk boundaries without changing navigation or save hashes. Native
+saves reconstruct this deterministic terrain rather than carrying a second
+imported mesh representation. A second PBR
 extension ports the reachable water material's shallow/deep colors, animated
 dual-noise wind, foam controls, transparency, and winter ice pattern. A
 terrain-matched 47,089-vertex water mesh carries deterministic depth into the

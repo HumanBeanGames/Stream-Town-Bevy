@@ -1,11 +1,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::{self, Read, Write},
+    fs::{self, OpenOptions},
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 
-use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -18,7 +17,6 @@ pub const CURRENT_WORLD_SNAPSHOT_SCHEMA: u32 = 3;
 /// thresholds are authored as sustained crossings per minute and converted at runtime.
 pub const MAX_TRAVERSAL_WEAR_SCORE: f32 = 1_000_000_000_000.0;
 pub const NATIVE_SAVE_BACKUP_GENERATIONS: usize = 5;
-const LEGACY_MAGIC: &[u8; 4] = b"STSV";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ActorKind {
@@ -41,25 +39,28 @@ pub struct SavedActor {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct SavedTerrainMesh {
+#[doc(hidden)]
+/// Retired payload shape kept only because schema-3 checksums include these
+/// fields. The shipping runtime neither creates nor renders this mesh.
+pub struct RetiredTerrainMesh {
     pub vertices: Vec<[f32; 3]>,
     pub triangle_indices: Vec<i32>,
     pub uvs: Vec<[f32; 2]>,
     pub uses_32_bit_indices: bool,
 }
 
-impl SavedTerrainMesh {
-    pub fn validate(&self) -> Result<(), SavedTerrainMeshError> {
+impl RetiredTerrainMesh {
+    pub fn validate(&self) -> Result<(), RetiredTerrainMeshError> {
         if self.vertices.len() < 3 {
-            return Err(SavedTerrainMeshError::VertexCount(self.vertices.len()));
+            return Err(RetiredTerrainMeshError::VertexCount(self.vertices.len()));
         }
         if self.triangle_indices.is_empty() || !self.triangle_indices.len().is_multiple_of(3) {
-            return Err(SavedTerrainMeshError::TriangleIndexCount(
+            return Err(RetiredTerrainMeshError::TriangleIndexCount(
                 self.triangle_indices.len(),
             ));
         }
         if !self.uvs.is_empty() && self.uvs.len() != self.vertices.len() {
-            return Err(SavedTerrainMeshError::UvCount {
+            return Err(RetiredTerrainMeshError::UvCount {
                 vertices: self.vertices.len(),
                 uvs: self.uvs.len(),
             });
@@ -69,25 +70,25 @@ impl SavedTerrainMesh {
             .iter()
             .any(|vertex| vertex.iter().any(|coordinate| !coordinate.is_finite()))
         {
-            return Err(SavedTerrainMeshError::NonFiniteVertex);
+            return Err(RetiredTerrainMeshError::NonFiniteVertex);
         }
         if self
             .uvs
             .iter()
             .any(|uv| uv.iter().any(|coordinate| !coordinate.is_finite()))
         {
-            return Err(SavedTerrainMeshError::NonFiniteUv);
+            return Err(RetiredTerrainMeshError::NonFiniteUv);
         }
         for (position, index) in self.triangle_indices.iter().copied().enumerate() {
             let Ok(index) = usize::try_from(index) else {
-                return Err(SavedTerrainMeshError::IndexOutOfBounds {
+                return Err(RetiredTerrainMeshError::IndexOutOfBounds {
                     position,
                     index,
                     vertices: self.vertices.len(),
                 });
             };
             if index >= self.vertices.len() {
-                return Err(SavedTerrainMeshError::IndexOutOfBounds {
+                return Err(RetiredTerrainMeshError::IndexOutOfBounds {
                     position,
                     index: i32::try_from(index).unwrap_or(i32::MAX),
                     vertices: self.vertices.len(),
@@ -99,7 +100,8 @@ impl SavedTerrainMesh {
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub enum SavedTerrainMeshError {
+#[doc(hidden)]
+pub enum RetiredTerrainMeshError {
     #[error("retained terrain mesh must contain at least three vertices, found {0}")]
     VertexCount(usize),
     #[error("retained terrain mesh index count must be a non-zero multiple of three, found {0}")]
@@ -121,7 +123,9 @@ pub enum SavedTerrainMeshError {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct LegacyMigrationMetadata {
+#[doc(hidden)]
+/// Retired payload shape kept only for schema-3 checksum compatibility.
+pub struct RetiredMigrationMetadata {
     pub source_schema_version: u32,
     pub source_container_version: Option<u32>,
     pub source_terrain_generator_version: i32,
@@ -144,9 +148,11 @@ pub struct WorldSnapshot {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub traversal_wear: BTreeMap<GridPos, f32>,
     #[serde(default)]
-    pub legacy_terrain_mesh: Option<SavedTerrainMesh>,
+    #[doc(hidden)]
+    pub legacy_terrain_mesh: Option<RetiredTerrainMesh>,
     #[serde(default)]
-    pub legacy_migration: Option<LegacyMigrationMetadata>,
+    #[doc(hidden)]
+    pub legacy_migration: Option<RetiredMigrationMetadata>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -154,19 +160,6 @@ struct NativeSaveEnvelope {
     format_version: u32,
     payload_checksum: String,
     payload: WorldSnapshot,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct LegacySaveInfo {
-    pub kind: LegacySaveKind,
-    pub source_size_bytes: u64,
-    pub payload_schema_version: Option<u32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub enum LegacySaveKind {
-    Binary { container_version: u32 },
-    Json,
 }
 
 #[derive(Debug, Error)]
@@ -182,7 +175,7 @@ pub enum NativeSaveError {
     #[error("native save checksum mismatch")]
     Checksum,
     #[error("native save retained terrain mesh is invalid: {0}")]
-    TerrainMesh(#[from] SavedTerrainMeshError),
+    TerrainMesh(#[from] RetiredTerrainMeshError),
     #[error("unsupported world snapshot schema {0}")]
     SnapshotSchema(u32),
     #[error("unsupported world simulation schema {0}")]
@@ -214,18 +207,6 @@ pub enum NativeSaveError {
     MissingSavedActor(StableId),
     #[error("terrain traversal wear at {position:?} has invalid score {score}")]
     InvalidTraversalWear { position: GridPos, score: f32 },
-    #[error("legacy save header is incomplete")]
-    LegacyHeader,
-    #[error("file is not a recognized Stream Town save")]
-    UnknownLegacyFormat,
-    #[error("unsupported legacy container version {0}")]
-    LegacyContainer(u32),
-    #[error("unsupported legacy payload schema {0}")]
-    LegacySchema(u32),
-    #[error("legacy compressed payload is invalid: {0}")]
-    LegacyCompression(io::Error),
-    #[error("legacy JSON is invalid: {0}")]
-    LegacyJson(serde_json::Error),
 }
 
 pub struct NativeSaveStore {
@@ -330,65 +311,6 @@ impl NativeSaveStore {
         fs::rename(&self.path, self.backup_path())?;
         Ok(())
     }
-}
-
-pub fn inspect_legacy_save(path: &Path) -> Result<LegacySaveInfo, NativeSaveError> {
-    let source_size_bytes = path.metadata()?.len();
-    let mut file = File::open(path)?;
-    let mut prefix = [0_u8; 8];
-    let read = file.read(&mut prefix)?;
-    if read == 0 {
-        return Err(NativeSaveError::LegacyHeader);
-    }
-
-    if read >= 4 && &prefix[..4] == LEGACY_MAGIC {
-        if read < 8 {
-            return Err(NativeSaveError::LegacyHeader);
-        }
-        let container_version = u32::from_le_bytes(prefix[4..8].try_into().expect("four bytes"));
-        if container_version != 1 {
-            return Err(NativeSaveError::LegacyContainer(container_version));
-        }
-        let mut compressed_payload = Vec::new();
-        file.read_to_end(&mut compressed_payload)?;
-        let mut decoder = GzDecoder::new(compressed_payload.as_slice());
-        let mut schema_bytes = [0_u8; 4];
-        decoder
-            .read_exact(&mut schema_bytes)
-            .map_err(NativeSaveError::LegacyCompression)?;
-        let schema = u32::from_le_bytes(schema_bytes);
-        if !(1..=3).contains(&schema) {
-            return Err(NativeSaveError::LegacySchema(schema));
-        }
-        return Ok(LegacySaveInfo {
-            kind: LegacySaveKind::Binary { container_version },
-            source_size_bytes,
-            payload_schema_version: Some(schema),
-        });
-    }
-
-    let mut bytes = prefix[..read].to_vec();
-    file.read_to_end(&mut bytes)?;
-    if bytes
-        .iter()
-        .copied()
-        .find(|byte| !byte.is_ascii_whitespace())
-        == Some(b'{')
-    {
-        let value: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(NativeSaveError::LegacyJson)?;
-        let schema = value
-            .get("SchemaVersion")
-            .or_else(|| value.get("schemaVersion"))
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok());
-        return Ok(LegacySaveInfo {
-            kind: LegacySaveKind::Json,
-            source_size_bytes,
-            payload_schema_version: schema,
-        });
-    }
-    Err(NativeSaveError::UnknownLegacyFormat)
 }
 
 fn load_native(path: &Path) -> Result<WorldSnapshot, NativeSaveError> {
@@ -516,7 +438,6 @@ fn snapshot_checksum(snapshot: &WorldSnapshot) -> Result<String, ron::Error> {
 
 #[cfg(test)]
 mod tests {
-    use flate2::{Compression, write::GzEncoder};
     use tempfile::tempdir;
 
     use super::*;
@@ -832,7 +753,7 @@ mod tests {
         let directory = tempdir().unwrap();
         let store = NativeSaveStore::new(directory.path().join("save.stbevy"));
         let mut terrain_save = snapshot(4);
-        terrain_save.legacy_terrain_mesh = Some(SavedTerrainMesh {
+        terrain_save.legacy_terrain_mesh = Some(RetiredTerrainMesh {
             vertices: vec![[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [0.0, 2.0, 1.0]],
             triangle_indices: vec![0, 1, 2],
             uvs: Vec::new(),
@@ -847,7 +768,7 @@ mod tests {
         let directory = tempdir().unwrap();
         let store = NativeSaveStore::new(directory.path().join("save.stbevy"));
         let mut terrain_save = snapshot(4);
-        terrain_save.legacy_terrain_mesh = Some(SavedTerrainMesh {
+        terrain_save.legacy_terrain_mesh = Some(RetiredTerrainMesh {
             vertices: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
             triangle_indices: vec![0, 1, 3],
             uvs: vec![[0.0, 0.0]; 3],
@@ -856,26 +777,9 @@ mod tests {
         assert!(matches!(
             store.write(&terrain_save),
             Err(NativeSaveError::TerrainMesh(
-                SavedTerrainMeshError::IndexOutOfBounds { .. }
+                RetiredTerrainMeshError::IndexOutOfBounds { .. }
             ))
         ));
         assert!(!store.path().exists());
-    }
-
-    #[test]
-    fn inspects_legacy_binary_header_without_modifying_source() {
-        let directory = tempdir().unwrap();
-        let path = directory.path().join("StreamTownSave.stsave");
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
-        encoder.write_all(&3_u32.to_le_bytes()).unwrap();
-        encoder.write_all(b"payload").unwrap();
-        let mut bytes = b"STSV".to_vec();
-        bytes.extend_from_slice(&1_u32.to_le_bytes());
-        bytes.extend_from_slice(&encoder.finish().unwrap());
-        fs::write(&path, bytes).unwrap();
-        let before = fs::read(&path).unwrap();
-        let info = inspect_legacy_save(&path).unwrap();
-        assert_eq!(info.payload_schema_version, Some(3));
-        assert_eq!(fs::read(&path).unwrap(), before);
     }
 }
