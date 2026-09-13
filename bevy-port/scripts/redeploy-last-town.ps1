@@ -12,6 +12,25 @@ $ErrorActionPreference = 'Stop'
 $workspaceRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $saveDirectory = Join-Path $workspaceRoot '.stream-town\saves'
 
+function Resolve-StreamTownTwitchClientId {
+    $configured = [Environment]::GetEnvironmentVariable(
+        'STREAM_TOWN_TWITCH_CLIENT_ID',
+        [EnvironmentVariableTarget]::Process
+    )
+    if (-not [string]::IsNullOrWhiteSpace($configured)) {
+        return $configured.Trim()
+    }
+    $credentialListing = (& cmdkey.exe /list 2>$null) -join "`n"
+    $credential = [regex]::Match(
+        $credentialListing,
+        'broadcast:([A-Za-z0-9]+):[^\s]+\.stream-town-twitch'
+    )
+    if (-not $credential.Success) {
+        throw 'No authorized Stream Town broadcaster credential was found. Authorize Twitch from the Secrets menu first.'
+    }
+    return $credential.Groups[1].Value
+}
+
 if (Get-Process -Name stream_town_game -ErrorAction SilentlyContinue) {
     throw 'Stream Town is already running. Exit it normally first so the active town is saved before redeploying.'
 }
@@ -127,6 +146,11 @@ try {
         'STREAM_TOWN_AUTOSTART',
         [EnvironmentVariableTarget]::Process
     )
+    $previousClientId = [Environment]::GetEnvironmentVariable(
+        'STREAM_TOWN_TWITCH_CLIENT_ID',
+        [EnvironmentVariableTarget]::Process
+    )
+    $twitchClientId = Resolve-StreamTownTwitchClientId
     $previousProcessPath = $env:PATH
     try {
         if ($NewTown) {
@@ -142,6 +166,7 @@ try {
             $env:STREAM_TOWN_AUTO_RESUME_PATH = $selectedSave.FullName
         }
         $env:STREAM_TOWN_AUTO_GO_LIVE = '1'
+        $env:STREAM_TOWN_TWITCH_CLIENT_ID = $twitchClientId
         $env:PATH = "$nativeRuntime;$previousProcessPath"
         $game = Start-Process `
             -FilePath $executable `
@@ -178,6 +203,12 @@ try {
         }
         else {
             $env:STREAM_TOWN_AUTOSTART = $previousAutostart
+        }
+        if ($null -eq $previousClientId) {
+            Remove-Item Env:\STREAM_TOWN_TWITCH_CLIENT_ID -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:STREAM_TOWN_TWITCH_CLIENT_ID = $previousClientId
         }
         $env:PATH = $previousProcessPath
     }

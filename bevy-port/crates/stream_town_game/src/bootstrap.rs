@@ -190,10 +190,38 @@ pub fn load_runtime_config() -> AnyResult<GameConfig> {
     } else {
         include_str!("../../../assets/config/game.ron").to_owned()
     };
-    ron::from_str::<GameConfig>(&encoded)
+    let mut config = ron::from_str::<GameConfig>(&encoded)
         .context("runtime config is invalid RON")?
         .upgrade()
-        .context("runtime config failed validation")
+        .context("runtime config failed validation")?;
+    if std::env::var_os("STREAM_TOWN_AUTO_GO_LIVE").is_some() {
+        configure_automatic_live(
+            &mut config,
+            std::env::var("STREAM_TOWN_TWITCH_CLIENT_ID")
+                .ok()
+                .as_deref(),
+        )?;
+    }
+    Ok(config)
+}
+
+pub(crate) fn configure_automatic_live(
+    config: &mut GameConfig,
+    client_id: Option<&str>,
+) -> AnyResult<()> {
+    if let Some(client_id) = client_id.filter(|value| !value.trim().is_empty()) {
+        client_id.trim().clone_into(&mut config.twitch.client_id);
+    }
+    if config.twitch.client_id.trim().is_empty() {
+        anyhow::bail!(
+            "automatic live deployment requires STREAM_TOWN_TWITCH_CLIENT_ID or a configured Twitch client ID"
+        );
+    }
+    config.twitch.enabled = true;
+    config.twitch.broadcast.enabled = true;
+    config
+        .validate()
+        .context("automatic live deployment config failed validation")
 }
 
 #[must_use]

@@ -713,6 +713,20 @@ pub(crate) fn load_input(
         }
     }
     ensure_town_hall_state(&content.0, &restored_config, &mut snapshot.simulation);
+    let town_hall_id = StableId::new("building:townhall").expect("static ID");
+    let cleared_trees = clear_seeded_trees_under_building(
+        &content.0,
+        &snapshot.simulation,
+        &mut restored_world,
+        &town_hall_id,
+    );
+    if cleared_trees > 0 {
+        persisted_upgrade = true;
+        info!(
+            cleared_trees,
+            "cleared saved seeded trees beneath the Town Hall"
+        );
+    }
     snapshot
         .simulation
         .upgrade_time_schema(restored_config.time.seconds_per_day);
@@ -3309,6 +3323,85 @@ pub(crate) fn foliage_clearance_cells(
         .collect()
 }
 
+pub(crate) fn foliage_clearance_navigation_cells(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+) -> HashSet<GridPos> {
+    let mut cells = HashSet::new();
+    for building in simulation.buildings.values() {
+        let Some((building_id, definition)) = content
+            .buildings
+            .iter()
+            .find(|(_, definition)| definition.archetype == building.archetype)
+        else {
+            continue;
+        };
+        if is_path_building(building_id) {
+            continue;
+        }
+        cells.extend(building_fine_placement_cells(
+            content,
+            simulation,
+            building,
+            building_id,
+            definition,
+        ));
+    }
+    for camp in simulation.enemy_camps.values() {
+        let Some(archetype) = content.archetypes.get(&camp.archetype) else {
+            continue;
+        };
+        if let Some(region) = building_region(camp.position, archetype.footprint, world) {
+            cells.extend(fine_cells_for_coarse_region(region));
+        }
+    }
+    cells
+}
+
+pub(crate) fn clear_seeded_trees_under_building(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &mut GeneratedWorld,
+    building_id: &StableId,
+) -> usize {
+    let Some(building) = simulation.buildings.get(building_id) else {
+        return 0;
+    };
+    let Some((definition_id, definition)) = content
+        .buildings
+        .iter()
+        .find(|(_, definition)| definition.archetype == building.archetype)
+    else {
+        return 0;
+    };
+    let occupied =
+        building_fine_navigation_cells(content, simulation, building, definition_id, definition)
+            .into_iter()
+            .collect::<HashSet<_>>();
+    let mut removed_positions = Vec::new();
+    world.resources.retain(|resource| {
+        let remove = resource.target_kind.as_str() == "target:tree"
+            && occupied.contains(&placement_to_navigation_centre(resource.position));
+        if remove {
+            removed_positions.push(resource.position);
+        }
+        !remove
+    });
+    for position in &removed_positions {
+        if !resource_cell_has_active_generation_occupant(&world.resources, *position) {
+            let _ = world.navigation.set_blocked(
+                stream_town_domain::DirtyRegion {
+                    min: *position,
+                    max: *position,
+                },
+                false,
+            );
+        }
+    }
+    removed_positions.len()
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct FoliageClearanceInputSignature {
     structures: u64,
@@ -3362,6 +3455,13 @@ pub(crate) fn foliage_clearance_input_signature(
         structures = fold_u64(
             structures,
             u64::from(definition.footprint[0]) | (u64::from(definition.footprint[1]) << 16),
+        );
+        let placement = definition
+            .placement_footprint_thirds
+            .unwrap_or_else(|| definition.footprint.map(|axis| axis.saturating_mul(3)));
+        structures = fold_u64(
+            structures,
+            u64::from(placement[0]) | (u64::from(placement[1]) << 16),
         );
     }
     for camp in simulation.enemy_camps.values() {
@@ -3463,13 +3563,18 @@ pub(crate) fn sync_foliage_clearance(
     // input signature above also avoids repeating this full scan on frames where
     // no structure, path, wear threshold, grounding, or foliage membership changed.
     let structural_cells = foliage_clearance_cells(&content.0, &simulation.0, &world.generated);
+    let structural_navigation_cells =
+        foliage_clearance_navigation_cells(&content.0, &simulation.0, &world.generated);
     let mut visible_instances = 0;
     for (location, navigation_location, batch, pending_grounding, mut visibility) in &mut foliage {
         if let Some(batch) = batch {
             debug_assert_eq!(batch.0.chunk_x, location.0.x / FOLIAGE_BATCH_CHUNK_CELLS);
             debug_assert_eq!(batch.0.chunk_z, location.0.z / FOLIAGE_BATCH_CHUNK_CELLS);
         }
-        let structure_hidden = structural_cells.contains(&location.0);
+        let structure_hidden = navigation_location.map_or_else(
+            || structural_cells.contains(&location.0),
+            |location| structural_navigation_cells.contains(&location.0),
+        );
         let path_hidden = navigation_location.is_some_and(|location| {
             paths
                 .as_deref()

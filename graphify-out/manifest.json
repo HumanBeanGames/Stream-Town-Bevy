@@ -1,235 +1,205 @@
 {
   "bevy-port/crates/stream_town_domain/src/command.rs": {
     "mtime": 1789290518.0607445,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "e40007f1f751615765775f6dcdce7b29",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/config.rs": {
-    "mtime": 1789290103.1338348,
-    "seen": 1789302895.0116308,
-    "ast_hash": "0c9d764ea565ebce34515af27c43c726",
+    "mtime": 1789304345.5402408,
+    "seen": 1789305947.202303,
+    "ast_hash": "cd01f0b632fe3a3d53e310ff4694a243",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/content.rs": {
     "mtime": 1789285886.6232617,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "725b3b2c33bed59a7454ce80b32705ec",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/id.rs": {
     "mtime": 1786459028.1128929,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "febf9ee235eaf3582ad635470a7e514d",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/lib.rs": {
     "mtime": 1789290518.0817928,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "b03e493cfb8204f66e52dc73f62d9051",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/navigation.rs": {
     "mtime": 1788546437.3182929,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "095433b81b300d4400d3e3ed5ea96f6c",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/save.rs": {
     "mtime": 1788488092.8472927,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "b887ee15e8a597c9f07448e3490c13b5",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/simulation.rs": {
     "mtime": 1789291272.7566366,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "0a23a1d097f5f6e61c5457783e5d022d",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/world.rs": {
     "mtime": 1789290112.996782,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "8e60417d4f70212e4a340a5ffa988e7d",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
     "mtime": 1789301939.3267667,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "f71ffb7b4742af1cb19d4f944d106cd5",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {
     "mtime": 1787811431.0644915,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "9156e2a091e56cfba928f114f08f131d",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_tools/src/main.rs": {
     "mtime": 1789291607.0569267,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "b3e660c4dc80c46a0dfeb2210d34c534",
     "semantic_hash": ""
   },
   "bevy-port/xtask/src/main.rs": {
     "mtime": 1789291818.7632976,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "725fa747073007286aa3636178dd40d1",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/SKILL.md": {
     "mtime": 1786458210.8281426,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "d8e625f8e11c01b1428d510f2b185986",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/references/add-watch.md": {
     "mtime": 1786458210.8291464,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "58c888b5ec0689a886543dd765c1acc9",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/references/exports.md": {
     "mtime": 1786458210.8301578,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "ecc0c36852fee4ba6280cdf2b9149039",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/references/extraction-spec.md": {
     "mtime": 1786458210.8301578,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "e36dd450e4a3a90f5fe9073f4198fabc",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/references/github-and-merge.md": {
     "mtime": 1786458210.831158,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "aa0e7ef186392cad062e60483ca7dbbf",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/references/hooks.md": {
     "mtime": 1786458210.831158,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "0045c2f12c69bff3a641a8908a1ac057",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/references/query.md": {
     "mtime": 1786458210.831158,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "852ef14334d60a75ae666ea103d4c4f0",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/references/transcribe.md": {
     "mtime": 1786458210.831158,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "5c6a9af05d12b5797b2fa8b9493dcc37",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/references/update.md": {
     "mtime": 1786458210.8326616,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "07bf4293ea21b4e00a9655dd4e7f0af5",
     "semantic_hash": ""
   },
   ".github/workflows/bevy.yml": {
     "mtime": 1789289950.29729,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "0864f458ffce8c8765e39a8b24bcfcdc",
     "semantic_hash": ""
   },
   "AGENTS.md": {
     "mtime": 1787454407.733564,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "ac0d64d048f6bfa3de5151c49f663757",
     "semantic_hash": ""
   },
   "ARCHITECTURE.md": {
     "mtime": 1789289950.29729,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "db659deb85e9dd9a881ea88d0ad5aabb",
     "semantic_hash": ""
   },
   "README.md": {
     "mtime": 1789289950.2962866,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "3311afea93236ed6ac78f10c88f197cd",
     "semantic_hash": ""
   },
   "TWITCH_SETUP.md": {
     "mtime": 1787927192.850881,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "26ce87a9dc898c3e8806f026eb576b3a",
     "semantic_hash": ""
   },
   "bevy-port/README.md": {
     "mtime": 1789301919.450206,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "5cfccffefeb3862bebdb976b714ec43a",
     "semantic_hash": ""
   },
   "bevy-port/blender-version.txt": {
     "mtime": 1786465657.8119628,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "3d3e24f7cb6d5ffc50e20a45dc94a52e",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/twitch.rs": {
     "mtime": 1788463350.566128,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "3bf5b964cf3b0c1d8400351d441c907c",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/presentation.rs": {
     "mtime": 1787553683.9213042,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "d3cf3ca91b3266f2faa70bbae4dc617f",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260811_190730_how_do_unity_materials_textures_renderer_assignmen.md": {
-    "mtime": 1786475250.903662,
-    "seen": 1789302895.0116308,
-    "ast_hash": "de67b543de296aec439e8b5adf6dbd23",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260811_194106_how_do_unity_prefab_renderer_sharedmaterials_flow.md": {
-    "mtime": 1786477266.3314402,
-    "seen": 1789302895.0116308,
-    "ast_hash": "fdf993dac401b407c480576cb8bdceb2",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/animation.rs": {
     "mtime": 1787502629.5922973,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "d22a131c1f0e1a4997d26c3c77db4466",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260811_201349_how_do_standalone_unity_animation_clips_flow_from.md": {
-    "mtime": 1786479229.3202689,
-    "seen": 1789302895.0116308,
-    "ast_hash": "f77e30900aa163aef89b520d097688d6",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260811_203618_how_does_the_translated_unity_animator_controller.md": {
-    "mtime": 1786480578.1506352,
-    "seen": 1789302895.0116308,
-    "ast_hash": "1ffcd5ce59e902aede8b184ba499c18f",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260811_232304_role_level_experience_progression_station_equipmen.md": {
-    "mtime": 1786490584.018628,
-    "seen": 1789302895.0116308,
-    "ast_hash": "2148eedff4d61c2d22e07eb8f56e91cd",
     "semantic_hash": ""
   },
   "bevy-port/assets/audio/PROVENANCE.md": {
     "mtime": 1789290103.1423454,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "85fa66685bd69660c34b9f6a32f13558",
     "semantic_hash": ""
   },
   "bevy-port/xtask/src/lib.rs": {
     "mtime": 1788722701.2559805,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "9429a93d1e80267978e57475a7c517b0",
     "semantic_hash": ""
   },
@@ -240,650 +210,332 @@
   },
   "bevy-port/crates/stream_town_domain/src/settings.rs": {
     "mtime": 1789290340.7753391,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "efd3632e9e5dc97b4a4141b9ac3ca66a",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/runtime_console.rs": {
     "mtime": 1788281885.1821232,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "f2f9563e84311eaf1f552708413e30be",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_061417_what_reachable_unity_custom_shaders_and_vfx_still.md": {
-    "mtime": 1786601657.6452818,
-    "seen": 1789302895.0116308,
-    "ast_hash": "9fd60cdc260bf062c6c1460690121d46",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_063130_shader_material_giraffe_pet_skinning_prefab_reacha.md": {
-    "mtime": 1786602690.9147205,
-    "seen": 1789302895.0116308,
-    "ast_hash": "99fec7a50eb6840e7a5840896a694ede",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_065153_boundsvisualizer_buildingplacer_visualbounds_colli.md": {
-    "mtime": 1786603913.6491425,
-    "seen": 1789302895.0116308,
-    "ast_hash": "3fe861b39d838603375f0e6170dd30f4",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_072115_if_there_is_more_to_do__keep_going.md": {
-    "mtime": 1786605675.3697107,
-    "seen": 1789302895.0116308,
-    "ast_hash": "b0585e6a5e2df48b951f991210b83893",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_074412_how_do_typed_unity_resource_targets__farm_harvesti.md": {
-    "mtime": 1786607052.1757078,
-    "seen": 1789302895.0116308,
-    "ast_hash": "5df69bc8ea7b091cb4805a140f577f3d",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_075539_how_does_bevy_reproduce_unity_resourceprocessor_ze.md": {
-    "mtime": 1786607739.0507133,
-    "seen": 1789302895.0116308,
-    "ast_hash": "537c30149ffa4441fff78ff608004d36",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_080656_how_does_generator_v3_reproduce_unity_generated_re.md": {
-    "mtime": 1786608416.8314424,
-    "seen": 1789302895.0116308,
-    "ast_hash": "7fed3ee854131125ecf4bcdee59fd74a",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_081309_why_do_bevy_generated_resources_now_start_at_100_u.md": {
-    "mtime": 1786608789.7680423,
-    "seen": 1789302895.0116308,
-    "ast_hash": "edb770257a63035f6d0fa9618b289e8f",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_081855_why_does_a_new_bevy_town_no_longer_spawn_an_enemy.md": {
-    "mtime": 1786609135.4061353,
-    "seen": 1789302895.0116308,
-    "ast_hash": "d79ec5ba95045320aacb7fb0deeb2cde",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_082714_how_does_bevy_new_town_population_now_match_unity.md": {
-    "mtime": 1786609634.9279926,
-    "seen": 1789302895.0116308,
-    "ast_hash": "7d51fe5f333c1aae4f3655849d431a48",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_083809_how_does_native_load_keep_the_persistent_town_hall.md": {
-    "mtime": 1786610289.0994644,
-    "seen": 1789302895.0116308,
-    "ast_hash": "2db26d921cdfe3bc375a886ab094bf35",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_084447_how_does_native_actor_restoration_preserve_complet.md": {
-    "mtime": 1786610687.9143422,
-    "seen": 1789302895.0116308,
-    "ast_hash": "b217344d4885e9c7bb219704c4460f38",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_085404_native_save_world_seed_load_current_config_generat.md": {
-    "mtime": 1786611244.5546298,
-    "seen": 1789302895.0116308,
-    "ast_hash": "47935a5a0fe183b49e05470a48f54f0b",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_090431_nativesavestore_validate_snapshot_load_input_build.md": {
-    "mtime": 1786611871.8225918,
-    "seen": 1789302895.0116308,
-    "ast_hash": "954fd1900b6650e4eb9dfb5af5ba2a8e",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_092627_worldsnapshot_validate_snapshot_stable_id_duplicat.md": {
-    "mtime": 1786613187.6947303,
-    "seen": 1789302895.0116308,
-    "ast_hash": "dce5aef5b65165e3d849ceb27337dad8",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_094114_shipping_role_station_behavior_town_hall_saved_pos.md": {
-    "mtime": 1786614074.9128664,
-    "seen": 1789302895.0116308,
-    "ast_hash": "d3303eae6403ae06e405172e732b94ec",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_100155_unity_station_targetsensor_distance_range_generate.md": {
-    "mtime": 1786615315.108449,
-    "seen": 1789302895.0116308,
-    "ast_hash": "05eea36fb32058b4d0cd3d36323a1f4e",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_102417_how_does_the_bevy_migration_reproduce_unity_target.md": {
-    "mtime": 1786616657.937158,
-    "seen": 1789302895.0116308,
-    "ast_hash": "fc9204c9f82321ed84b4db7ac05171a3",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_104920_how_does_the_bevy_runtime_preserve_unity_world_spa.md": {
-    "mtime": 1786618160.5219145,
-    "seen": 1789302895.0116308,
-    "ast_hash": "2ea3a172790101c8b9aafc6c90715241",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260813_111134_how_does_the_bevy_migration_preserve_unity_targeta.md": {
-    "mtime": 1786619494.6265335,
-    "seen": 1789302895.0116308,
-    "ast_hash": "63381936275eec49fd426e2ba7c8d823",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/Cargo.toml": {
     "mtime": 1786461126.8369808,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "6385f28a8feb59a5186c921680f2f3c0",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/Cargo.toml": {
     "mtime": 1789268083.4259067,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "e701485fabae62b142d8849352fc2672",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_tools/Cargo.toml": {
     "mtime": 1788810511.3975463,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "7bacbc33e692167f0a526f2f303c96ce",
     "semantic_hash": ""
   },
   "bevy-port/xtask/Cargo.toml": {
     "mtime": 1787808699.2189426,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "da342f8b7fecb3805385f28968f9269b",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260820_104726_which_reachable_gameplay_parity_gaps_remain_betwee.md": {
-    "mtime": 1787222846.5828142,
-    "seen": 1789302895.0116308,
-    "ast_hash": "f2d07763f40f567184d2851fdf0bac87",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260820_115735_how_are_shipping_visual_and_audio_parity_implement.md": {
-    "mtime": 1787227055.7026145,
-    "seen": 1789302895.0116308,
-    "ast_hash": "8c867174fc688886813e0bb5f77ddcf0",
     "semantic_hash": ""
   },
   "bevy-port/scripts/launch-tools.ps1": {
     "mtime": 1787243757.1790688,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "e7b6c91a2383848183ff98538469f442",
     "semantic_hash": ""
   },
   "bevy-port/AUTHORING.md": {
     "mtime": 1789290036.7715893,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "f804cbf96d88b833ae21fb991d9631b2",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/menu_scene.rs": {
     "mtime": 1787374088.9135768,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "9ba6e07568010a927bc50094f5809a3a",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/tidal_music.rs": {
     "mtime": 1788810796.4990675,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "0cc1c4e6ea57d6a7b291a9ba1ed14681",
     "semantic_hash": ""
   },
   "bevy-port/assets/music/README.md": {
     "mtime": 1788399279.0231369,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "7a947075d3311c82633eae7dc62dca67",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260822_145350_1__the_pre_menu_loading_screen_doesn_t_have_the_im.md": {
-    "mtime": 1787410430.0264974,
-    "seen": 1789302895.0116308,
-    "ast_hash": "3332b533215571a7eeaaec525983de00",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260822_170953_https___github_com_humanbeangames_bevy_tidal_tree.md": {
-    "mtime": 1787418593.0589855,
-    "seen": 1789302895.0116308,
-    "ast_hash": "556e01c62cd55143e00c63898a341f49",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260823_021158_why_are_we_vendoring_bevy_tidal_and_not_just_using.md": {
-    "mtime": 1787451118.5118463,
-    "seen": 1789302895.0116308,
-    "ast_hash": "b325d2ab18cca4999056f1516c5340bc",
     "semantic_hash": ""
   },
   "bevy-port/docs/visual-regressions/character-animation.md": {
     "mtime": 1789275819.4816017,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "43a7c3f384dd606c312e8c5ee06dd77f",
     "semantic_hash": ""
   },
   "bevy-port/docs/visual-regressions/tree-foliage-flicker.md": {
     "mtime": 1788765831.5127237,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "37814210a5655c401925577cbf3d26fc",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260823_024952_the_bevy_tidal_repo_is_now_public__so_fix_the_inte.md": {
-    "mtime": 1787453392.734105,
-    "seen": 1789302895.0116308,
-    "ast_hash": "7b99620b0d6e906c12879906eba97aaa",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260823_031006_the_characters_are_still_not_animated__and_the_tre.md": {
-    "mtime": 1787454606.435452,
-    "seen": 1789302895.0116308,
-    "ast_hash": "63809491811686ddb36e8bae862c7826",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260823_125357_characters_are_still_not_animated__trees_still_hav.md": {
-    "mtime": 1787489637.5175576,
-    "seen": 1789302895.0116308,
-    "ast_hash": "4e09774fd3e92390a6c694575a69882b",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260823_133613_the_trees_look_okay__though_i_d_double_check_just.md": {
-    "mtime": 1787492173.925389,
-    "seen": 1789302895.0116308,
-    "ast_hash": "18aaa55079518c328a6f82648d5d946b",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260823_145600_there_are_still_no_animations.md": {
-    "mtime": 1787496960.7232397,
-    "seen": 1789302895.0116308,
-    "ast_hash": "581b73f7cd3a517d30e663b948cfb640",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260823_171551_why_did_the_converted_player_run_animation_fail_to.md": {
-    "mtime": 1787505351.410327,
-    "seen": 1789302895.0116308,
-    "ast_hash": "cb4ab4ece251eb8ab9e62e3bcb992b8f",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260824_042441_why_would_retargeted_unity_character_animation_cur.md": {
-    "mtime": 1787545481.734105,
-    "seen": 1789302895.0116308,
-    "ast_hash": "0ccd46e4d234eab8dc6f965b6b93e16f",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/technology_layout.rs": {
     "mtime": 1787577729.6736014,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "163b4c33d496fb5df183d54da97e117b",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_tools/src/technology_graph.rs": {
     "mtime": 1787912793.4567132,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "34a0454fa34aba4ae0e8c0c872f1ccb1",
     "semantic_hash": ""
   },
   "bevy-port/docs/accessibility.md": {
     "mtime": 1787588512.2889502,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "89cad8ee9d903bd2e76d4efdfd0b13b1",
     "semantic_hash": ""
   },
   "bevy-port/scripts/capture-foliage-acceptance.ps1": {
     "mtime": 1787730842.3993068,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "6380b8391ade5ac15a0e7b5d622badc6",
     "semantic_hash": ""
   },
   "bevy-port/scripts/capture-visual-acceptance.ps1": {
     "mtime": 1787731168.830174,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "89f41cc8da732b8868965aa2f899427c",
     "semantic_hash": ""
   },
   "bevy-port/assets/acceptance/visual/animation.png": {
     "mtime": 1787731708.9729903,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "a9fce35f008277ee2d50097af70655d5",
     "semantic_hash": ""
   },
   "bevy-port/assets/acceptance/visual/credits.png": {
     "mtime": 1787731709.1134636,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "b97d549bc06530fed5190ab786455fd7",
     "semantic_hash": ""
   },
   "bevy-port/assets/acceptance/visual/current-event.png": {
     "mtime": 1787731708.7413192,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "d8a230fed4439401b3758c9d255dfb6d",
     "semantic_hash": ""
   },
   "bevy-port/assets/acceptance/visual/foliage.png": {
     "mtime": 1787731708.8208938,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "13d023dbb5e1fedfde1254baca6413de",
     "semantic_hash": ""
   },
   "bevy-port/assets/acceptance/visual/game-menu.png": {
     "mtime": 1787731708.5778782,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "0b89d4fe1d3494488714ab5b20079f3b",
     "semantic_hash": ""
   },
   "bevy-port/assets/acceptance/visual/giraffe-pet.png": {
     "mtime": 1787731709.0492518,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "57fecd5b29b5aa820e1dab9076331f42",
     "semantic_hash": ""
   },
   "bevy-port/assets/acceptance/visual/main-menu.png": {
     "mtime": 1787731708.340459,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "6a3fcb9d67ea23a5d0b8b48143018fd9",
     "semantic_hash": ""
   },
   "bevy-port/assets/acceptance/visual/ruler-vote.png": {
     "mtime": 1787731708.665005,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "40a1d43faa7aba70404529e7e871ffcb",
     "semantic_hash": ""
   },
   "bevy-port/assets/acceptance/visual/settings.png": {
     "mtime": 1787731708.4994657,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "92104f1f2b349a347f454dc62e2619e8",
     "semantic_hash": ""
   },
   "bevy-port/assets/acceptance/visual/shoreline.png": {
     "mtime": 1787731708.8997374,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "e06a103b1e5627fc03a957491d2030d4",
     "semantic_hash": ""
   },
   "bevy-port/assets/acceptance/visual/town-overview.png": {
     "mtime": 1787731708.4238403,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "bd27fe4e9329a698594891fcfd109e05",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/direct_broadcast.rs": {
     "mtime": 1789273466.4659357,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "1bc79be5f2a95e57fa051740366b689d",
     "semantic_hash": ""
   },
   "bevy-port/vcpkg.json": {
     "mtime": 1788722338.2076309,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "3a9577e783710b70348b125391505837",
     "semantic_hash": ""
   },
   "bevy-port/third_party/ffmpeg/README.md": {
     "mtime": 1788722722.847499,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "118b6296989a458409783e27155d203b",
     "semantic_hash": ""
   },
   "TWITCH_COMMANDS.md": {
     "mtime": 1789291097.5323808,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "cc1d77bea4af687a1d4a45a3b7172c67",
     "semantic_hash": ""
   },
   "bevy-port/scripts/launch-game.ps1": {
     "mtime": 1788387252.107097,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "c3fa084e7c3f53bad4b24604662fbc8b",
     "semantic_hash": ""
   },
   "bevy-port/scripts/redeploy-last-town.ps1": {
-    "mtime": 1789301919.450206,
-    "seen": 1789302895.0116308,
-    "ast_hash": "a8edc2f323ddfd5f007f9832a9c1687a",
+    "mtime": 1789304405.3686461,
+    "seen": 1789305947.202303,
+    "ast_hash": "5bd17281c86e430e456e786c4b0f92a3",
     "semantic_hash": ""
   },
   "bevy-port/scripts/monitor-stream-health.ps1": {
     "mtime": 1788574937.5489068,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "f737c6d1a9a4d5464607671c986d9bc7",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260905_021237_the_game_has_slowed_to_about_0_3_fps__look_into_wh.md": {
-    "mtime": 1788574357.2239046,
-    "seen": 1789302895.0116308,
-    "ast_hash": "dffcf4b5263d510831702edaa00eda49",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260905_025408_why_did_live_capture_fps_fall_below_28_during_the.md": {
-    "mtime": 1788576848.7924807,
-    "seen": 1789302895.0116308,
-    "ast_hash": "fe68dfdd81fb650fbb4ae4392a592600",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_ffmpeg_bridge/Cargo.toml": {
     "mtime": 1788586968.283849,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "814b1a3ca0414a234a89349fa20e399b",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_ffmpeg_bridge/src/lib.rs": {
     "mtime": 1788587186.0209422,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "4520d78c784665e0dd72d526ebf56a86",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260905_214956_authenticate_the_stream_town_bot_and_broadcaster_u.md": {
-    "mtime": 1788644996.8008523,
-    "seen": 1789302895.0116308,
-    "ast_hash": "df4ff1cd273a36c4a3246e25276700e7",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260907_220109_implement_utility_based_forester_planting__diagnos.md": {
-    "mtime": 1788818469.3254385,
-    "seen": 1789302895.0116308,
-    "ast_hash": "d660fcba7bda681872819876313a9576",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260907_233300_foliage_generation_third_cell_terrain_texture_path.md": {
-    "mtime": 1788823980.817344,
-    "seen": 1789302895.0116308,
-    "ast_hash": "20c9190d9c49870ba6ec4a3b00bd749f",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260908_040723_don_t_touch_the_live_app__this_is_just_hypothetica.md": {
-    "mtime": 1788840443.525214,
-    "seen": 1789302895.0116308,
-    "ast_hash": "304aac09f85edd6b85b26ceb5abcde04",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260908_043305_why_does_tonyville_s_direct_broadcast_capture_fps.md": {
-    "mtime": 1788841985.1938894,
-    "seen": 1789302895.0116308,
-    "ast_hash": "a565dfc96b8139ae47a1cba88f7001eb",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260908_045700_did_the_tonyville_post_fix_deployment_sustain_targ.md": {
-    "mtime": 1788843420.7349112,
-    "seen": 1789302895.0116308,
-    "ast_hash": "fd400e122f60a447a5690df60e470020",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260908_065357_which_scale_sensitive_cpu_path_can_reduce_tonyvill.md": {
-    "mtime": 1788850437.4551425,
-    "seen": 1789302895.0116308,
-    "ast_hash": "9c977e4ad7ef785e1f393446526a9bf9",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260909_044500_well_hang_on__maybe_i_am_misunderstanding_somethin.md": {
-    "mtime": 1788929100.7627182,
-    "seen": 1789302895.0116308,
-    "ast_hash": "f0582b027cef9734d66c367a924c868e",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260909_210651_which_repeated_building_visual_work_can_explain_to.md": {
-    "mtime": 1788988011.5651102,
-    "seen": 1789302895.0116308,
-    "ast_hash": "a5917db9fd66ce92973cafdfa32ada34",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260909_224023_what_remaining_cpu_side_world_synchronization_expl.md": {
-    "mtime": 1788993623.0353258,
-    "seen": 1789302895.0116308,
-    "ast_hash": "630123da30c210ac9b62210129a9de88",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260910_001420_what_remaining_cpu_side_synchronization_explains_t.md": {
-    "mtime": 1788999260.0573125,
-    "seen": 1789302895.0116308,
-    "ast_hash": "daa97c8a3471df095d16fedd84a8ef03",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260911_013706_does_tonyville_capture_fps_loss_come_from_sunrise.md": {
-    "mtime": 1789090626.6466672,
-    "seen": 1789302895.0116308,
-    "ast_hash": "03ad2f92f4d10e8630fcb9672e2cc9cb",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260911_021530_did_the_2026_09_11_01_37_22_02_07_22_utc_tonyville.md": {
-    "mtime": 1789092930.2133417,
-    "seen": 1789302895.0116308,
-    "ast_hash": "3fb28e79201d4f3bdcdcd4841aba2769",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260911_021822_was_tonyville_dusk_at_2026_09_11_02_10_utc_an_isol.md": {
-    "mtime": 1789093102.2159283,
-    "seen": 1789302895.0116308,
-    "ast_hash": "db310a0c119cdad8f0c36fb2ce99deac",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260911_025228_did_tonyville_s_2026_09_11_02_18_53_02_48_53_utc_f.md": {
-    "mtime": 1789095148.6599054,
-    "seen": 1789302895.0116308,
-    "ast_hash": "8ebd73540dbff9270e56c32cc141f8b4",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260911_080828_it_s_down_again__investigate.md": {
-    "mtime": 1789114108.529078,
-    "seen": 1789302895.0116308,
-    "ast_hash": "8533b2f993945a8fe60f1d3f675d06d8",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/profiling.rs": {
     "mtime": 1789291504.2999957,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "1904a18c8b6ca4180c3d2fef8ec16ceb",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260912_170508_how_should_tender_and_forester_planting_cadence_an.md": {
-    "mtime": 1789232708.1548426,
-    "seen": 1789302895.0116308,
-    "ast_hash": "7e334000436027adc28c6c48f356aa1c",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260912_174506_how_do_the_six_reported_tonyville_rendering__worke.md": {
-    "mtime": 1789235106.9055552,
-    "seen": 1789302895.0116308,
-    "ast_hash": "bbf19ac72d3afa7b41602a7d5231a3ad",
-    "semantic_hash": ""
-  },
-  "graphify-out/memory/query_20260913_020913_the_glitchyf_lickering_now_appears_on_the_models_o.md": {
-    "mtime": 1789265353.8092103,
-    "seen": 1789302895.0116308,
-    "ast_hash": "3ecd058bfc0646f629ba099b5fd0382e",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/app.rs": {
     "mtime": 1789301919.450206,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "7d9241a89f501ea3d19d6639979bbb82",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/bootstrap.rs": {
-    "mtime": 1789290161.4808238,
-    "seen": 1789302895.0116308,
-    "ast_hash": "d4e534773b027a5a109a425ce370b491",
+    "mtime": 1789305897.575744,
+    "seen": 1789305947.202303,
+    "ast_hash": "f80456077c889fc9ddda6cb3f2b88366",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/presentation/animation.rs": {
     "mtime": 1789290789.718619,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "46157737294fbc772431c0d747b10cd6",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/presentation/environment.rs": {
     "mtime": 1789290789.7166135,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "c2f23bc15c9def545800c69fdf27bab0",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/presentation/materials.rs": {
     "mtime": 1789290518.507173,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "0ae3dc039c6125fc2673607529bcfa22",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/presentation/menu.rs": {
     "mtime": 1789290839.841491,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "a5f1f1879c951e1a1d01c391c3f7d0b2",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/presentation/mod.rs": {
     "mtime": 1789290518.5771449,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "f9b8f7667fa3d8a3b38c4c200d8dc977",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/presentation/rendering.rs": {
     "mtime": 1789291555.9820325,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "dee7953c716f43a44a783c8d2f9e8a1d",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/presentation/world.rs": {
-    "mtime": 1789290839.8424902,
-    "seen": 1789302895.0116308,
-    "ast_hash": "5c09c5e0fbb35e477fd688c3de493746",
+    "mtime": 1789305281.247649,
+    "seen": 1789305947.202303,
+    "ast_hash": "8b5f376bf66c319c656cb90c0acf0195",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/runtime/agents.rs": {
     "mtime": 1789291504.301516,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "0411cccb07398fcfc9844f01dc1a9c20",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/runtime/commands.rs": {
     "mtime": 1789290789.7196178,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "0011a9578f4d33b5e36b6ec946253bae",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/runtime/control.rs": {
-    "mtime": 1789290839.8455765,
-    "seen": 1789302895.0116308,
-    "ast_hash": "f7e07c48c6c8c12c180c906b45db1393",
+    "mtime": 1789305009.9421098,
+    "seen": 1789305947.202303,
+    "ast_hash": "cf3f7875dacfe83f26ea29a5fb39a43b",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/runtime/mod.rs": {
     "mtime": 1789290518.8749852,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "1b24b00b6bc159d56e2da37b6c2e9e04",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/runtime/persistence.rs": {
     "mtime": 1789290518.8798628,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "49331742db36ab62f5391642945ee5ca",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/runtime/timelapse.rs": {
     "mtime": 1789291419.3387914,
-    "seen": 1789302895.0116308,
+    "seen": 1789305947.202303,
     "ast_hash": "a3df789853fc5ffc576c1bd4b89ec492",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/tests.rs": {
-    "mtime": 1789301899.8306353,
-    "seen": 1789302895.0116308,
-    "ast_hash": "9ab5de8ba5db32da179d2b5059fea681",
+    "mtime": 1789305748.1634529,
+    "seen": 1789305947.202303,
+    "ast_hash": "51e8bbda5da08f83c0fd583d4b78f351",
     "semantic_hash": ""
   }
 }

@@ -171,6 +171,85 @@ fn foliage_clearance_cell_set_matches_structural_regions() {
 }
 
 #[test]
+fn initial_town_hall_clears_foliage_across_its_exact_placement_footprint() {
+    let config = GameConfig::default();
+    let content = embedded_content();
+    let world = generate_world(&config.world);
+    let mut simulation = WorldSimulation::new(world.seed);
+    ensure_town_hall_state(&content, &config, &mut simulation);
+    let town_hall_id = StableId::new("building:townhall").unwrap();
+    let town_hall = &simulation.buildings[&town_hall_id];
+    let definition = &content.buildings[&town_hall_id];
+    let placement_cells =
+        building_fine_placement_cells(&content, &simulation, town_hall, &town_hall_id, definition);
+    let clearance_cells = foliage_clearance_navigation_cells(&content, &simulation, &world);
+    let legacy_cells = foliage_clearance_regions(&content, &simulation, &world)
+        .into_iter()
+        .flat_map(fine_cells_for_coarse_region)
+        .collect::<HashSet<_>>();
+
+    assert_eq!(placement_cells.len(), 15 * 9);
+    assert!(
+        placement_cells
+            .iter()
+            .all(|position| clearance_cells.contains(position))
+    );
+    assert!(
+        placement_cells
+            .iter()
+            .any(|position| !legacy_cells.contains(position)),
+        "the regression must cover the Town Hall area missed by legacy coarse clearing"
+    );
+}
+
+#[test]
+fn initial_town_hall_removes_seeded_tree_resources_beneath_its_model() {
+    let config = GameConfig::default();
+    let content = embedded_content();
+    let mut world = generate_world(&config.world);
+    let mut simulation = WorldSimulation::new(world.seed);
+    ensure_town_hall_state(&content, &config, &mut simulation);
+    let town_hall_id = StableId::new("building:townhall").unwrap();
+    let town_hall = &simulation.buildings[&town_hall_id];
+    let definition = &content.buildings[&town_hall_id];
+    let occupied =
+        building_fine_navigation_cells(&content, &simulation, town_hall, &town_hall_id, definition)
+            .into_iter()
+            .collect::<HashSet<_>>();
+    let under_town_hall = (0..world.navigation.height())
+        .flat_map(|z| (0..world.navigation.width()).map(move |x| GridPos { x, z }))
+        .find(|position| occupied.contains(&placement_to_navigation_centre(*position)))
+        .expect("Town Hall contains at least one coarse resource centre");
+    world.resources.push(stream_town_domain::GeneratedResource {
+        id: StableId::new("resource:tree_under_town_hall").unwrap(),
+        kind: StableId::new("resource:wood").unwrap(),
+        target_kind: StableId::new("target:tree").unwrap(),
+        position: under_town_hall,
+        offset_milli_cells: [0, 0],
+        generation_occupancy: [0, 0],
+        amount: 100,
+    });
+    let expected_removed = world
+        .resources
+        .iter()
+        .filter(|resource| {
+            resource.target_kind.as_str() == "target:tree"
+                && occupied.contains(&placement_to_navigation_centre(resource.position))
+        })
+        .count();
+
+    let removed =
+        clear_seeded_trees_under_building(&content, &simulation, &mut world, &town_hall_id);
+
+    assert!(expected_removed > 0);
+    assert_eq!(removed, expected_removed);
+    assert!(world.resources.iter().all(|resource| {
+        resource.target_kind.as_str() != "target:tree"
+            || !occupied.contains(&placement_to_navigation_centre(resource.position))
+    }));
+}
+
+#[test]
 fn completed_path_levels_accelerate_citizens_by_five_percent_each() {
     let config = GameConfig::default();
     let content = embedded_content();
@@ -1747,6 +1826,23 @@ fn fixed_new_town_path_names_the_active_town_before_the_first_save() {
     let fixed = PathBuf::from(".stream-town/saves/Beanville.stbevy");
     let catalog = TownSaveCatalogRuntime::from_startup_paths(Some(fixed), None);
     assert_eq!(catalog.active_town.as_deref(), Some("Beanville"));
+}
+
+#[test]
+fn automatic_live_launch_enables_twitch_without_reducing_output_quality() {
+    let mut config = GameConfig::default();
+    assert!(!config.twitch.enabled);
+    assert!(!config.twitch.broadcast.enabled);
+
+    bootstrap::configure_automatic_live(&mut config, Some("public-client-id")).unwrap();
+
+    assert!(config.twitch.enabled);
+    assert!(config.twitch.broadcast.enabled);
+    assert_eq!(config.twitch.client_id, "public-client-id");
+    assert_eq!(config.twitch.broadcast.width, 1_920);
+    assert_eq!(config.twitch.broadcast.height, 1_080);
+    assert_eq!(config.twitch.broadcast.frames_per_second, 30);
+    assert_eq!(config.twitch.broadcast.video_bitrate_kbps, 6_000);
 }
 
 #[test]
@@ -3539,7 +3635,7 @@ fn settings_menu_edits_a_complete_valid_draft() {
     assert!(draft.interface.reduced_motion);
     draft.validate().unwrap();
     assert_ne!(streaming, original_streaming);
-    assert_eq!((streaming.width, streaming.height), (1_920, 1_080));
+    assert_eq!((streaming.width, streaming.height), (640, 360));
     assert_eq!(streaming.frames_per_second, 60);
     assert_eq!(streaming.video_bitrate_kbps, 500);
     assert_eq!(streaming.audio_bitrate_kbps, 64);
@@ -3557,7 +3653,7 @@ fn settings_menu_edits_a_complete_valid_draft() {
     );
     assert!(text.contains("> Cancel changes"));
     assert!(text.contains("Resolution: 2560 x 1440"));
-    assert!(text.contains("Stream output: 1920 x 1080"));
+    assert!(text.contains("Stream output: 640 x 360"));
     assert!(text.contains("draft feedback"));
 }
 

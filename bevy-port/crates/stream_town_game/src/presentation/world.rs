@@ -49,6 +49,20 @@ pub(crate) fn generate_and_spawn_world(
         };
         let town_hall_id = StableId::new("building:townhall").expect("static ID");
         let town_hall_definition = &content.0.buildings[&town_hall_id];
+        let mut initial_simulation = WorldSimulation::new(generated.seed);
+        ensure_town_hall_state(&content.0, &config.0, &mut initial_simulation);
+        let cleared_trees = clear_seeded_trees_under_building(
+            &content.0,
+            &initial_simulation,
+            generated,
+            &town_hall_id,
+        );
+        if cleared_trees > 0 {
+            info!(
+                cleared_trees,
+                "cleared seeded trees beneath the initial Town Hall"
+            );
+        }
         let town_hall_placement =
             town_hall_placement_position(&config.0, town_hall_definition.footprint);
         let town_hall_focus = grid_to_world_on_surface(town_hall_position, &config.0, generated);
