@@ -43,7 +43,10 @@ use bevy::{
         renderer::{RenderDevice, RenderQueue},
         texture::GpuImage,
     },
-    window::{CursorOptions, PrimaryWindow, WindowCloseRequested, WindowRef, WindowResolution},
+    window::{
+        CursorOptions, PresentMode, PrimaryWindow, WindowCloseRequested, WindowRef,
+        WindowResolution,
+    },
     winit::{UpdateMode, WinitSettings},
 };
 use bevy_tidal::{NativeAudioFrame, NativeAudioRouting};
@@ -54,7 +57,9 @@ use ffmpeg_next as ffmpeg;
 use stream_town_domain::{
     BroadcastConfig, BroadcastEncoderPreference, BroadcastRenderMode, PlayerSettingsStore,
 };
-use wasapi::{AudioClient, Direction, SampleType, StreamMode, WaveFormat, initialize_mta};
+use wasapi::{
+    AudioClient, Direction, SampleType, StreamMode, WaveFormat, initialize_mta, initialize_sta,
+};
 use windows_capture::{
     capture::{Context as CaptureContext, GraphicsCaptureApiHandler},
     frame::Frame as CapturedWindowFrame,
@@ -99,6 +104,41 @@ const STREAM_CAPTURE_CPU_QUEUE_CAPACITY: usize = 2;
 const STREAM_CAPTURE_RECYCLED_PIXEL_BUFFERS: usize =
     STREAM_CAPTURE_STAGING_BUFFERS + STREAM_CAPTURE_CPU_QUEUE_CAPACITY + 2;
 const ENCODER_VIDEO_FRAME_BUFFERS: usize = 4;
+const STREAM_OPERATOR_INFO_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+fn stream_operator_window() -> Window {
+    Window {
+        title: "Stream Town — Operator".to_owned(),
+        resolution: WindowResolution::new(OPERATOR_WINDOW_WIDTH, OPERATOR_WINDOW_HEIGHT),
+        resizable: false,
+        // The dashboard must not pace the offscreen stream render. In particular,
+        // remote and low-refresh displays can otherwise cap capture at about 30 Hz,
+        // leaving no timing margin for a fixed 30 FPS GPU readback cadence.
+        present_mode: PresentMode::AutoNoVsync,
+        ..default()
+    }
+}
+
+fn stream_render_update_mode(frames_per_second: u8) -> UpdateMode {
+    // Every stream-only render produces one readback. Pacing the whole
+    // update/render pipeline at the broadcast cadence avoids running transform
+    // propagation and GPU uploads several times for each encoded frame. GPU
+    // completion remains asynchronous so CPU update work and GPU rendering can
+    // overlap within the frame period.
+    let producer_hz = u32::from(frames_per_second.max(1));
+    UpdateMode::Reactive {
+        wait: Duration::from_secs_f64(1.0 / f64::from(producer_hz)),
+        react_to_device_events: false,
+        react_to_user_events: false,
+        react_to_window_events: false,
+    }
+}
+
+fn stream_hidden_window_present_mode() -> PresentMode {
+    // The primary window has no camera while stream-only capture is active, but
+    // Bevy still presents its hidden swapchain. Do not let the player's VSync
+    // preference pace the offscreen image that supplies the broadcast.
+    PresentMode::AutoNoVsync
+}
 
 #[derive(Clone)]
 struct NativeGameAudioClip {
@@ -469,6 +509,7 @@ pub struct DirectBroadcastRuntime {
     recent_video_replacements: u64,
     rolling_captured_video_fps: f64,
     rolling_encoded_video_fps: f64,
+    reconnects: u64,
 }
 
 #[derive(Resource, Default)]
@@ -479,6 +520,8 @@ struct StreamOnlyCaptureState {
     operator_root: Option<Entity>,
     previous_camera_targets: HashMap<Entity, RenderTarget>,
     previous_primary_visibility: Option<bool>,
+    previous_primary_present_mode: Option<PresentMode>,
+    previous_focused_mode: Option<UpdateMode>,
     previous_unfocused_mode: Option<UpdateMode>,
     width: u32,
     height: u32,
@@ -487,10 +530,30 @@ struct StreamOnlyCaptureState {
 #[derive(Resource, Clone, Default, ExtractResource)]
 struct StreamOnlyCaptureExtract {
     target: Option<Handle<Image>>,
+    video_sink: Option<BroadcastVideoSink>,
     active: bool,
     width: u32,
     height: u32,
-    frames_per_second: u8,
+}
+
+#[derive(Clone)]
+struct BroadcastVideoSink {
+    video: Arc<Mutex<Option<VideoFrame>>>,
+    metrics: Arc<BroadcastMetrics>,
+    stop: Arc<AtomicBool>,
+    video_consumer_ready: Arc<AtomicBool>,
+}
+
+impl BroadcastVideoSink {
+    fn send_video(&self, frame: VideoFrame) -> bool {
+        publish_latest_video(
+            &self.video,
+            &self.stop,
+            &self.metrics,
+            &self.video_consumer_ready,
+            frame,
+        )
+    }
 }
 
 struct StreamOnlyCapturedFrame {
@@ -507,6 +570,11 @@ struct GpuStreamCaptureCounters {
     queued: AtomicUsize,
     dropped: AtomicU64,
     map_failures: AtomicU64,
+    completed: AtomicU64,
+    slot_misses: AtomicU64,
+    queue_drops: AtomicU64,
+    copy_failures: AtomicU64,
+    total_map_failures: AtomicU64,
 }
 
 #[derive(Resource, Clone, Default)]
@@ -530,7 +598,6 @@ struct GpuStreamCaptureRing {
     height: u32,
     aligned_row_bytes: u32,
     next_slot: usize,
-    next_capture_at: Option<Instant>,
 }
 
 impl GpuStreamCaptureRing {
@@ -544,7 +611,6 @@ impl GpuStreamCaptureRing {
             height: 0,
             aligned_row_bytes: 0,
             next_slot: 0,
-            next_capture_at: None,
         }
     }
 }
@@ -715,8 +781,130 @@ impl Default for DirectBroadcastRuntime {
             recent_video_replacements: 0,
             rolling_captured_video_fps: 0.0,
             rolling_encoded_video_fps: 0.0,
+            reconnects: 0,
         }
     }
+}
+
+#[cfg(feature = "stream-profiling")]
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct DirectBroadcastProfile {
+    pub phase: &'static str,
+    pub rtmp_connected: bool,
+    pub twitch_live_confirmed: bool,
+    pub session_age_seconds: f64,
+    pub encoder: Option<String>,
+    pub ingest_name: Option<String>,
+    pub captured_fps: f64,
+    pub encoded_fps: f64,
+    pub captured_frames: u64,
+    pub encoded_frames: u64,
+    pub dropped_frames: u64,
+    pub replaced_frames: u64,
+    pub skipped_frames: u64,
+    pub encoded_audio_frames: u64,
+    pub dropped_audio_frames: u64,
+    pub audio_queue_depth: u64,
+    pub audio_queue_high_water: u64,
+    pub capture_samples: u64,
+    pub capture_micros: u64,
+    pub maximum_capture_micros: u64,
+    pub encode_micros: u64,
+    pub maximum_encode_micros: u64,
+    pub mux_write_samples: u64,
+    pub mux_write_micros: u64,
+    pub maximum_mux_write_micros: u64,
+    pub video_packet_bytes: u64,
+    pub keyframe_packets: u64,
+    pub keyframe_bytes: u64,
+    pub maximum_video_packet_bytes: u64,
+    pub maximum_keyframe_bytes: u64,
+    pub reconnects: u64,
+    pub readbacks_in_flight: usize,
+    pub readbacks_queued: usize,
+    pub readbacks_completed: u64,
+    pub readback_slot_misses: u64,
+    pub readback_queue_drops: u64,
+    pub readback_copy_failures: u64,
+    pub readback_map_failures: u64,
+}
+
+#[cfg(feature = "stream-profiling")]
+pub(crate) fn profiling_snapshot(world: &World) -> Option<DirectBroadcastProfile> {
+    let runtime = world.get_resource::<DirectBroadcastRuntime>()?;
+    let metrics = runtime.controller.as_ref().map_or_else(
+        BroadcastMetricsSnapshot::default,
+        BroadcastController::metrics,
+    );
+    let capture = world.get_resource::<GpuStreamCaptureShared>();
+    let phase = match &runtime.phase {
+        DirectBroadcastPhase::Disabled => "disabled",
+        DirectBroadcastPhase::WaitingForBroadcasterAuthorization => "authorizing",
+        DirectBroadcastPhase::WaitingForGameplay => "waiting_for_gameplay",
+        DirectBroadcastPhase::ResolvingIngest => "resolving_ingest",
+        DirectBroadcastPhase::Connecting => "connecting",
+        DirectBroadcastPhase::VerifyingTwitch => "verifying_twitch",
+        DirectBroadcastPhase::Broadcasting => "broadcasting",
+        DirectBroadcastPhase::BandwidthTesting => "bandwidth_testing",
+        DirectBroadcastPhase::Reconnecting => "reconnecting",
+        DirectBroadcastPhase::Stopping => "stopping",
+        DirectBroadcastPhase::Stopped => "stopped",
+        DirectBroadcastPhase::Error(_) => "error",
+    };
+    Some(DirectBroadcastProfile {
+        phase,
+        rtmp_connected: matches!(
+            runtime.phase,
+            DirectBroadcastPhase::VerifyingTwitch
+                | DirectBroadcastPhase::Broadcasting
+                | DirectBroadcastPhase::BandwidthTesting
+        ),
+        twitch_live_confirmed: runtime.phase == DirectBroadcastPhase::Broadcasting,
+        session_age_seconds: runtime
+            .broadcast_started
+            .map_or(0.0, |started| started.elapsed().as_secs_f64()),
+        encoder: runtime.encoder.clone(),
+        ingest_name: runtime.ingest.clone(),
+        captured_fps: runtime.rolling_captured_video_fps,
+        encoded_fps: runtime.rolling_encoded_video_fps,
+        captured_frames: metrics.captured_video,
+        encoded_frames: metrics.encoded_video,
+        dropped_frames: metrics.dropped_video,
+        replaced_frames: metrics.replaced_video,
+        skipped_frames: metrics.skipped_video,
+        encoded_audio_frames: metrics.encoded_audio,
+        dropped_audio_frames: metrics.dropped_audio,
+        audio_queue_depth: metrics.queued_audio,
+        audio_queue_high_water: metrics.audio_queue_high_water,
+        capture_samples: metrics.capture_samples,
+        capture_micros: metrics.capture_micros,
+        maximum_capture_micros: metrics.maximum_capture_micros,
+        encode_micros: metrics.video_encode_micros,
+        maximum_encode_micros: metrics.maximum_video_encode_micros,
+        mux_write_samples: metrics.mux_write_samples,
+        mux_write_micros: metrics.mux_write_micros,
+        maximum_mux_write_micros: metrics.maximum_mux_write_micros,
+        video_packet_bytes: metrics.video_packet_bytes,
+        keyframe_packets: metrics.keyframe_packets,
+        keyframe_bytes: metrics.keyframe_bytes,
+        maximum_video_packet_bytes: metrics.maximum_video_packet_bytes,
+        maximum_keyframe_bytes: metrics.maximum_keyframe_bytes,
+        reconnects: runtime.reconnects,
+        readbacks_in_flight: capture
+            .map_or(0, |capture| capture.0.in_flight.load(Ordering::Relaxed)),
+        readbacks_queued: capture.map_or(0, |capture| capture.0.queued.load(Ordering::Relaxed)),
+        readbacks_completed: capture
+            .map_or(0, |capture| capture.0.completed.load(Ordering::Relaxed)),
+        readback_slot_misses: capture
+            .map_or(0, |capture| capture.0.slot_misses.load(Ordering::Relaxed)),
+        readback_queue_drops: capture
+            .map_or(0, |capture| capture.0.queue_drops.load(Ordering::Relaxed)),
+        readback_copy_failures: capture
+            .map_or(0, |capture| capture.0.copy_failures.load(Ordering::Relaxed)),
+        readback_map_failures: capture.map_or(0, |capture| {
+            capture.0.total_map_failures.load(Ordering::Relaxed)
+        }),
+    })
 }
 
 impl DirectBroadcastRuntime {
@@ -1257,6 +1445,7 @@ fn poll_direct_broadcast_worker(
                 begin_twitch_live_verification(&mut runtime);
             }
             WorkerEvent::Reconnecting(error) => {
+                runtime.reconnects = runtime.reconnects.saturating_add(1);
                 let metrics = runtime.controller.as_ref().map_or_else(
                     BroadcastMetricsSnapshot::default,
                     BroadcastController::metrics,
@@ -1343,13 +1532,11 @@ fn begin_twitch_live_verification(runtime: &mut DirectBroadcastRuntime) {
             runtime.phase = DirectBroadcastPhase::VerifyingTwitch;
         }
         Err(error) => {
-            if let Some(controller) = &runtime.controller {
-                controller.request_stop();
-            }
-            runtime.verification_status = Some(format!("Verifier startup failed: {error:#}"));
-            runtime.phase = DirectBroadcastPhase::Error(format!(
-                "could not start Twitch live verification: {error:#}"
+            warn!(%error, "could not start Twitch live verification; keeping RTMP output active");
+            runtime.verification_status = Some(format!(
+                "Public status unconfirmed; RTMP remains active: {error:#}"
             ));
+            runtime.phase = DirectBroadcastPhase::VerifyingTwitch;
         }
     }
 }
@@ -1374,13 +1561,12 @@ fn poll_twitch_live_verification(mut runtime: ResMut<DirectBroadcastRuntime>) {
                 runtime.phase = DirectBroadcastPhase::Broadcasting;
             }
             LiveVerificationEvent::Error(error) => {
-                if let Some(controller) = &runtime.controller {
-                    controller.request_stop();
-                }
-                error!(%error, "Twitch never confirmed the public stream");
+                warn!(%error, "Twitch public status remained unconfirmed; keeping RTMP output active");
                 runtime.live_verification = None;
-                runtime.verification_status = Some(error.clone());
-                runtime.phase = DirectBroadcastPhase::Error(error);
+                runtime.verification_status = Some(format!(
+                    "Public status unconfirmed; RTMP remains active: {error}"
+                ));
+                runtime.phase = DirectBroadcastPhase::VerifyingTwitch;
             }
         }
     }
@@ -1628,15 +1814,7 @@ fn sync_stream_only_capture(
         let operator_window = commands
             .spawn((
                 StreamOperatorWindow,
-                Window {
-                    title: "Stream Town — Operator".to_owned(),
-                    resolution: WindowResolution::new(
-                        OPERATOR_WINDOW_WIDTH,
-                        OPERATOR_WINDOW_HEIGHT,
-                    ),
-                    resizable: false,
-                    ..default()
-                },
+                stream_operator_window(),
                 CursorOptions {
                     visible: true,
                     hit_test: true,
@@ -1682,17 +1860,36 @@ fn sync_stream_only_capture(
                 *camera_target = RenderTarget::Image(target.clone().into());
             }
         }
-        if let Ok(mut window) = primary_window.single_mut()
-            && state.previous_primary_visibility.is_none()
-        {
-            state.previous_primary_visibility = Some(window.visible);
-            window.visible = false;
+        if let Ok(mut window) = primary_window.single_mut() {
+            state
+                .previous_primary_visibility
+                .get_or_insert(window.visible);
+            state
+                .previous_primary_present_mode
+                .get_or_insert(window.present_mode);
+            if window.visible {
+                window.visible = false;
+            }
+            let present_mode = stream_hidden_window_present_mode();
+            if window.present_mode != present_mode {
+                window.present_mode = present_mode;
+            }
         }
         if let Some(winit) = winit.as_deref_mut() {
             state
+                .previous_focused_mode
+                .get_or_insert(winit.focused_mode);
+            state
                 .previous_unfocused_mode
                 .get_or_insert(winit.unfocused_mode);
-            winit.unfocused_mode = UpdateMode::Continuous;
+            let update_mode =
+                stream_render_update_mode(config.0.twitch.broadcast.frames_per_second);
+            if winit.focused_mode != update_mode {
+                winit.focused_mode = update_mode;
+            }
+            if winit.unfocused_mode != update_mode {
+                winit.unfocused_mode = update_mode;
+            }
         }
         return;
     }
@@ -1702,15 +1899,21 @@ fn sync_stream_only_capture(
             *camera_target = previous_target;
         }
     }
-    if let Ok(mut window) = primary_window.single_mut()
-        && let Some(visible) = state.previous_primary_visibility.take()
-    {
-        window.visible = visible;
+    if let Ok(mut window) = primary_window.single_mut() {
+        if let Some(visible) = state.previous_primary_visibility.take() {
+            window.visible = visible;
+        }
+        if let Some(present_mode) = state.previous_primary_present_mode.take() {
+            window.present_mode = present_mode;
+        }
     }
-    if let Some(previous) = state.previous_unfocused_mode.take()
-        && let Some(winit) = winit.as_deref_mut()
-    {
-        winit.unfocused_mode = previous;
+    if let Some(winit) = winit.as_deref_mut() {
+        if let Some(previous) = state.previous_focused_mode.take() {
+            winit.focused_mode = previous;
+        }
+        if let Some(previous) = state.previous_unfocused_mode.take() {
+            winit.unfocused_mode = previous;
+        }
     }
     if !target_required && state.target.is_some() {
         if let Some(target) = state.target.take()
@@ -1739,20 +1942,6 @@ fn sync_stream_only_capture(
     }
 }
 
-fn stream_readback_due(next: &mut Option<Instant>, now: Instant, frames_per_second: u8) -> bool {
-    let period = Duration::from_secs_f64(1.0 / f64::from(frames_per_second.max(1)));
-    let deadline = next.get_or_insert(now);
-    if now < *deadline {
-        return false;
-    }
-    let overdue = now.saturating_duration_since(*deadline);
-    let period_nanos = period.as_nanos().max(1);
-    let elapsed_slots = 1_u128.saturating_add(overdue.as_nanos() / period_nanos);
-    let advance = u32::try_from(elapsed_slots).unwrap_or(u32::MAX);
-    *deadline += period.saturating_mul(advance);
-    true
-}
-
 fn sync_stream_only_capture_extract(
     config: Res<RuntimeConfig>,
     gameplay_ready: Option<Res<crate::GameplayReady>>,
@@ -1762,9 +1951,12 @@ fn sync_stream_only_capture_extract(
     mut extracted: ResMut<StreamOnlyCaptureExtract>,
 ) {
     extracted.target.clone_from(&state.target);
+    extracted.video_sink = runtime
+        .controller
+        .as_ref()
+        .map(BroadcastController::video_sink);
     extracted.width = state.width;
     extracted.height = state.height;
-    extracted.frames_per_second = config.0.twitch.broadcast.frames_per_second;
     extracted.active = gameplay_ready.is_some()
         && config.0.twitch.broadcast.render_mode == BroadcastRenderMode::StreamOnly
         && !sensitive_screen.0
@@ -1793,6 +1985,7 @@ fn receive_stream_only_captured_frames(
         if let Some(replaced) = newest.replace(frame) {
             recycle_stream_capture_pixels(replaced.recycle_pool, replaced.pixels);
             shared.0.dropped.fetch_add(1, Ordering::Relaxed);
+            shared.0.queue_drops.fetch_add(1, Ordering::Relaxed);
         }
     }
     drop(receiver);
@@ -1928,7 +2121,6 @@ fn capture_stream_only_target(
 ) {
     let _ = render_device.poll(PollType::Poll);
     if !extracted.active {
-        ring.next_capture_at = None;
         return;
     }
     let Some(target) = extracted.target.as_ref() else {
@@ -1941,10 +2133,11 @@ fn capture_stream_only_target(
     {
         return;
     }
+    // The Winit producer itself runs at the configured stream cadence, so each
+    // rendered offscreen frame must be captured. A second deadline gate here
+    // previously forced the producer to run at 7x cadence and was the source of
+    // the accumulating transform/upload workload.
     let now = Instant::now();
-    if !stream_readback_due(&mut ring.next_capture_at, now, extracted.frames_per_second) {
-        return;
-    }
     let slot_count = ring.slots.len();
     let slot_index = (0..slot_count)
         .map(|offset| (ring.next_slot + offset) % slot_count)
@@ -1956,6 +2149,7 @@ fn capture_stream_only_target(
         });
     let Some(slot_index) = slot_index else {
         ring.shared.0.dropped.fetch_add(1, Ordering::Relaxed);
+        ring.shared.0.slot_misses.fetch_add(1, Ordering::Relaxed);
         return;
     };
     ring.next_slot = (slot_index + 1) % slot_count;
@@ -1987,6 +2181,7 @@ fn capture_stream_only_target(
     let busy = Arc::clone(&slot.busy);
     let sender = ring.sender.clone();
     let shared = ring.shared.clone();
+    let video_sink = extracted.video_sink.clone();
     let recycle_pool = Arc::clone(&ring.recycled_pixels);
     let width = extracted.width;
     let height = extracted.height;
@@ -2004,30 +2199,45 @@ fn capture_stream_only_target(
             drop(mapped);
             callback_buffer.unmap();
             if copied {
-                match sender.try_send(StreamOnlyCapturedFrame {
-                    width,
-                    height,
-                    captured_at,
-                    pixels,
-                    recycle_pool: Arc::clone(&recycle_pool),
-                }) {
-                    Ok(()) => {
-                        shared.0.queued.fetch_add(1, Ordering::Relaxed);
-                    }
-                    Err(TrySendError::Full(frame)) => {
-                        recycle_stream_capture_pixels(frame.recycle_pool, frame.pixels);
-                        shared.0.dropped.fetch_add(1, Ordering::Relaxed);
-                    }
-                    Err(TrySendError::Disconnected(frame)) => {
-                        recycle_stream_capture_pixels(frame.recycle_pool, frame.pixels);
+                if let Some(sink) = video_sink {
+                    sink.metrics.observe_capture_latency(captured_at.elapsed());
+                    let _ = sink.send_video(VideoFrame {
+                        width,
+                        height,
+                        pixel_format: VideoPixelFormat::Bgra,
+                        pixels,
+                        recycle_pool: Some(recycle_pool),
+                    });
+                } else {
+                    match sender.try_send(StreamOnlyCapturedFrame {
+                        width,
+                        height,
+                        captured_at,
+                        pixels,
+                        recycle_pool: Arc::clone(&recycle_pool),
+                    }) {
+                        Ok(()) => {
+                            shared.0.queued.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(TrySendError::Full(frame)) => {
+                            recycle_stream_capture_pixels(frame.recycle_pool, frame.pixels);
+                            shared.0.dropped.fetch_add(1, Ordering::Relaxed);
+                            shared.0.queue_drops.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(TrySendError::Disconnected(frame)) => {
+                            recycle_stream_capture_pixels(frame.recycle_pool, frame.pixels);
+                        }
                     }
                 }
+                shared.0.completed.fetch_add(1, Ordering::Relaxed);
             } else {
                 recycle_stream_capture_pixels(Arc::clone(&recycle_pool), pixels);
                 shared.0.dropped.fetch_add(1, Ordering::Relaxed);
+                shared.0.copy_failures.fetch_add(1, Ordering::Relaxed);
             }
         } else {
             shared.0.map_failures.fetch_add(1, Ordering::Relaxed);
+            shared.0.total_map_failures.fetch_add(1, Ordering::Relaxed);
         }
         busy.store(false, Ordering::Release);
         shared.0.in_flight.fetch_sub(1, Ordering::Relaxed);
@@ -2597,11 +2807,14 @@ fn stream_operator_live_button(
     let bandwidth_testing = phase == DirectBroadcastPhase::BandwidthTesting;
     let ending_output = broadcasting || bandwidth_testing;
     if let Ok(mut label) = labels.single_mut() {
-        operator_live_button_label(&phase).clone_into(&mut **label);
+        let desired = operator_live_button_label(&phase);
+        if **label != desired {
+            desired.clone_into(&mut **label);
+        }
     }
     for (interaction, mut background, mut border) in &mut buttons {
         let hovered = *interaction == Interaction::Hovered;
-        background.0 = if ending_output {
+        let desired_background = if ending_output {
             if hovered {
                 Color::srgb(0.47, 0.08, 0.07)
             } else {
@@ -2612,11 +2825,17 @@ fn stream_operator_live_button(
         } else {
             Color::srgb(0.08, 0.31, 0.18)
         };
-        *border = BorderColor::all(if ending_output {
+        if background.0 != desired_background {
+            background.0 = desired_background;
+        }
+        let desired_border = BorderColor::all(if ending_output {
             Color::srgb(1.0, 0.32, 0.28)
         } else {
             Color::srgb(0.31, 0.78, 0.46)
         });
+        if *border != desired_border {
+            *border = desired_border;
+        }
         if *interaction == Interaction::Pressed {
             if active {
                 control.request_stop_and_return_to_main_menu();
@@ -2632,11 +2851,14 @@ fn stream_operator_restart_button(
     mut buttons: StreamOperatorRestartButtonQuery,
 ) {
     for (interaction, mut background) in &mut buttons {
-        background.0 = if *interaction == Interaction::Hovered {
+        let desired_background = if *interaction == Interaction::Hovered {
             Color::srgb(0.17, 0.34, 0.52)
         } else {
             Color::srgb(0.12, 0.22, 0.34)
         };
+        if background.0 != desired_background {
+            background.0 = desired_background;
+        }
         if *interaction == Interaction::Pressed {
             control.request_restart();
         }
@@ -2658,10 +2880,14 @@ fn update_stream_operator_info(
     config: Res<RuntimeConfig>,
     simulation: Option<Res<SimulationRuntime>>,
     mut text: Query<&mut Text, With<StreamOperatorInfoText>>,
+    mut next_refresh: Local<Option<Instant>>,
 ) {
     let Ok(mut text) = text.single_mut() else {
         return;
     };
+    if !operator_info_refresh_due(&mut next_refresh, Instant::now()) {
+        return;
+    }
     let snapshot = runtime.snapshot();
     let fallback = if snapshot.encoder_rejections.is_empty() {
         "Auto selected its first usable backend".to_owned()
@@ -2676,7 +2902,7 @@ fn update_stream_operator_info(
         .as_deref()
         .unwrap_or("No Twitch public-status check is active");
     let enemy_status = stream_operator_enemy_status(&config.0, simulation.as_deref());
-    **text = format!(
+    let desired = format!(
         "Status: {:?}\nTwitch check: {}\nEncoder: {}\n{}\nStream motion: {:.1} FPS\nOutput cadence: {:.1} FPS\nRecent capture replacements: {} · Output cadence skips: {}\nRejected video frames: {} · Audio drops: {}\nEncode latency: {:.2} ms average / {:.2} ms maximum\nNetwork/mux write: {:.2} ms average / {:.2} ms maximum\n{}\nDrop log: {}",
         snapshot.phase,
         twitch_status,
@@ -2695,6 +2921,17 @@ fn update_stream_operator_info(
         enemy_status,
         DIRECT_BROADCAST_LOG_PATH,
     );
+    if **text != desired {
+        **text = desired;
+    }
+}
+
+fn operator_info_refresh_due(next_refresh: &mut Option<Instant>, now: Instant) -> bool {
+    if next_refresh.is_some_and(|deadline| now < deadline) {
+        return false;
+    }
+    *next_refresh = Some(now + STREAM_OPERATOR_INFO_REFRESH_INTERVAL);
+    true
 }
 
 fn stream_operator_enemy_status(
@@ -3035,7 +3272,12 @@ fn update_stream_operator_chat(
     >,
     mut input_text: StreamOperatorChatInputTextQuery,
     mut selected_text: StreamOperatorChatSelectedTextQuery,
+    mut initialized: Local<bool>,
 ) {
+    if rows.is_empty() || (*initialized && !chat.is_changed()) {
+        return;
+    }
+    *initialized = true;
     let visible = chat.visible_lines(OPERATOR_CHAT_VISIBLE_ROWS);
     for (mut row, mut background, mut border) in &mut rows {
         if let Some(line) = visible.get(row.slot) {
@@ -3453,7 +3695,7 @@ fn verify_twitch_public_stream(
         if let Some(error) = last_error {
             bail!("Twitch did not confirm the channel as live within 60 seconds; last status check failed: {error}");
         }
-        bail!("Twitch did not confirm the channel as live within 60 seconds; the encoder session was stopped instead of reporting a false LIVE state")
+        bail!("Twitch did not confirm the channel as live within 60 seconds; RTMP output remains active while public status is unconfirmed")
     })
 }
 
@@ -3984,6 +4226,15 @@ impl BroadcastController {
         )
     }
 
+    fn video_sink(&self) -> BroadcastVideoSink {
+        BroadcastVideoSink {
+            video: Arc::clone(&self.video),
+            metrics: Arc::clone(&self.metrics),
+            stop: Arc::clone(&self.capture_stop),
+            video_consumer_ready: Arc::clone(&self.video_consumer_ready),
+        }
+    }
+
     fn drop_video_frames(&self, count: u64) {
         self.metrics
             .dropped_video
@@ -4039,9 +4290,14 @@ fn capture_process_audio(
     tidal_audio: Option<Receiver<NativeAudioFrame>>,
     game_audio: Option<NativeGameAudioMix>,
 ) -> Result<()> {
-    initialize_mta()
+    // Process-loopback activation can fail with RPC_E_CHANGED_MODE from an MTA
+    // after the GUI/WinRT runtime is active. Keep the capture client and all of
+    // its use on this dedicated STA thread for the lifetime of the session.
+    initialize_sta()
         .ok()
         .map_err(|error| anyhow!("could not initialize Windows audio COM: {error}"))?;
+    let mut client = AudioClient::new_application_loopback_client(std::process::id(), true)
+        .map_err(|error| anyhow!("could not create process-scoped WASAPI loopback: {error}"))?;
     let format = WaveFormat::new(
         32,
         32,
@@ -4052,8 +4308,6 @@ fn capture_process_audio(
     );
     let block_align = usize::try_from(format.get_blockalign())
         .context("WASAPI block alignment does not fit in memory")?;
-    let mut client = AudioClient::new_application_loopback_client(std::process::id(), true)
-        .map_err(|error| anyhow!("could not create process-scoped WASAPI loopback: {error}"))?;
     client
         .initialize_client(
             &format,
@@ -4345,8 +4599,60 @@ impl VideoCadence {
     }
 }
 
-struct BroadcastEncoder {
+struct BroadcastOutput {
     output: format::context::Output,
+    trailer_pending: bool,
+}
+
+impl BroadcastOutput {
+    fn new(output: format::context::Output) -> Self {
+        Self {
+            output,
+            trailer_pending: false,
+        }
+    }
+
+    fn mark_header_written(&mut self) {
+        self.trailer_pending = true;
+    }
+
+    fn finish(&mut self) -> std::result::Result<(), ffmpeg::Error> {
+        if !self.trailer_pending {
+            return Ok(());
+        }
+        // `fifo_write_trailer` signals EOF and joins FFmpeg's private writer
+        // thread. Clear the flag first because even an error return has already
+        // consumed this output and must never cause a second trailer attempt.
+        self.trailer_pending = false;
+        self.output.write_trailer()
+    }
+}
+
+impl std::ops::Deref for BroadcastOutput {
+    type Target = format::context::Output;
+
+    fn deref(&self) -> &Self::Target {
+        &self.output
+    }
+}
+
+impl std::ops::DerefMut for BroadcastOutput {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.output
+    }
+}
+
+impl Drop for BroadcastOutput {
+    fn drop(&mut self) {
+        // Every successful FIFO header starts a native writer thread. Any Rust
+        // error path that bypasses BroadcastEncoder::finish must still join it
+        // before ffmpeg-next frees the AVFormatContext, queue, and mutex.
+        let _ = self.finish();
+    }
+}
+
+struct BroadcastEncoder {
+    output: BroadcastOutput,
     video: encoder::video::Encoder,
     audio: encoder::audio::Encoder,
     video_stream: usize,
@@ -4407,13 +4713,9 @@ fn encode_broadcast_session(
     ffmpeg::init().context("could not initialize the linked FFmpeg libraries")?;
     ffmpeg::log::set_level(ffmpeg::log::Level::Quiet);
     let (mut encoder, encoder_selection) = BroadcastEncoder::open(target, config)?;
-    let live_network_output =
-        target.url.starts_with("rtmp://") || target.url.starts_with("rtmps://");
     video_consumer_ready.store(true, Ordering::Relaxed);
     if discard_pending_audio(receiver, metrics) {
-        if !live_network_output {
-            encoder.finish(metrics)?;
-        }
+        encoder.finish(metrics)?;
         return Ok(SessionEnd::Stopped);
     }
     let mut encoder_selection = Some(encoder_selection);
@@ -4425,17 +4727,13 @@ fn encode_broadcast_session(
     }
     loop {
         if stop.load(Ordering::Relaxed) {
-            if !live_network_output {
-                encoder.finish(metrics)?;
-            }
+            encoder.finish(metrics)?;
             return Ok(SessionEnd::Stopped);
         }
         if graceful_stop.load(Ordering::Acquire) && graceful_deadline.is_none() {
             latest_video = take_latest_video(video_mailbox).or(latest_video);
             if latest_video.is_none() {
-                if !live_network_output {
-                    encoder.finish(metrics)?;
-                }
+                encoder.finish(metrics)?;
                 return Ok(SessionEnd::Stopped);
             }
             cadence.start(Instant::now());
@@ -4472,13 +4770,9 @@ fn encode_broadcast_session(
             continue;
         }
         if graceful_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            // A live FLV stream has no useful seekable trailer. The offline
-            // card has already been muxed for a full second, so abandoning the
-            // RTMP output here avoids several serial network flushes on a dead
-            // ingest. File diagnostics still need their trailer.
-            if !live_network_output {
-                encoder.finish(metrics)?;
-            }
+            // The live FLV trailer itself is not useful to Twitch, but FFmpeg's
+            // FIFO muxer uses this call to stop and join its writer thread.
+            encoder.finish(metrics)?;
             return Ok(SessionEnd::Stopped);
         }
         match receiver.recv_timeout(cadence.receive_timeout(Instant::now())) {
@@ -4495,17 +4789,13 @@ fn encode_broadcast_session(
             }
             Ok(AudioInput::Stop) => {
                 if graceful_deadline.is_none() {
-                    if !live_network_output {
-                        encoder.finish(metrics)?;
-                    }
+                    encoder.finish(metrics)?;
                     return Ok(SessionEnd::Stopped);
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                if !live_network_output {
-                    encoder.finish(metrics)?;
-                }
+                encoder.finish(metrics)?;
                 return Ok(SessionEnd::InputClosed);
             }
         }
@@ -4567,12 +4857,13 @@ impl BroadcastEncoder {
     ) -> Result<(Self, VideoEncoderSelection)> {
         let (muxer, output_options) = broadcast_output_options(&target.url);
         let live_network_output = muxer == "fifo";
-        let mut output = if live_network_output {
+        let output = if live_network_output {
             stream_town_ffmpeg_bridge::allocate_fifo_output(&target.url)?
         } else {
             format::output_as_with(&target.url, muxer, output_options.clone())
                 .context("could not open the local FLV broadcast target")?
         };
+        let mut output = BroadcastOutput::new(output);
         let global_header = output
             .format()
             .flags()
@@ -4599,16 +4890,21 @@ impl BroadcastEncoder {
             stream.index()
         };
         if live_network_output {
-            let unused = output
-                .write_header_with(output_options)
-                .context("Twitch rejected the buffered FLV stream header")?;
-            if let Some((option, _)) = unused.iter().next() {
+            let rejected_option = {
+                let unused = output
+                    .write_header_with(output_options)
+                    .context("Twitch rejected the buffered FLV stream header")?;
+                unused.iter().next().map(|(option, _)| option.to_owned())
+            };
+            output.mark_header_written();
+            if let Some(option) = rejected_option {
                 bail!("linked FFmpeg FIFO muxer rejected broadcast option '{option}'");
             }
         } else {
             output
                 .write_header()
                 .context("could not write the local FLV stream header")?;
+            output.mark_header_written();
         }
         let video_time_base = output
             .stream(video_stream)
@@ -4788,7 +5084,7 @@ impl BroadcastEncoder {
         self.audio.send_eof().ok();
         self.drain_audio(metrics)?;
         let publish_started = Instant::now();
-        let finished = self.output.write_trailer();
+        let finished = self.output.finish();
         metrics.observe_mux_write_latency(publish_started.elapsed());
         finished.context("could not finish the Twitch FLV stream")
     }
@@ -4863,6 +5159,10 @@ fn configure_amf_quality(options: &mut Dictionary<'_>) {
     options.set("max_b_frames", "0");
     options.set("bf", "0");
     options.set("coder", "cabac");
+    // Camera pans invalidate much of the previous frame at once. Ask AMF to
+    // preserve those moving details instead of spending nearly all of the GOP
+    // quality budget on its two-second IDR frames.
+    options.set("high_motion_quality_boost_enable", "1");
     options.set("me_half_pel", "1");
     options.set("me_quarter_pel", "1");
     options.set("latency", "1");
@@ -4872,6 +5172,34 @@ fn configure_amf_quality(options: &mut Dictionary<'_>) {
     // starved that detail between Twitch's required two-second IDR frames.
     options.set("vbaq", "1");
     options.set("preanalysis", "0");
+}
+
+fn configure_x264_quality(
+    options: &mut Dictionary<'_>,
+    frames_per_second: u8,
+    video_bitrate_kbps: u32,
+) {
+    let keyframe_interval = u32::from(frames_per_second) * 2;
+    let vbv_rate = format!("{video_bitrate_kbps}k");
+    options.set("profile", "high");
+    // `faster` leaves CPU headroom for the simulation while x264's lookahead,
+    // adaptive B-frames, and AQ preserve moving terrain detail much better
+    // than the affected AMF path. Bound x264's worker fan-out as well: its
+    // automatic thread count can occupy every logical processor during encode
+    // bursts, starving Bevy's render preparation even though encode latency is
+    // comfortably below the frame budget. Three frame threads retain the same
+    // quality tools while reserving half of the deployment host's six physical
+    // cores for Bevy, the GPU driver, audio, and RTMP work.
+    options.set("preset", "faster");
+    options.set("threads", "3");
+    options.set("maxrate", &vbv_rate);
+    options.set("bufsize", &vbv_rate);
+    options.set(
+        "x264-params",
+        &format!(
+            "nal-hrd=cbr:force-cfr=1:keyint={keyframe_interval}:min-keyint={keyframe_interval}:scenecut=0:bframes=2:b-adapt=1:ref=3:rc-lookahead=20:lookahead-threads=1:aq-mode=3:aq-strength=1.0"
+        ),
+    );
 }
 
 fn open_video_encoder(
@@ -4903,10 +5231,10 @@ fn open_video_encoder(
             video.set_bit_rate(config.video_bitrate_kbps as usize * 1_000);
             video.set_max_bit_rate(config.video_bitrate_kbps as usize * 1_000);
             video.set_gop(u32::from(config.frames_per_second) * 2);
-            // Every live backend uses decode-order timestamps. In particular,
-            // AMD's reordered B-frame path caused intermittent FLV publish
-            // failures and visible dark-scene pulsing on the RX 7800 XT.
-            video.set_max_b_frames(0);
+            // Hardware paths retain decode-order-only timestamps because AMD's
+            // reordered B-frame path caused intermittent FLV publish failures.
+            // libx264's mature reorder path safely uses two adaptive B-frames.
+            video.set_max_b_frames(if name == "libx264" { 2 } else { 0 });
             if global_header {
                 video.set_flags(codec::Flags::GLOBAL_HEADER);
             }
@@ -4936,6 +5264,13 @@ fn open_video_encoder(
                     options.set("rate_control", "cbr");
                     options.set("scenario", "live_streaming");
                     options.set("hw_encoding", "1");
+                }
+                "libx264" => {
+                    configure_x264_quality(
+                        &mut options,
+                        config.frames_per_second,
+                        config.video_bitrate_kbps,
+                    );
                 }
                 "libopenh264" => options.set("profile", "high"),
                 _ => {}
@@ -5011,12 +5346,14 @@ fn encoder_candidates(preference: BroadcastEncoderPreference) -> &'static [&'sta
             "h264_qsv",
             "h264_amf",
             "h264_mf",
+            "libx264",
             "libopenh264",
         ],
         BroadcastEncoderPreference::Nvidia => &["h264_nvenc"],
         BroadcastEncoderPreference::Intel => &["h264_qsv"],
         BroadcastEncoderPreference::Amd => &["h264_amf"],
         BroadcastEncoderPreference::MediaFoundation => &["h264_mf"],
+        BroadcastEncoderPreference::X264 => &["libx264"],
         BroadcastEncoderPreference::OpenH264 => &["libopenh264"],
     }
 }
@@ -5037,6 +5374,7 @@ pub fn inspect_broadcast_prerequisites(config: &BroadcastConfig) -> Result<Broad
         "h264_qsv",
         "h264_amf",
         "h264_mf",
+        "libx264",
         "libopenh264",
     ]
     .into_iter()
@@ -5107,6 +5445,22 @@ pub fn inspect_broadcast_prerequisites(config: &BroadcastConfig) -> Result<Broad
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn operator_info_refresh_is_bounded_to_once_per_second() {
+        let started_at = Instant::now();
+        let mut next_refresh = None;
+
+        assert!(operator_info_refresh_due(&mut next_refresh, started_at));
+        assert!(!operator_info_refresh_due(
+            &mut next_refresh,
+            started_at + Duration::from_millis(999)
+        ));
+        assert!(operator_info_refresh_due(
+            &mut next_refresh,
+            started_at + STREAM_OPERATOR_INFO_REFRESH_INTERVAL
+        ));
+    }
 
     #[test]
     fn live_broadcast_uses_a_bounded_recovering_fifo_muxer() {
@@ -5439,31 +5793,74 @@ mod tests {
     }
 
     #[test]
-    fn gpu_readback_cadence_never_captures_faster_than_the_stream_rate() {
-        let started = Instant::now();
-        let mut next = None;
+    fn operator_dashboard_does_not_vsync_the_stream_render_loop() {
+        assert_eq!(
+            stream_operator_window().present_mode,
+            PresentMode::AutoNoVsync
+        );
+        assert_eq!(
+            stream_hidden_window_present_mode(),
+            PresentMode::AutoNoVsync
+        );
+    }
 
-        assert!(stream_readback_due(&mut next, started, 30));
-        assert!(!stream_readback_due(
-            &mut next,
-            started + Duration::from_millis(20),
-            30
-        ));
-        assert!(stream_readback_due(
-            &mut next,
-            started + Duration::from_millis(34),
-            30
-        ));
-        assert!(!stream_readback_due(
-            &mut next,
-            started + Duration::from_millis(50),
-            30
-        ));
-        assert!(stream_readback_due(
-            &mut next,
-            started + Duration::from_millis(68),
-            30
-        ));
+    #[test]
+    fn stream_render_mode_bounds_the_producer_without_event_bypass() {
+        assert_eq!(
+            stream_render_update_mode(30),
+            UpdateMode::Reactive {
+                wait: Duration::from_secs_f64(1.0 / 30.0),
+                react_to_device_events: false,
+                react_to_user_events: false,
+                react_to_window_events: false,
+            }
+        );
+    }
+
+    #[test]
+    fn stream_render_mode_clamps_an_invalid_zero_fps_to_one() {
+        assert_eq!(
+            stream_render_update_mode(0),
+            UpdateMode::Reactive {
+                wait: Duration::from_secs(1),
+                react_to_device_events: false,
+                react_to_user_events: false,
+                react_to_window_events: false,
+            }
+        );
+    }
+
+    #[test]
+    fn public_status_timeout_does_not_stop_a_healthy_rtmp_session() {
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(LiveVerificationEvent::Error(
+                "Twitch status check timed out".to_owned(),
+            ))
+            .unwrap();
+        let mut app = App::new();
+        app.insert_resource(DirectBroadcastRuntime {
+            phase: DirectBroadcastPhase::VerifyingTwitch,
+            live_verification: Some(LiveVerification {
+                events: Arc::new(Mutex::new(receiver)),
+                cancel: Arc::new(AtomicBool::new(false)),
+            }),
+            ..default()
+        })
+        .add_systems(Update, poll_twitch_live_verification);
+
+        app.update();
+
+        let runtime = app.world().resource::<DirectBroadcastRuntime>();
+        assert_eq!(runtime.phase, DirectBroadcastPhase::VerifyingTwitch);
+        assert!(runtime.controller.is_none());
+        assert!(runtime.live_verification.is_none());
+        assert!(
+            runtime
+                .verification_status
+                .as_deref()
+                .is_some_and(|status| status.contains("RTMP remains active"))
+        );
     }
 
     #[test]
@@ -5732,7 +6129,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_encoder_order_prefers_hardware_and_has_lgpl_fallback() {
+    fn auto_encoder_order_prefers_hardware_and_has_software_fallbacks() {
         assert_eq!(
             encoder_candidates(BroadcastEncoderPreference::Auto),
             [
@@ -5740,6 +6137,7 @@ mod tests {
                 "h264_qsv",
                 "h264_amf",
                 "h264_mf",
+                "libx264",
                 "libopenh264"
             ]
         );
@@ -5758,6 +6156,10 @@ mod tests {
         assert_eq!(
             encoder_input_format("h264_qsv"),
             ffmpeg::format::Pixel::NV12
+        );
+        assert_eq!(
+            encoder_input_format("libx264"),
+            ffmpeg::format::Pixel::YUV420P
         );
         assert_eq!(
             encoder_input_format("libopenh264"),
@@ -5840,7 +6242,7 @@ mod tests {
     }
 
     #[test]
-    fn controller_counts_replaced_video_without_rejecting_the_newest_frame() {
+    fn render_video_sink_counts_replaced_video_without_rejecting_the_newest_frame() {
         let (audio, _audio_receiver) = mpsc::sync_channel(1);
         let (_event_sender, event_receiver) = mpsc::channel();
         let metrics = Arc::new(BroadcastMetrics::default());
@@ -5871,8 +6273,9 @@ mod tests {
             pixels: vec![5, 6, 7, 8],
             recycle_pool: None,
         };
-        assert!(controller.send_video(first));
-        assert!(controller.send_video(second));
+        let sink = controller.video_sink();
+        assert!(sink.send_video(first));
+        assert!(sink.send_video(second));
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.replaced_video, 1);
         assert_eq!(snapshot.dropped_video, 0);
@@ -5983,10 +6386,106 @@ mod tests {
         assert_eq!(options.get("max_b_frames"), Some("0"));
         assert_eq!(options.get("bf"), Some("0"));
         assert_eq!(options.get("coder"), Some("cabac"));
+        assert_eq!(options.get("high_motion_quality_boost_enable"), Some("1"));
         assert_eq!(options.get("me_half_pel"), Some("1"));
         assert_eq!(options.get("me_quarter_pel"), Some("1"));
         assert_eq!(options.get("latency"), Some("1"));
         assert_eq!(options.get("async_depth"), Some("2"));
+    }
+
+    #[test]
+    fn x264_quality_profile_uses_cbr_adaptive_b_frames_and_a_two_second_gop() {
+        let mut options = Dictionary::new();
+        configure_x264_quality(&mut options, 30, 6_000);
+
+        assert_eq!(options.get("profile"), Some("high"));
+        assert_eq!(options.get("preset"), Some("faster"));
+        assert_eq!(options.get("threads"), Some("3"));
+        assert_eq!(options.get("maxrate"), Some("6000k"));
+        assert_eq!(options.get("bufsize"), Some("6000k"));
+        let params = options.get("x264-params").unwrap();
+        assert!(params.contains("nal-hrd=cbr"));
+        assert!(params.contains("keyint=60:min-keyint=60"));
+        assert!(params.contains("bframes=2:b-adapt=1"));
+        assert!(params.contains("rc-lookahead=20"));
+        assert!(params.contains("lookahead-threads=1"));
+        assert!(params.contains("aq-mode=3"));
+    }
+
+    #[test]
+    #[ignore = "local 1080p30 x264 throughput diagnostic"]
+    fn configured_1080p30_x264_encoder_sustains_realtime_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = std::env::var_os("STREAM_TOWN_BROADCAST_DIAGNOSTIC_OUTPUT").map_or_else(
+            || directory.path().join("direct-broadcast-1080p30-x264.flv"),
+            std::path::PathBuf::from,
+        );
+        let target = BroadcastTarget {
+            ingest_name: "local-x264-performance-diagnostic".to_owned(),
+            url: output.to_string_lossy().into_owned(),
+        };
+        let config = BroadcastConfig {
+            enabled: true,
+            width: 1_920,
+            height: 1_080,
+            frames_per_second: 30,
+            video_bitrate_kbps: 6_000,
+            encoder: BroadcastEncoderPreference::X264,
+            ..BroadcastConfig::default()
+        };
+        ffmpeg::init().unwrap();
+        ffmpeg::log::set_level(ffmpeg::log::Level::Quiet);
+        let (mut encoder, selected) = BroadcastEncoder::open(&target, &config).unwrap();
+        assert_eq!(selected.name, "libx264");
+        let width = usize::from(config.width);
+        let height = usize::from(config.height);
+        let frames = (0..16_usize)
+            .map(|shift| {
+                let mut pixels = vec![0_u8; width * height * 4];
+                for y in 0..height {
+                    for x in 0..width {
+                        let offset = (y * width + x) * 4;
+                        let checker = (((x + shift * 7) / 8) ^ ((y + shift * 3) / 8)) & 1;
+                        let value = if checker == 0 { 36_u8 } else { 212_u8 };
+                        pixels[offset] = value;
+                        pixels[offset + 1] = value.saturating_add(
+                            u8::try_from((x + shift) & 31).expect("masked sample fits u8"),
+                        );
+                        pixels[offset + 2] = value.saturating_sub(
+                            u8::try_from((y + shift) & 31).expect("masked sample fits u8"),
+                        );
+                        pixels[offset + 3] = 255;
+                    }
+                }
+                VideoFrame {
+                    width: u32::from(config.width),
+                    height: u32::from(config.height),
+                    pixel_format: VideoPixelFormat::Bgra,
+                    pixels,
+                    recycle_pool: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        let frame_count = 120_u32;
+        let metrics = BroadcastMetrics::default();
+        let started = Instant::now();
+        for pts in 0..frame_count {
+            let frame = &frames[usize::try_from(pts).unwrap_or_default() % frames.len()];
+            encoder
+                .encode_video(frame, i64::from(pts), &metrics)
+                .unwrap();
+        }
+        encoder.finish(&metrics).unwrap();
+        let elapsed = started.elapsed().as_secs_f64();
+        let frames_per_second = f64::from(frame_count) / elapsed;
+        eprintln!(
+            "1080p30 x264 diagnostic: {frames_per_second:.1} FPS, {:.2} ms/frame",
+            elapsed * 1_000.0 / f64::from(frame_count)
+        );
+        assert!(
+            frames_per_second >= 30.0,
+            "x264 only sustained {frames_per_second:.1} FPS"
+        );
     }
 
     #[test]
@@ -6060,6 +6559,35 @@ mod tests {
             frames_per_second >= 60.0,
             "{selected} only sustained {frames_per_second:.1} FPS"
         );
+    }
+
+    #[test]
+    fn dropping_encoder_after_header_finalizes_the_muxer_context() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("direct-broadcast-drop.flv");
+        let target = BroadcastTarget {
+            ingest_name: "local-drop-finalization".to_owned(),
+            url: output.to_string_lossy().into_owned(),
+        };
+        let config = BroadcastConfig {
+            width: 320,
+            height: 180,
+            frames_per_second: 30,
+            video_bitrate_kbps: 500,
+            audio_bitrate_kbps: 96,
+            encoder: BroadcastEncoderPreference::OpenH264,
+            ..BroadcastConfig::default()
+        };
+        ffmpeg::init().unwrap();
+        ffmpeg::log::set_level(ffmpeg::log::Level::Quiet);
+
+        {
+            let (encoder, _) = BroadcastEncoder::open(&target, &config).unwrap();
+            assert!(encoder.output.trailer_pending);
+        }
+
+        let input = format::input(&output).expect("dropped encoder should leave a valid FLV");
+        assert_eq!(input.streams().len(), 2);
     }
 
     #[test]

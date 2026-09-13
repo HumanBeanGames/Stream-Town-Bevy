@@ -9,15 +9,16 @@ use thiserror::Error;
 use crate::{GridPos, ObjectiveDef, ObjectiveKind, StableId};
 
 pub const BUILDING_MAX_HEALTH: i32 = 500;
-pub const CURRENT_SIMULATION_SCHEMA: u32 = 5;
+pub const CURRENT_SIMULATION_SCHEMA: u32 = 6;
 /// Shipping Unity's `AllSeasonSettings` advances after three in-game days.
 pub const DAYS_PER_SEASON: u32 = 3;
 pub const SEASONS_PER_YEAR: u32 = 4;
 pub const SEASON_TRANSITION_SECONDS: f64 = 10.0;
 pub const INITIAL_TECHNOLOGY_VOTE_DELAY_SECONDS: f32 = 20.0;
-pub const MAX_ROLE_LEVEL: u16 = 99;
 pub const RULER_VOTE_DURATION_SECONDS: f32 = 120.0;
 pub const RULER_VOTE_INTERVAL_SECONDS: f32 = 3_600.0;
+pub const COMMUNITY_EVENT_REQUEST_COOLDOWN_SECONDS: f32 = 3_600.0;
+const MARKET_UNITS_PER_GOLD: u32 = 32;
 const ACTOR_EYE_VARIANTS: u64 = 10;
 const ACTOR_HAIR_VARIANTS: u64 = 7;
 const ACTOR_FACIAL_HAIR_VARIANTS: u64 = 2;
@@ -64,6 +65,39 @@ pub enum TownEvent {
     Festival,
     HarshWeather,
     FishGod,
+}
+
+/// A persistent, viewer-selected town modifier. These are deliberately kept
+/// separate from short-lived encounter events such as raids and Fish God so a
+/// community choice cannot block or be cleared by an unrelated encounter.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum CommunityEvent {
+    ProspectingBoom,
+    ReforestationBoom,
+    AgriculturalBoom,
+    Rebalance,
+    Awakening,
+    EconomicBoom,
+    Invasion,
+    Market,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum CommunityVoteProposal {
+    Event(CommunityEvent),
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct CommunityVoteState {
+    pub proposal: CommunityVoteProposal,
+    pub remaining_seconds: f32,
+    pub votes: BTreeMap<StableId, bool>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommunityVoteOutcome {
+    pub proposal: CommunityVoteProposal,
+    pub approved: bool,
 }
 
 /// The highest-priority Unity/Twitch privilege class retained for presentation and permissions.
@@ -345,6 +379,22 @@ pub struct WorldSimulation {
     pub ruler_previous_role: Option<StableId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ruler_vote: Option<RulerVoteState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_community_event: Option<CommunityEvent>,
+    /// Remainders from Market-event overflow sales. The event pays one quarter
+    /// of the normal sell value without losing fractional value between trips.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub market_overflow_trade_remainders: BTreeMap<StableId, u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub community_vote: Option<CommunityVoteState>,
+    #[serde(default, skip_serializing_if = "VecDeque::is_empty")]
+    pub community_vote_queue: VecDeque<CommunityVoteProposal>,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub community_event_request_cooldown_seconds: f32,
+    /// Completed outcomes are a runtime notification channel and are never
+    /// persisted into town saves.
+    #[serde(skip)]
+    pub pending_community_vote_outcomes: VecDeque<CommunityVoteOutcome>,
     #[serde(
         default = "default_ruler_vote_cooldown",
         skip_serializing_if = "is_default_ruler_vote_cooldown"
@@ -401,6 +451,14 @@ pub enum SimulationError {
     NoFishGodEvent,
     #[error("a ruler vote is already active")]
     RulerVoteActive,
+    #[error("a community vote is already active")]
+    CommunityVoteActive,
+    #[error("there is no active community vote")]
+    NoCommunityVote,
+    #[error("the requested event is already active or awaiting a vote")]
+    DuplicateCommunityEvent,
+    #[error("the global event-request cooldown has {remaining_seconds:.0} seconds remaining")]
+    CommunityEventCooldown { remaining_seconds: u32 },
     #[error("there is no active ruler vote")]
     NoRulerVote,
     #[error("{0} is not a valid ruler vote option")]
@@ -442,6 +500,12 @@ impl WorldSimulation {
             current_ruler: None,
             ruler_previous_role: None,
             ruler_vote: None,
+            active_community_event: None,
+            market_overflow_trade_remainders: BTreeMap::new(),
+            community_vote: None,
+            community_vote_queue: VecDeque::new(),
+            community_event_request_cooldown_seconds: 0.0,
+            pending_community_vote_outcomes: VecDeque::new(),
             ruler_vote_cooldown_seconds: 30.0,
             ruler_vote_scheduled: true,
             building_costs_enabled: true,
@@ -664,6 +728,9 @@ impl WorldSimulation {
         if self.ruler_vote.is_some() {
             return Err(SimulationError::RulerVoteActive);
         }
+        if self.community_vote.is_some() {
+            return Err(SimulationError::CommunityVoteActive);
+        }
         let kind = if kind == RulerVoteKind::KeepRuler && self.current_ruler.is_none() {
             RulerVoteKind::NewRuler
         } else {
@@ -821,6 +888,85 @@ impl WorldSimulation {
         self.ruler_vote_cooldown_seconds = RULER_VOTE_INTERVAL_SECONDS;
     }
 
+    /// Accepts a public request into the expandable governance queue. The
+    /// global cooldown is consumed only by a valid, non-duplicate request.
+    pub fn request_community_event(
+        &mut self,
+        event: CommunityEvent,
+    ) -> Result<(), SimulationError> {
+        if self.community_event_request_cooldown_seconds > f32::EPSILON {
+            let cooldown = Duration::from_secs_f32(self.community_event_request_cooldown_seconds);
+            let rounded_seconds = cooldown
+                .as_secs()
+                .saturating_add(u64::from(cooldown.subsec_nanos() > 0));
+            return Err(SimulationError::CommunityEventCooldown {
+                remaining_seconds: u32::try_from(rounded_seconds).unwrap_or(u32::MAX),
+            });
+        }
+        let proposal = CommunityVoteProposal::Event(event);
+        let is_current = self.active_community_event == Some(event);
+        let is_active = self
+            .community_vote
+            .as_ref()
+            .is_some_and(|vote| vote.proposal == proposal);
+        if is_current || is_active || self.community_vote_queue.contains(&proposal) {
+            return Err(SimulationError::DuplicateCommunityEvent);
+        }
+        self.community_vote_queue.push_back(proposal);
+        self.community_event_request_cooldown_seconds = COMMUNITY_EVENT_REQUEST_COOLDOWN_SECONDS;
+        self.start_next_community_vote_if_idle();
+        Ok(())
+    }
+
+    pub fn cast_community_vote(
+        &mut self,
+        voter: &StableId,
+        approve: bool,
+    ) -> Result<(), SimulationError> {
+        if !self.actors.contains_key(voter) {
+            return Err(SimulationError::MissingActor(voter.clone()));
+        }
+        let vote = self
+            .community_vote
+            .as_mut()
+            .ok_or(SimulationError::NoCommunityVote)?;
+        if vote.votes.contains_key(voter) {
+            return Err(SimulationError::AlreadyVoted(voter.clone()));
+        }
+        vote.votes.insert(voter.clone(), approve);
+        Ok(())
+    }
+
+    pub fn resolve_community_vote(&mut self) -> Option<CommunityVoteOutcome> {
+        let vote = self.community_vote.as_ref()?;
+        if vote.remaining_seconds > f32::EPSILON || vote.votes.is_empty() {
+            return None;
+        }
+        let approvals = vote.votes.values().filter(|approved| **approved).count();
+        let approved = approvals > vote.votes.len().saturating_sub(approvals);
+        let proposal = vote.proposal.clone();
+        self.community_vote = None;
+        if approved {
+            let CommunityVoteProposal::Event(event) = proposal;
+            self.active_community_event = Some(event);
+        }
+        Some(CommunityVoteOutcome { proposal, approved })
+    }
+
+    pub fn start_next_community_vote_if_idle(&mut self) {
+        if self.ruler_vote.is_some() || self.community_vote.is_some() {
+            return;
+        }
+        let Some(proposal) = self.community_vote_queue.pop_front() else {
+            return;
+        };
+        self.community_vote = Some(CommunityVoteState {
+            proposal,
+            remaining_seconds: RULER_VOTE_DURATION_SECONDS,
+            votes: BTreeMap::new(),
+        });
+    }
+
     pub fn assign_role(&mut self, actor: &StableId, role: StableId) -> Result<(), SimulationError> {
         if self.current_ruler.as_ref() == Some(actor) && role.as_str() != "role:ruler" {
             return Err(SimulationError::RulerRoleLocked);
@@ -838,8 +984,18 @@ impl WorldSimulation {
         actor: &StableId,
         amount: u32,
         multiplier_per_thousand: u32,
+        maximum_level: u16,
+        experience_curve_level_span: u16,
+        experience_curve_maximum: u32,
     ) -> Result<u16, SimulationError> {
-        self.grant_role_experience_capped(actor, amount, multiplier_per_thousand, MAX_ROLE_LEVEL)
+        self.grant_role_experience_capped(
+            actor,
+            amount,
+            multiplier_per_thousand,
+            maximum_level,
+            experience_curve_level_span,
+            experience_curve_maximum,
+        )
     }
 
     pub fn grant_role_experience_capped(
@@ -848,8 +1004,17 @@ impl WorldSimulation {
         amount: u32,
         multiplier_per_thousand: u32,
         maximum_level: u16,
+        experience_curve_level_span: u16,
+        experience_curve_maximum: u32,
     ) -> Result<u16, SimulationError> {
-        let maximum_level = maximum_level.clamp(1, MAX_ROLE_LEVEL);
+        let maximum_level = maximum_level.max(1);
+        let multiplier_per_thousand =
+            if self.active_community_event == Some(CommunityEvent::Awakening) {
+                u32::try_from(u64::from(multiplier_per_thousand).saturating_mul(1_200) / 1_000)
+                    .unwrap_or(u32::MAX)
+            } else {
+                multiplier_per_thousand
+            };
         let actor_state = self.actor_mut(actor)?;
         let progress = actor_state
             .role_progression
@@ -866,7 +1031,11 @@ impl WorldSimulation {
         progress.experience = progress.experience.saturating_add(adjusted);
         let mut levels_gained = 0_u16;
         while progress.level < maximum_level {
-            let required = required_role_experience(progress.level);
+            let required = required_role_experience(
+                progress.level,
+                experience_curve_level_span,
+                experience_curve_maximum,
+            );
             if progress.experience < required {
                 break;
             }
@@ -884,8 +1053,9 @@ impl WorldSimulation {
         &mut self,
         actor: &StableId,
         amount: u16,
+        maximum_level: u16,
     ) -> Result<u16, SimulationError> {
-        self.grant_role_levels_capped(actor, amount, MAX_ROLE_LEVEL)
+        self.grant_role_levels_capped(actor, amount, maximum_level)
     }
 
     pub fn grant_role_levels_capped(
@@ -894,7 +1064,7 @@ impl WorldSimulation {
         amount: u16,
         maximum_level: u16,
     ) -> Result<u16, SimulationError> {
-        let maximum_level = maximum_level.clamp(1, MAX_ROLE_LEVEL);
+        let maximum_level = maximum_level.max(1);
         let actor_state = self.actor_mut(actor)?;
         let progress = actor_state
             .role_progression
@@ -1006,6 +1176,59 @@ impl WorldSimulation {
         Ok(deposited)
     }
 
+    /// Deposits one gathered resource and, during Market, automatically sells
+    /// overflow for one quarter of the normal sell value.
+    ///
+    /// Normal sales yield one gold per eight units after the authored sell and
+    /// tax rates. Market therefore yields one gold per 32 overflow units. The
+    /// remainder is persistent so small worker deliveries retain their value.
+    pub fn deposit_resource_with_market(
+        &mut self,
+        actor: &StableId,
+        resource: &StableId,
+        capacity: u32,
+    ) -> Result<(u32, u32, u32), SimulationError> {
+        let amount = self
+            .actor_mut(actor)?
+            .inventory
+            .remove(resource)
+            .unwrap_or_default();
+        if amount == 0 {
+            return Ok((0, 0, 0));
+        }
+
+        let current = self.town_resources.entry(resource.clone()).or_default();
+        let deposited = amount.min(capacity.saturating_sub(*current));
+        *current = current.saturating_add(deposited);
+        let overflow = amount.saturating_sub(deposited);
+        if overflow == 0 {
+            return Ok((deposited, 0, 0));
+        }
+        if self.active_community_event != Some(CommunityEvent::Market) {
+            self.actor_mut(actor)?
+                .inventory
+                .insert(resource.clone(), overflow);
+            return Ok((deposited, 0, 0));
+        }
+
+        let remainder = self
+            .market_overflow_trade_remainders
+            .entry(resource.clone())
+            .or_default();
+        let total = remainder.saturating_add(overflow);
+        let gold = total / MARKET_UNITS_PER_GOLD;
+        *remainder = total % MARKET_UNITS_PER_GOLD;
+        if *remainder == 0 {
+            self.market_overflow_trade_remainders.remove(resource);
+        }
+        if gold > 0 {
+            let gold_id = StableId::new("resource:gold").expect("static stable ID");
+            let town_gold = self.town_resources.entry(gold_id).or_default();
+            *town_gold = town_gold.saturating_add(gold);
+        }
+        Ok((deposited, overflow, gold))
+    }
+
     pub fn construct(
         &mut self,
         id: StableId,
@@ -1103,8 +1326,8 @@ impl WorldSimulation {
         &mut self,
         building: &StableId,
         max_level: u16,
+        target_level: u16,
         upgraded_max_health: u32,
-        _health_gain_per_level: u32,
         cost: &BTreeMap<StableId, u32>,
     ) -> Result<u16, SimulationError> {
         let state = self
@@ -1120,12 +1343,19 @@ impl WorldSimulation {
                 max_level,
             });
         }
+        let target_level = target_level.min(max_level);
+        if target_level <= state.level {
+            return Err(SimulationError::BuildingMaxLevel {
+                building: building.clone(),
+                max_level: state.level,
+            });
+        }
         self.spend_resources(cost)?;
         let state = self
             .buildings
             .get_mut(building)
             .expect("building was validated before spending resources");
-        state.level = state.level.saturating_add(1).min(max_level);
+        state.level = target_level;
         // An upgrade is a new construction phase, not an instant stat change.
         // Start at the same ten-percent scaffold state as a fresh structure so
         // builders contribute equivalent authored construction effort.
@@ -1617,7 +1847,13 @@ impl WorldSimulation {
         {
             *cooldown = (*cooldown - delta_seconds).max(0.0);
         }
-        if self.ruler_vote.is_none() && self.ruler_vote_scheduled {
+        self.community_event_request_cooldown_seconds =
+            (self.community_event_request_cooldown_seconds - delta_seconds).max(0.0);
+        if self.ruler_vote.is_none()
+            && self.community_vote.is_none()
+            && self.community_vote_queue.is_empty()
+            && self.ruler_vote_scheduled
+        {
             self.ruler_vote_cooldown_seconds =
                 (self.ruler_vote_cooldown_seconds - delta_seconds).max(0.0);
             if self.ruler_vote_cooldown_seconds <= f32::EPSILON && self.active_event.is_none() {
@@ -1635,6 +1871,15 @@ impl WorldSimulation {
             vote.remaining_seconds = (vote.remaining_seconds - delta_seconds).max(0.0);
         }
         let _ = self.resolve_ruler_vote();
+        if let Some(vote) = &mut self.community_vote
+            && !vote.votes.is_empty()
+        {
+            vote.remaining_seconds = (vote.remaining_seconds - delta_seconds).max(0.0);
+        }
+        if let Some(outcome) = self.resolve_community_vote() {
+            self.pending_community_vote_outcomes.push_back(outcome);
+        }
+        self.start_next_community_vote_if_idle();
         for actor in self.actors.values_mut().filter(|actor| !actor.alive) {
             if let Some(remaining) = actor.respawn_remaining_seconds.as_mut() {
                 *remaining = (*remaining - f64::from(delta_seconds)).max(0.0);
@@ -1776,6 +2021,11 @@ fn is_zero_u32(value: &u32) -> bool {
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero_f32(value: &f32) -> bool {
+    value.abs() <= f32::EPSILON
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_zero_u8(value: &u8) -> bool {
     *value == 0
 }
@@ -1857,13 +2107,21 @@ fn objective_increment(
 }
 
 #[must_use]
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-pub fn required_role_experience(level: u16) -> u32 {
-    if level == 0 || level >= MAX_ROLE_LEVEL {
-        return 100_000;
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+pub fn required_role_experience(
+    level: u16,
+    experience_curve_level_span: u16,
+    experience_curve_maximum: u32,
+) -> u32 {
+    if level == 0 || level.saturating_add(1) >= experience_curve_level_span {
+        return experience_curve_maximum;
     }
-    let t = f32::from(level.saturating_add(1)) / 100.0;
-    ((1.0 - (1.0 - t * t).sqrt()) * 100_000.0) as u32
+    let t = f32::from(level.saturating_add(1)) / f32::from(experience_curve_level_span.max(2));
+    ((1.0 - (1.0 - t * t).sqrt()) * experience_curve_maximum as f32) as u32
 }
 
 fn deterministic_weather(seed: u64, day: u32, season: Season) -> Weather {
@@ -1891,9 +2149,12 @@ mod tests {
         assert!(simulation.join_player(actor.clone(), GridPos { x: 1, z: 1 }));
         simulation.assign_role(&actor, role.clone()).unwrap();
 
-        assert_eq!(required_role_experience(1), 20);
-        assert_eq!(required_role_experience(99), 100_000);
-        assert_eq!(simulation.grant_role_experience(&actor, 8, 3_000), Ok(1));
+        assert_eq!(required_role_experience(1, 100, 100_000), 20);
+        assert_eq!(required_role_experience(99, 100, 100_000), 100_000);
+        assert_eq!(
+            simulation.grant_role_experience(&actor, 8, 3_000, 1_000, 100, 100_000),
+            Ok(1)
+        );
         assert_eq!(
             simulation.actors[&actor].role_progression[&role],
             RoleProgress {
@@ -1913,7 +2174,7 @@ mod tests {
         assert_eq!(simulation.grant_role_levels_capped(&actor, 50, 10), Ok(9));
         assert_eq!(simulation.actors[&actor].role_progression[&role].level, 10);
         assert_eq!(
-            simulation.grant_role_experience_capped(&actor, 100_000, 1_000, 10),
+            simulation.grant_role_experience_capped(&actor, 100_000, 1_000, 10, 100, 100_000,),
             Ok(0)
         );
         assert_eq!(
@@ -1983,7 +2244,7 @@ mod tests {
             simulation.adjust_town_resource(id("resource:wood"), 125),
             125
         );
-        assert_eq!(simulation.grant_role_levels(&actor, 3), Ok(3));
+        assert_eq!(simulation.grant_role_levels(&actor, 3, 1_000), Ok(3));
         assert_eq!(
             simulation.actors[&actor].role_progression[&id("role:villager")].level,
             4
@@ -2071,7 +2332,7 @@ mod tests {
             },
         );
         assert_eq!(
-            simulation.upgrade_building(&building, 3, 200, 100, &BTreeMap::new()),
+            simulation.upgrade_building(&building, 3, 2, 200, &BTreeMap::new()),
             Ok(2)
         );
         let state = &simulation.buildings[&building];
@@ -2226,6 +2487,93 @@ mod tests {
             Some(&technology)
         );
         assert_eq!(simulation.current_ruler, Some(voter));
+    }
+
+    #[test]
+    fn community_event_requests_queue_behind_ruler_votes_and_apply_majority_results() {
+        let mut simulation = WorldSimulation::new(44);
+        let voter = id("twitch:event_voter");
+        assert!(simulation.join_player(voter.clone(), GridPos { x: 1, z: 1 }));
+        simulation
+            .start_ruler_vote(RulerVoteKind::NewRuler)
+            .unwrap();
+        simulation
+            .request_community_event(CommunityEvent::ReforestationBoom)
+            .unwrap();
+        assert!(simulation.community_vote.is_none());
+        assert_eq!(simulation.community_vote_queue.len(), 1);
+
+        simulation.cast_ruler_vote(&voter, voter.clone()).unwrap();
+        simulation.tick(RULER_VOTE_DURATION_SECONDS, SHIPPING_SECONDS_PER_DAY);
+        assert!(simulation.community_vote.is_some());
+        simulation.cast_community_vote(&voter, true).unwrap();
+        simulation.tick(RULER_VOTE_DURATION_SECONDS, SHIPPING_SECONDS_PER_DAY);
+
+        assert_eq!(
+            simulation.active_community_event,
+            Some(CommunityEvent::ReforestationBoom)
+        );
+        assert_eq!(
+            simulation.pending_community_vote_outcomes.pop_front(),
+            Some(CommunityVoteOutcome {
+                proposal: CommunityVoteProposal::Event(CommunityEvent::ReforestationBoom),
+                approved: true,
+            })
+        );
+    }
+
+    #[test]
+    fn community_event_request_cooldown_and_strict_majority_are_enforced() {
+        let mut simulation = WorldSimulation::new(45);
+        let first = id("twitch:event_yes");
+        let second = id("twitch:event_no");
+        simulation.join_player(first.clone(), GridPos { x: 1, z: 1 });
+        simulation.join_player(second.clone(), GridPos { x: 2, z: 1 });
+        simulation
+            .request_community_event(CommunityEvent::EconomicBoom)
+            .unwrap();
+        assert!(matches!(
+            simulation.request_community_event(CommunityEvent::Invasion),
+            Err(SimulationError::CommunityEventCooldown { .. })
+        ));
+        simulation.cast_community_vote(&first, true).unwrap();
+        simulation.cast_community_vote(&second, false).unwrap();
+        simulation.tick(RULER_VOTE_DURATION_SECONDS, SHIPPING_SECONDS_PER_DAY);
+        assert_eq!(simulation.active_community_event, None);
+        assert!(
+            !simulation
+                .pending_community_vote_outcomes
+                .pop_front()
+                .unwrap()
+                .approved
+        );
+    }
+
+    #[test]
+    fn default_community_event_fields_preserve_legacy_save_checksums() {
+        let mut simulation = WorldSimulation::new(42);
+        let encoded = ron::to_string(&simulation).unwrap();
+        assert!(!encoded.contains("community_event_request_cooldown_seconds"));
+
+        simulation.community_event_request_cooldown_seconds = 60.0;
+        let encoded = ron::to_string(&simulation).unwrap();
+        assert!(encoded.contains("community_event_request_cooldown_seconds"));
+    }
+
+    #[test]
+    fn awakening_applies_to_role_experience_at_the_domain_boundary() {
+        let mut simulation = WorldSimulation::new(46);
+        let actor = id("twitch:awakened");
+        simulation.join_player(actor.clone(), GridPos { x: 1, z: 1 });
+        simulation.active_community_event = Some(CommunityEvent::Awakening);
+        simulation
+            .grant_role_experience(&actor, 10, 1_000, 1_000, 100, 100_000)
+            .unwrap();
+        let role = simulation.actors[&actor].role.clone();
+        assert_eq!(
+            simulation.actors[&actor].role_progression[&role].experience,
+            12
+        );
     }
 
     #[test]
@@ -2825,6 +3173,59 @@ mod tests {
         assert_eq!(simulation.town_resources[&ore], 100);
         assert_eq!(simulation.actors[&player].inventory[&ore], 7);
         assert_eq!(simulation.actors[&player].inventory[&wood], 7);
+    }
+
+    #[test]
+    fn market_sells_capacity_overflow_at_quarter_normal_value_with_remainders() {
+        let mut simulation = WorldSimulation::new(42);
+        let player = id("twitch:market-viewer");
+        let wood = id("resource:wood");
+        let gold = id("resource:gold");
+        assert!(simulation.join_player(player.clone(), GridPos { x: 0, z: 0 }));
+        simulation.active_community_event = Some(CommunityEvent::Market);
+        simulation.town_resources.insert(wood.clone(), 100);
+
+        simulation.gather(&player, wood.clone(), 25).unwrap();
+        assert_eq!(
+            simulation
+                .deposit_resource_with_market(&player, &wood, 100)
+                .unwrap(),
+            (0, 25, 0)
+        );
+        assert!(!simulation.actors[&player].inventory.contains_key(&wood));
+        assert_eq!(simulation.market_overflow_trade_remainders[&wood], 25);
+
+        simulation.gather(&player, wood.clone(), 7).unwrap();
+        assert_eq!(
+            simulation
+                .deposit_resource_with_market(&player, &wood, 100)
+                .unwrap(),
+            (0, 7, 1)
+        );
+        assert_eq!(simulation.town_resources[&gold], 1);
+        assert!(
+            !simulation
+                .market_overflow_trade_remainders
+                .contains_key(&wood)
+        );
+    }
+
+    #[test]
+    fn non_market_deposit_keeps_capacity_overflow_on_the_actor() {
+        let mut simulation = WorldSimulation::new(42);
+        let player = id("twitch:ordinary-viewer");
+        let ore = id("resource:ore");
+        assert!(simulation.join_player(player.clone(), GridPos { x: 0, z: 0 }));
+        simulation.town_resources.insert(ore.clone(), 100);
+        simulation.gather(&player, ore.clone(), 9).unwrap();
+
+        assert_eq!(
+            simulation
+                .deposit_resource_with_market(&player, &ore, 100)
+                .unwrap(),
+            (0, 0, 0)
+        );
+        assert_eq!(simulation.actors[&player].inventory[&ore], 9);
     }
 
     #[test]

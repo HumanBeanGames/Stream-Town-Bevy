@@ -6,12 +6,17 @@ use crate::{
     ResourceGenerationLayerDef, StableId, WorldGenConfig, default_resource_generation_layers,
 };
 
-/// Seed of the recorded Unity town used to validate the migration algorithm.
+/// Seed of the recorded shipping town used to validate deterministic generation.
 ///
 /// Authored resource/foliage offsets describe this reference town. New towns
 /// retain those authored Perlin parameters but deterministically translate each
 /// layer's noise domain from their own seed.
 const UNITY_REFERENCE_WORLD_SEED: u64 = 1_580_290_387;
+
+/// The rendered gameplay water plane sits slightly above the configured level
+/// to avoid coplanar terrain artifacts. Habitat decisions must use this final
+/// visible surface, not the unshifted configuration value.
+pub const VISIBLE_WATER_SURFACE_LIFT_METRES: f32 = 0.20;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct GeneratedResource {
@@ -118,10 +123,11 @@ fn generate_world_from_layers(
     foliage_layers: &[FoliageLayerDef],
     completed: &mut impl FnMut(WorldGenerationStage),
 ) -> GeneratedWorld {
-    // Version 8 gives every named town deterministic per-layer noise offsets.
-    // The recorded Unity reference seed remains byte-for-byte compatible while
-    // other seeds no longer reuse its resource and foliage masks.
-    const GENERATOR_VERSION: u32 = 8;
+    // Version 9 fingerprints final-height terrain/resource classification.
+    // Foliage is intentionally absent from the save fingerprint and is rebuilt
+    // from the active foliage algorithm whenever a town loads; foliage-only
+    // improvements therefore do not invalidate terrain or simulation saves.
+    const GENERATOR_VERSION: u32 = 9;
     let cell_count = usize::from(config.width) * usize::from(config.height);
     let terrain_seed = u32::try_from(config.seed & u64::from(u32::MAX))
         .expect("masked terrain seed fits u32")
@@ -258,12 +264,15 @@ fn generate_authored_resources(
             if occupied.contains(&occupancy) {
                 continue;
             }
-            let Some(terrain_position) = authored_world_to_grid(config, world_x, world_z) else {
+            let Some(surface_height) = terrain_surface_height_from_centimetres(
+                config,
+                heights,
+                resource_world_x,
+                resource_world_z,
+            ) else {
                 continue;
             };
-            let index = usize::from(terrain_position.z) * usize::from(config.width)
-                + usize::from(terrain_position.x);
-            if heights[index] <= 0 {
+            if surface_height <= visible_water_surface_height(config) {
                 continue;
             }
             let Some(position) = authored_world_to_grid(config, resource_world_x, resource_world_z)
@@ -483,10 +492,12 @@ fn generate_foliage(
     let mut occupied: std::collections::BTreeSet<_> = resources
         .iter()
         .filter(|resource| resource.target_kind.as_str() != "target:fish")
-        .map(|resource| {
-            (
-                i32::from(resource.generation_occupancy[0]),
-                i32::from(resource.generation_occupancy[1]),
+        .filter_map(|resource| {
+            let centre = authored_grid_centre(config, resource.position);
+            foliage_third_cell(
+                config,
+                centre[0] + f32::from(resource.offset_milli_cells[0]) * config.cell_size / 1_000.0,
+                centre[1] + f32::from(resource.offset_milli_cells[1]) * config.cell_size / 1_000.0,
             )
         })
         .collect();
@@ -494,7 +505,8 @@ fn generate_foliage(
         if layer.variants.is_empty() {
             continue;
         }
-        let candidates = generate_candidate_mask(
+        let candidates = generate_foliage_candidate_mask(
+            config,
             layer.source_size,
             layer.seed,
             layer.noise_scale,
@@ -503,29 +515,34 @@ fn generate_foliage(
             layer.lacunarity,
             layer.spawn_threshold,
             layer.spacing,
-            false,
             town_layer_noise_offset(config.seed, &layer.id, layer.seed, layer.source_size),
         );
         for candidate in candidates {
-            let world_x = f32::from(candidate[0]) * 0.5;
-            let world_z = f32::from(candidate[1]) * 0.5;
-            let centre = f32::from(layer.spacing) * 0.5;
-            let source_z = unity_rounded_i32(world_x - centre);
-            let source_x = unity_rounded_i32(world_z - centre);
-            let occupancy = (
-                unity_floor_i32(world_x / f32::from(layer.spacing.max(1))),
-                unity_floor_i32(world_z / f32::from(layer.spacing.max(1))),
+            let jitter = foliage_candidate_jitter(
+                config.seed,
+                &layer.id,
+                candidate.sample,
+                config.cell_size / 3.0,
             );
+            let world_x = candidate.world[0] + jitter[0];
+            let world_z = candidate.world[1] + jitter[1];
+            let Some(occupancy) = foliage_third_cell(config, world_x, world_z) else {
+                continue;
+            };
             if occupied.contains(&occupancy) {
                 continue;
             }
             let Some(position) = authored_world_to_grid(config, world_x, world_z) else {
                 continue;
             };
-            let terrain_height = navigation.height_at(position).unwrap_or_default();
+            let Some(terrain_height) =
+                navigation_surface_height_at_world(navigation, config, world_x, world_z)
+            else {
+                continue;
+            };
             let habitat_matches = match layer.habitat {
-                FoliageHabitat::Land => terrain_height > 0,
-                FoliageHabitat::Underwater => terrain_height <= -50,
+                FoliageHabitat::Land => terrain_height > visible_water_surface_height(config),
+                FoliageHabitat::Underwater => terrain_height <= -0.50,
             };
             if !habitat_matches {
                 continue;
@@ -544,8 +561,11 @@ fn generate_foliage(
             .expect("foliage variant count fits u16");
             let yaw_milliradians = foliage_visual_yaw_milliradians(world_x, world_z, &layer.id);
             foliage.push(GeneratedFoliage {
-                id: StableId::new(format!("foliage:{layer_index}:{source_x}:{source_z}"))
-                    .expect("generated stable foliage ID"),
+                id: StableId::new(format!(
+                    "foliage:{layer_index}:{}:{}",
+                    candidate.source[0], candidate.source[1]
+                ))
+                .expect("generated stable foliage ID"),
                 layer: layer.id.clone(),
                 habitat: layer.habitat,
                 position,
@@ -560,6 +580,110 @@ fn generate_foliage(
         }
     }
     foliage
+}
+
+#[derive(Clone, Copy)]
+struct FoliageCandidate {
+    /// Stable coordinates in the dense source lattice (x/z follow the legacy
+    /// source naming, while `world` preserves its historical axis mapping).
+    source: [i32; 2],
+    sample: [u16; 2],
+    world: [f32; 2],
+}
+
+/// Foliage used to sample once per half of a logical terrain cell. Keep the
+/// authored physical extent and noise field, but evaluate a three-way logical
+/// subdivision so foliage density matches fine navigation and paths.
+#[allow(clippy::too_many_arguments)]
+fn generate_foliage_candidate_mask(
+    config: &WorldGenConfig,
+    source_size: u16,
+    seed: i32,
+    noise_scale: f32,
+    octaves: u8,
+    persistence: f32,
+    lacunarity: f32,
+    threshold: f32,
+    spacing: u16,
+    noise_offset: [f32; 2],
+) -> Vec<FoliageCandidate> {
+    const LEGACY_SUBDIVISIONS: u16 = 2;
+    const FOLIAGE_SUBDIVISIONS: u16 = 3;
+    const LEGACY_BORDER_SAMPLES: i32 = 2;
+
+    let dense_size = source_size.saturating_mul(FOLIAGE_SUBDIVISIONS) / LEGACY_SUBDIVISIONS;
+    let source_scale = f32::from(FOLIAGE_SUBDIVISIONS) / f32::from(LEGACY_SUBDIVISIONS);
+    let noise = unity_noise_map(
+        dense_size,
+        dense_size,
+        seed,
+        noise_scale * source_scale,
+        octaves,
+        persistence,
+        lacunarity,
+        noise_offset,
+    );
+    let mut candidates = Vec::new();
+    let half = i32::from(dense_size / 2);
+    let border =
+        LEGACY_BORDER_SAMPLES * i32::from(FOLIAGE_SUBDIVISIONS) / i32::from(LEGACY_SUBDIVISIONS);
+    let spacing_step = usize::from(spacing.max(1));
+    let third_cell = config.cell_size / f32::from(FOLIAGE_SUBDIVISIONS);
+    let centre = f32::from(spacing) * third_cell * 0.5;
+    for source_z in (-half + border..half - border).step_by(spacing_step) {
+        for source_x in (-half + border..half - border).step_by(spacing_step) {
+            let sample_x = u16::try_from(source_x + half).expect("foliage sample x");
+            let sample_z = u16::try_from(source_z + half).expect("foliage sample z");
+            let index = usize::from(sample_z) * usize::from(dense_size) + usize::from(sample_x);
+            if noise[index] < threshold {
+                continue;
+            }
+            candidates.push(FoliageCandidate {
+                source: [source_x, source_z],
+                sample: [sample_x, sample_z],
+                world: [
+                    f32::from(i16::try_from(source_z).expect("foliage source z fits i16"))
+                        * third_cell
+                        + centre,
+                    f32::from(i16::try_from(source_x).expect("foliage source x fits i16"))
+                        * third_cell
+                        + centre,
+                ],
+            });
+        }
+    }
+    candidates
+}
+
+fn foliage_candidate_jitter(
+    world_seed: u64,
+    layer: &StableId,
+    sample: [u16; 2],
+    third_cell: f32,
+) -> [f32; 2] {
+    const MAXIMUM_JITTER_FRACTION: f32 = 0.38;
+    let hash = cell_hash(
+        world_seed ^ u64::from(stable_string_hash(layer.as_str())),
+        sample[0],
+        sample[1],
+    );
+    let signed = |bits: u64| {
+        let unit = f32::from(u16::try_from(bits & 0xffff).expect("masked jitter fits u16"))
+            / f32::from(u16::MAX);
+        (unit * 2.0 - 1.0) * third_cell * MAXIMUM_JITTER_FRACTION
+    };
+    [signed(hash), signed(hash >> 32)]
+}
+
+fn foliage_third_cell(config: &WorldGenConfig, world_x: f32, world_z: f32) -> Option<(i32, i32)> {
+    let subdivision = 3.0;
+    let half_x = f32::from(config.width.saturating_sub(1)) * 0.5;
+    let half_z = f32::from(config.height.saturating_sub(1)) * 0.5;
+    let x = unity_rounded_i32((world_x / config.cell_size + half_x) * subdivision + 1.0);
+    let z = unity_rounded_i32((world_z / config.cell_size + half_z) * subdivision + 1.0);
+    let width = i32::from(config.width) * 3;
+    let height = i32::from(config.height) * 3;
+    (x >= 0 && z >= 0 && x < width && z < height).then_some((x, z))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -619,6 +743,154 @@ fn authored_grid_centre(config: &WorldGenConfig, position: GridPos) -> [f32; 2] 
         (f32::from(position.z) - f32::from(config.height.saturating_sub(1)) * 0.5)
             * config.cell_size,
     ]
+}
+
+#[must_use]
+pub fn visible_water_surface_height(config: &WorldGenConfig) -> f32 {
+    f32::from(config.water_level_centimetres) * 0.01 + VISIBLE_WATER_SURFACE_LIFT_METRES
+}
+
+fn averaged_terrain_corner_height(
+    width: u16,
+    height: u16,
+    corner_x: u16,
+    corner_z: u16,
+    height_at: &impl Fn(u16, u16) -> f32,
+) -> f32 {
+    let min_x = corner_x.saturating_sub(1);
+    let max_x = corner_x.min(width - 1);
+    let min_z = corner_z.saturating_sub(1);
+    let max_z = corner_z.min(height - 1);
+    let mut total = 0.0_f32;
+    let mut samples = 0_u16;
+    for z in min_z..=max_z {
+        for x in min_x..=max_x {
+            total += height_at(x, z);
+            samples += 1;
+        }
+    }
+    total / f32::from(samples.max(1))
+}
+
+fn terrain_surface_height_with(
+    width: u16,
+    height: u16,
+    cell_size: f32,
+    world_x: f32,
+    world_z: f32,
+    height_at: impl Fn(u16, u16) -> f32,
+) -> Option<f32> {
+    if width == 0
+        || height == 0
+        || !cell_size.is_finite()
+        || cell_size <= 0.0
+        || !world_x.is_finite()
+        || !world_z.is_finite()
+    {
+        return None;
+    }
+    let grid_x = world_x / cell_size + f32::from(width.saturating_sub(1)) * 0.5;
+    let grid_z = world_z / cell_size + f32::from(height.saturating_sub(1)) * 0.5;
+    let max_x = f32::from(width.saturating_sub(1));
+    let max_z = f32::from(height.saturating_sub(1));
+    if grid_x < 0.0 || grid_z < 0.0 || grid_x > max_x || grid_z > max_z {
+        return None;
+    }
+
+    let grid_x = grid_x.clamp(0.0, max_x);
+    let grid_z = grid_z.clamp(0.0, max_z);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let x0 = grid_x.floor() as u16;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let z0 = grid_z.floor() as u16;
+    let x1 = x0.saturating_add(1).min(width - 1);
+    let z1 = z0.saturating_add(1).min(height - 1);
+    let fraction_x = grid_x - f32::from(x0);
+    let fraction_z = grid_z - f32::from(z0);
+    let corner = |x, z| averaged_terrain_corner_height(width, height, x, z, &height_at);
+
+    let top_left = corner(x0, z0);
+    if x0 == x1 && z0 == z1 {
+        return Some(top_left);
+    }
+    let top_right = corner(x1, z0);
+    if z0 == z1 {
+        return Some(fraction_x.mul_add(top_right - top_left, top_left));
+    }
+    let bottom_left = corner(x0, z1);
+    if x0 == x1 {
+        return Some(fraction_z.mul_add(bottom_left - top_left, top_left));
+    }
+    let bottom_right = corner(x1, z1);
+    if fraction_x + fraction_z <= 1.0 {
+        Some(fraction_x.mul_add(
+            top_right - top_left,
+            fraction_z.mul_add(bottom_left - top_left, top_left),
+        ))
+    } else {
+        Some((1.0 - fraction_z).mul_add(
+            top_right - bottom_right,
+            (1.0 - fraction_x).mul_add(bottom_left - bottom_right, bottom_right),
+        ))
+    }
+}
+
+fn terrain_surface_height_from_centimetres(
+    config: &WorldGenConfig,
+    heights: &[i16],
+    world_x: f32,
+    world_z: f32,
+) -> Option<f32> {
+    let expected = usize::from(config.width) * usize::from(config.height);
+    if heights.len() != expected {
+        return None;
+    }
+    terrain_surface_height_with(
+        config.width,
+        config.height,
+        config.cell_size,
+        world_x,
+        world_z,
+        |x, z| {
+            f32::from(heights[usize::from(z) * usize::from(config.width) + usize::from(x)]) * 0.01
+        },
+    )
+}
+
+/// Returns the averaged height used for a generated terrain mesh vertex.
+#[must_use]
+pub fn navigation_corner_height_metres(navigation: &NavGrid, corner_x: u16, corner_z: u16) -> f32 {
+    if navigation.width() == 0 || navigation.height() == 0 {
+        return 0.0;
+    }
+    averaged_terrain_corner_height(
+        navigation.width(),
+        navigation.height(),
+        corner_x,
+        corner_z,
+        &|x, z| f32::from(navigation.height_at(GridPos { x, z }).unwrap_or_default()) * 0.01,
+    )
+}
+
+/// Samples the final triangles used by the generated terrain renderer.
+///
+/// This is the common authority for habitat classification and visual
+/// grounding, so neither can accidentally use a pre-smoothed cell height.
+#[must_use]
+pub fn navigation_surface_height_at_world(
+    navigation: &NavGrid,
+    config: &WorldGenConfig,
+    world_x: f32,
+    world_z: f32,
+) -> Option<f32> {
+    terrain_surface_height_with(
+        navigation.width(),
+        navigation.height(),
+        config.cell_size,
+        world_x,
+        world_z,
+        |x, z| f32::from(navigation.height_at(GridPos { x, z }).unwrap_or_default()) * 0.01,
+    )
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -1427,7 +1699,7 @@ mod tests {
     fn generated_resources_preserve_unity_target_types_and_reachable_fish() {
         let config = GameConfig::default().world;
         let world = generate_world(&config);
-        assert_eq!(world.generator_version, 8);
+        assert_eq!(world.generator_version, 9);
         assert_ne!(legacy_v1_world_hash(&world), world.deterministic_hash);
         assert_ne!(legacy_v2_world_hash(&world), world.deterministic_hash);
         assert_ne!(legacy_v3_world_hash(&world), world.deterministic_hash);
@@ -1483,6 +1755,25 @@ mod tests {
     }
 
     #[test]
+    fn final_surface_height_overrides_a_raw_land_cell_at_the_waterline() {
+        let mut config = GameConfig::default().world;
+        config.width = 3;
+        config.height = 3;
+        config.cell_size = 2.0;
+        config.water_level_centimetres = 5;
+        let mut heights = vec![-100; 9];
+        heights[4] = 100;
+        let navigation = NavGrid::new(3, 3, vec![false; 9], heights).unwrap();
+
+        assert!(
+            navigation.height_at(GridPos { x: 1, z: 1 }).unwrap() > config.water_level_centimetres
+        );
+        let final_height =
+            navigation_surface_height_at_world(&navigation, &config, 0.0, 0.0).unwrap();
+        assert!(final_height <= visible_water_surface_height(&config));
+    }
+
+    #[test]
     fn authored_foliage_is_deterministic_and_respects_habitat_and_resources() {
         let config = GameConfig::default().world;
         let mut content: ContentCatalog =
@@ -1509,9 +1800,40 @@ mod tests {
         let ids: std::collections::BTreeSet<_> =
             first.foliage.iter().map(|foliage| &foliage.id).collect();
         assert_eq!(ids.len(), first.foliage.len());
+        let mut occupied_thirds = std::collections::BTreeSet::new();
+        let mut visibly_jittered = 0_usize;
         for foliage in &first.foliage {
-            assert!(first.navigation.height_at(foliage.position).unwrap() > 0);
+            let centre = authored_grid_centre(&config, foliage.position);
+            let world_x =
+                centre[0] + f32::from(foliage.offset_milli_cells[0]) * config.cell_size / 1_000.0;
+            let world_z =
+                centre[1] + f32::from(foliage.offset_milli_cells[1]) * config.cell_size / 1_000.0;
+            let third = foliage_third_cell(&config, world_x, world_z)
+                .expect("generated foliage remains inside the third-cell grid");
+            assert!(occupied_thirds.insert(third));
+            let fine_coordinate = |world: f32, size: u16| {
+                (world / config.cell_size + f32::from(size.saturating_sub(1)) * 0.5) * 3.0 + 1.0
+            };
+            let jitter = [
+                (fine_coordinate(world_x, config.width).round()
+                    - fine_coordinate(world_x, config.width))
+                .abs()
+                    * config.cell_size
+                    / 3.0,
+                (fine_coordinate(world_z, config.height).round()
+                    - fine_coordinate(world_z, config.height))
+                .abs()
+                    * config.cell_size
+                    / 3.0,
+            ];
+            assert!(jitter.into_iter().all(|offset| offset <= 0.26));
+            visibly_jittered += usize::from(jitter.into_iter().any(|offset| offset >= 0.03));
+            let final_height =
+                navigation_surface_height_at_world(&first.navigation, &config, world_x, world_z)
+                    .unwrap();
+            assert!(final_height > visible_water_surface_height(&config));
         }
+        assert!(visibly_jittered * 10 > first.foliage.len() * 9);
         content.foliage[0].noise_scale *= 2.0;
         let altered = generate_world_with_content(&config, &content);
         assert_ne!(first.foliage, altered.foliage);
@@ -1532,12 +1854,12 @@ mod tests {
     }
 
     #[test]
-    fn generated_instance_counts_match_the_sanitized_unity_save_oracle() {
+    fn final_surface_filtered_generation_remains_deterministic() {
         // StreamTownSave.stsave is never loaded by the runtime. These are the
-        // non-personal generation counts and horizontal fingerprints exported
-        // from it by `stream_town_migrate export-world-oracle` for the recorded
-        // seed. They are expected values inside this test only. The generator
-        // above neither reads the save nor receives any of its placements.
+        // horizontal fingerprints recorded from the shipping reference for
+        // this seed. Final-height habitat
+        // filtering deliberately removes source placements which end up under
+        // the visible water plane, while remaining deterministic.
         let mut config = GameConfig::default().world;
         config.seed = 1_580_290_387;
         let content: ContentCatalog =
@@ -1562,37 +1884,32 @@ mod tests {
         assert_eq!(
             resource_counts,
             std::collections::BTreeMap::from([
-                ("resource:food", 92),
-                ("resource:ore", 300),
+                ("resource:food", 87),
+                ("resource:ore", 305),
                 ("resource:wood", 2_928),
             ])
         );
         assert_eq!(
             resource_horizontal_hash(&world, "resource:wood", &config),
-            "8eeeb2da50572b867aee1cde8f4d6575c78eab02bd35e4d35d54aa845771e42f"
+            "52c5f489d930ac3589d00dc9e2ef3825a969160b95e6d7d120a40e4588b6f7a3"
         );
         assert_eq!(
             resource_horizontal_hash(&world, "resource:ore", &config),
-            "d5b138a1cf7c3d1bc60c218b0781da7282e7c8cd9ac06f417ce0562a2603ac52"
+            "154fd994bca9b9abbbb22e51f4aceb9806718407c40d4d5bef1751257e6ebef8"
         );
         assert_eq!(
             resource_horizontal_hash(&world, "resource:food", &config),
-            "b0d29635cb29143bb83d447444169866339e3cbec569c80746f25b59f36a7c63"
+            "fdec18e9f4e7017cf654f9872004b98115294537fcab4579505d5cee30dfe714"
         );
         assert_eq!(
             foliage_counts,
-            std::collections::BTreeMap::from([
-                // The live save contains 16,203 because seven of these 16,210
-                // generated grass instances are beneath its player-built
-                // Lumbermill at (-8, -1). That post-generation removal must not
-                // be baked into Bevy's generator.
-                ("foliage:land:0", 16_210),
-                ("foliage:land:1", 371),
-            ])
+            std::collections::BTreeMap::from(
+                [("foliage:land:0", 36_797), ("foliage:land:1", 523),]
+            )
         );
         assert_eq!(
             foliage_horizontal_hash(&world, "foliage:land:1", &config),
-            "a23679cfeeea54bbd5cdbfe2f7aa6a4f63e28b22e64fe84891a081be320a8ade"
+            "ebb449253e77bdeb07fec40d795e44a3c6666c9e75bd53afaf30953fda42820f"
         );
     }
 

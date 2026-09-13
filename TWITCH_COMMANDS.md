@@ -119,7 +119,7 @@ A BID is the small number assigned to one instance of a building type. BIDs are 
 |---|---|
 | `!bid <BuildingName>` | List the current BID numbers and briefly draw each number over its building. |
 | `!info <BuildingName> <BID>` | Show details for one building instance. |
-| `!upgrade <BuildingName> <BID>` | Pay for and begin the next-level construction effort. Example: `!upgrade Tower 3`. |
+| `!upgrade <BuildingName> <BID> [levels]` | Pay for and begin one or several levels as a single construction effort. Each requested target rung costs the building-authored fraction of base cost multiplied by `(target level - 1)` and stops at the researched cap. Examples: `!upgrade Tower 3` or `!upgrade Tower 3 4`. |
 | `!rotatebuilding <BuildingName> <BID> [quarter turns]` | Rotate an already placed square-footprint building. Walls and gates orient from their neighbours. |
 | `!buildinglight <BuildingName> <BID> <name\|#RRGGBB>` | Ruler only: change that building's night-light colour. |
 | `!remove <BuildingName> <BID>` | Ruler only: permanently remove the selected building. The TownHall cannot be removed. |
@@ -139,7 +139,8 @@ configured operators for bulk progression/testing; normal play should use `!upgr
 | `!rdismiss <id>` | Dismiss a recruit. |
 
 Recruits remain at level 1 in every profession and do not retain profession XP. Twitch player
-citizens retain the full profession progression range.
+citizens retain the full authored progression range (currently level 1000); chat announces every
+multiple-of-ten role level.
 
 ## Camera and locating citizens
 
@@ -175,6 +176,8 @@ that view. Both modes are visual only: they do not modify navigation, placement,
 | Command | Purpose |
 |---|---|
 | `!vote <option>` | Vote in a technology ballot by number (`!vote 1`, `!vote 2`, or `!vote 3`), in a ruler ballot by player name, or in an event/keep-ruler ballot with `!vote yes` or `!vote no`. |
+| `!yes` | Vote yes in the active yes/no ballot; equivalent to `!vote yes`. |
+| `!no` | Vote no in the active yes/no ballot; equivalent to `!vote no`. |
 | `!event <event type>` | Request a public vote to switch the active community event. Valid types are `prospecting`, `reforestation`, `agricultural`, `rebalance`, `awakening`, `economic`, and `invasion`. Valid requests share a one-hour global cooldown. |
 | `!rulervote` | Ruler/operator: start a ruler vote. |
 | `!resign` | Resign as ruler. |

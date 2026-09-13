@@ -1,1 +1,0 @@
-public class Access_PanningSensitivityText : Access_Text { }

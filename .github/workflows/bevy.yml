@@ -2,7 +2,7 @@ name: Bevy
 
 on:
   push:
-    branches: [main, codex/bevy-migration]
+    branches: [main]
     paths: ["bevy-port/**", ".github/workflows/bevy.yml"]
   pull_request:
     paths: ["bevy-port/**", ".github/workflows/bevy.yml"]

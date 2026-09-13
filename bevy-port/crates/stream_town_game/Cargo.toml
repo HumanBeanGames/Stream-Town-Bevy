@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [features]
 ecs-command-debug = ["bevy/debug"]
+stream-profiling = ["bevy/debug"]
 
 [dependencies]
 accesskit.workspace = true
@@ -15,6 +16,7 @@ avian3d.workspace = true
 anyhow.workspace = true
 bevy.workspace = true
 bevy_tidal.workspace = true
+image.workspace = true
 keyring.workspace = true
 reqwest.workspace = true
 ron.workspace = true

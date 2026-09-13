@@ -140,6 +140,42 @@ Run these in order and record the result before changing behavior:
   - User result: `not checked`.
   - Reuse rule: if the mining loop still visibly restarts, capture the miner controller heartbeat across two consecutive action ticks before changing clip timing, sources, or rig binding.
 
+- [ ] **`failed` — exclude animated citizen skinning bounds from the directional shadow pass**
+  - Changed: shadow casting only; animated citizen meshes still receive world shadows through the accepted character material, but no longer cast directional shadows. Static buildings, terrain, foliage, equipment, materials, animation binding, clip sources, and visible quality settings are unchanged.
+  - Fixed seed/actor/camera: reported ordinary Tonyville run; camera following citizens running at the island outskirts, where the directional shadow frustum is most sensitive to transient skinned bounds.
+  - Player elapsed delta: not applicable; no animation timing or playback state changed.
+  - Named joint transform delta: unchanged from the accepted `334b9dc` native-rig path.
+  - Visible skin result: `.stream-town/diagnostics/character-flicker-live-before.mp4` and frame `character-flicker-before-frames/frame-0136.bmp` show the source mesh itself exploding into material-coloured prisms in the main pass. Disabling its shadow cast only removed the projected version of the same corruption.
+  - User result: `failed` — the user reported that the flicker moved onto all character models regardless of location.
+  - Reuse rule: do not suppress character shadows again for this defect; inspect a shared render-buffer path when many independent rigs corrupt in the same frame.
+
+- [ ] **`failed` — keep every render camera off Bevy 0.19.1 GPU mesh culling**
+  - Changed: render submission only; the town, loading, and stream-operator cameras carried `NoIndirectDrawing`, while preserving the accepted animation, materials, shadows, resolution, AA, AO, and all visible quality settings.
+  - Fixed seed/actor/camera: ordinary live Tonyville save; automatic stream camera and persistent operator preview; AMD Radeon RX 7800 XT on DX12.
+  - Player elapsed delta: animation playback code is unchanged; the post-deployment moving stream advanced continuously for 45 seconds across automatic camera shots.
+  - Named joint transform delta: the accepted `334b9dc` native-rig path is unchanged; moving characters retained independent limb poses throughout the capture.
+  - Visible skin result: pre-fix moving evidence is `.stream-town/diagnostics/character-flicker-live-before.mp4`. Post-fix evidence is `.stream-town/diagnostics/character-flicker-live-after.mp4`; all 450 sampled frames are represented in `character-flicker-after-contact-sheet-all-frames.jpg` without a stretched character or projected black prism.
+  - User result: `failed` — the user reported heavy flicker remained on the player models.
+  - Reuse rule: `NoIndirectDrawing` is not a GPU-preprocessing opt-out in Bevy 0.19.1; it selects `GpuPreprocessingMode::PreprocessingOnly`. Do not reuse this as a skin-index fix.
+
+- [ ] **`failed` — remove animated meshes from the GPU-built MeshUniform path**
+  - Changed: render submission only; `PbrPlugin::use_gpu_instance_buffer_builder` is disabled process-wide so Bevy builds each `MeshUniform`, including its current skin index, on the CPU for both visible and shadow views. Character shadow casting/receiving, materials, animation, 1920x1080 output, 30 FPS target, 6000 kbps bitrate, 4096 shadow map, AO, MSAA preference, and SMAA remain unchanged.
+  - Fixed seed/actor/camera: live Tonyville save at process age over two hours; automatic stream camera with 19 citizens and visibility churn across dense town/forest shots.
+  - Player elapsed delta: unchanged; animation playback and clip binding are untouched.
+  - Named joint transform delta: unchanged from the accepted `334b9dc` native-rig path.
+  - Visible skin result: failed immediately on the rebuilt stream-only deployment. Twitch showed UI labels and particles, but terrain, buildings, and character meshes were absent against a black scene; the CPU builder is incompatible with this offscreen render path.
+  - User result: `failed` — rejected before handoff because the live output was visibly broken.
+  - Reuse rule: do not disable Bevy's GPU instance-buffer builder process-wide for the stream-only renderer.
+
+- [ ] **`provisional` — keep animated character skin allocations stable across automatic-camera shots**
+  - Changed: culling policy only for renderers beneath `PlayerAnimatedRig`; those renderers receive `NoFrustumCulling`, while world meshes retain the normal GPU renderer and culling path. Character shadows, materials, animation, resolution, AA, AO, bitrate, and all visible quality settings remain unchanged.
+  - Fixed seed/actor/camera: live Tonyville save; automatic stream camera, including follow shots near the island boundary.
+  - Player elapsed delta: unchanged; animation playback and clip binding are untouched.
+  - Named joint transform delta: unchanged from the accepted `334b9dc` native-rig path.
+  - Visible skin result: the rebuilt Twitch deployment stayed intact through 51 seconds of moving sampling (eight frames over 16 seconds, ten frames over 30 seconds, and a final five-second advancement check), including automatic camera pull-backs and follow shots. No stretched material-coloured prism or character-wide lighting flash was observed. Bevy 0.19.1 source confirms that `extract_skins` frees and reallocates a skin whenever `ViewVisibility` changes; the captured stretched prisms identify an incorrect joint-buffer lookup rather than a projected-shadow-only defect.
+  - User result: `not checked`.
+  - Reuse rule: if a continuously visible renderer still stretches, capture its visibility and skin offset in the same failing frame before changing batching, materials, or shadows.
+
 ## Attempt record template
 
 Append every future attempt here before claiming completion:

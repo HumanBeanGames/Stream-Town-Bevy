@@ -1,1 +1,0 @@
-public class Access_VsyncToggle : Access_Toggle { }

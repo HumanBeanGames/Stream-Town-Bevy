@@ -1,9 +1,11 @@
 param(
     [string]$Town,
+    [switch]$NewTown,
     [switch]$Debug,
     [switch]$SkipBuild,
     [switch]$NoLaunch,
-    [switch]$Wait
+    [switch]$Wait,
+    [switch]$NoProfiling
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,28 +15,47 @@ $saveDirectory = Join-Path $workspaceRoot '.stream-town\saves'
 if (Get-Process -Name stream_town_game -ErrorAction SilentlyContinue) {
     throw 'Stream Town is already running. Exit it normally first so the active town is saved before redeploying.'
 }
-if (-not (Test-Path -LiteralPath $saveDirectory -PathType Container)) {
-    throw "Save directory does not exist: $saveDirectory"
-}
-
-$townSaves = @(Get-ChildItem -LiteralPath $saveDirectory -File -Filter '*.stbevy')
-if ($townSaves.Count -eq 0) {
-    throw "No current town saves were found in $saveDirectory"
-}
-
-if ([string]::IsNullOrWhiteSpace($Town)) {
-    $selectedSave = $townSaves |
-        Sort-Object LastWriteTimeUtc, Name -Descending |
-        Select-Object -First 1
+if ($NewTown) {
+    if ([string]::IsNullOrWhiteSpace($Town)) {
+        throw 'A town name is required with -NewTown.'
+    }
+    $requestedTown = [System.IO.Path]::GetFileNameWithoutExtension($Town.Trim())
+    if ($requestedTown -ne $Town.Trim() -or
+        $requestedTown.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+        throw "Town '$Town' is not a valid save name."
+    }
+    if (-not (Test-Path -LiteralPath $saveDirectory -PathType Container)) {
+        New-Item -ItemType Directory -Path $saveDirectory -Force | Out-Null
+    }
+    $newSavePath = Join-Path $saveDirectory "$requestedTown.stbevy"
+    if (Test-Path -LiteralPath $newSavePath) {
+        throw "Town '$requestedTown' already exists. Redeploy it without -NewTown."
+    }
+    $selectedSave = [System.IO.FileInfo]::new($newSavePath)
 }
 else {
-    $requestedTown = [System.IO.Path]::GetFileNameWithoutExtension($Town.Trim())
-    $selectedSave = $townSaves |
-        Where-Object { $_.BaseName -ieq $requestedTown } |
-        Select-Object -First 1
-    if ($null -eq $selectedSave) {
-        $available = ($townSaves.BaseName | Sort-Object) -join ', '
-        throw "Town '$Town' was not found. Available towns: $available"
+    if (-not (Test-Path -LiteralPath $saveDirectory -PathType Container)) {
+        throw "Save directory does not exist: $saveDirectory"
+    }
+    $townSaves = @(Get-ChildItem -LiteralPath $saveDirectory -File -Filter '*.stbevy')
+    if ($townSaves.Count -eq 0) {
+        throw "No current town saves were found in $saveDirectory"
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Town)) {
+        $selectedSave = $townSaves |
+            Sort-Object LastWriteTimeUtc, Name -Descending |
+            Select-Object -First 1
+    }
+    else {
+        $requestedTown = [System.IO.Path]::GetFileNameWithoutExtension($Town.Trim())
+        $selectedSave = $townSaves |
+            Where-Object { $_.BaseName -ieq $requestedTown } |
+            Select-Object -First 1
+        if ($null -eq $selectedSave) {
+            $available = ($townSaves.BaseName | Sort-Object) -join ', '
+            throw "Town '$Town' was not found. Available towns: $available"
+        }
     }
 }
 
@@ -42,6 +63,9 @@ $profile = if ($Debug) { 'debug' } else { 'release' }
 $cargoArguments = @('build', '-p', 'stream_town_game')
 if (-not $Debug) {
     $cargoArguments += '--release'
+}
+if (-not $NoProfiling) {
+    $cargoArguments += @('--features', 'stream-profiling')
 }
 
 Push-Location $workspaceRoot
@@ -76,7 +100,9 @@ try {
             -Force
     }
 
-    Write-Host "Redeploy ready: $($selectedSave.BaseName) ($profile); staged $($nativeLibraries.Count) native runtime libraries."
+    $profilingStatus = if ($NoProfiling) { 'disabled' } else { 'enabled' }
+    $deploymentKind = if ($NewTown) { 'new town' } else { 'saved town' }
+    Write-Host "Redeploy ready: $($selectedSave.BaseName) ($deploymentKind, $profile); profiling $profilingStatus; staged $($nativeLibraries.Count) native runtime libraries."
     if ($NoLaunch) {
         return
     }
@@ -89,9 +115,32 @@ try {
         'STREAM_TOWN_AUTO_GO_LIVE',
         [EnvironmentVariableTarget]::Process
     )
+    $previousSavePath = [Environment]::GetEnvironmentVariable(
+        'STREAM_TOWN_SAVE_PATH',
+        [EnvironmentVariableTarget]::Process
+    )
+    $previousNewTownName = [Environment]::GetEnvironmentVariable(
+        'STREAM_TOWN_NEW_TOWN_NAME',
+        [EnvironmentVariableTarget]::Process
+    )
+    $previousAutostart = [Environment]::GetEnvironmentVariable(
+        'STREAM_TOWN_AUTOSTART',
+        [EnvironmentVariableTarget]::Process
+    )
     $previousProcessPath = $env:PATH
     try {
-        $env:STREAM_TOWN_AUTO_RESUME_PATH = $selectedSave.FullName
+        if ($NewTown) {
+            Remove-Item Env:\STREAM_TOWN_AUTO_RESUME_PATH -ErrorAction SilentlyContinue
+            $env:STREAM_TOWN_SAVE_PATH = $selectedSave.FullName
+            $env:STREAM_TOWN_NEW_TOWN_NAME = $selectedSave.BaseName
+            $env:STREAM_TOWN_AUTOSTART = '1'
+        }
+        else {
+            Remove-Item Env:\STREAM_TOWN_SAVE_PATH -ErrorAction SilentlyContinue
+            Remove-Item Env:\STREAM_TOWN_NEW_TOWN_NAME -ErrorAction SilentlyContinue
+            Remove-Item Env:\STREAM_TOWN_AUTOSTART -ErrorAction SilentlyContinue
+            $env:STREAM_TOWN_AUTO_RESUME_PATH = $selectedSave.FullName
+        }
         $env:STREAM_TOWN_AUTO_GO_LIVE = '1'
         $env:PATH = "$nativeRuntime;$previousProcessPath"
         $game = Start-Process `
@@ -111,6 +160,24 @@ try {
         }
         else {
             $env:STREAM_TOWN_AUTO_GO_LIVE = $previousAutoGoLive
+        }
+        if ($null -eq $previousSavePath) {
+            Remove-Item Env:\STREAM_TOWN_SAVE_PATH -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:STREAM_TOWN_SAVE_PATH = $previousSavePath
+        }
+        if ($null -eq $previousNewTownName) {
+            Remove-Item Env:\STREAM_TOWN_NEW_TOWN_NAME -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:STREAM_TOWN_NEW_TOWN_NAME = $previousNewTownName
+        }
+        if ($null -eq $previousAutostart) {
+            Remove-Item Env:\STREAM_TOWN_AUTOSTART -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:STREAM_TOWN_AUTOSTART = $previousAutostart
         }
         $env:PATH = $previousProcessPath
     }

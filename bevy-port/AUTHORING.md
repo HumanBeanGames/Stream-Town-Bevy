@@ -1,9 +1,8 @@
-# Stream Town external authoring suite
+# Stream Town authoring suite
 
-`stream_town_tools` is the focused replacement for the Unity inspectors and
-custom editor windows needed by the shipping game. It deliberately does not try
-to recreate Unity's generic scene, prefab, ProBuilder, Odin, or DI debugging
-interfaces.
+`stream_town_tools` is the native editor for the data and assets used by the
+shipping game. It presents focused, validated workflows instead of exposing a
+generic scene or ECS inspector.
 
 ## Launch
 
@@ -61,6 +60,9 @@ access or refresh tokens to RON.
   use the wheel to zoom, and use the playback, looping, speed, restart, and reset
   controls for animation clips. It does not duplicate building, role, or
   technology records.
+- Progression edits the global role-level ceiling, recruit ceiling, XP-curve
+  span and plateau, milestone-announcement interval, and minimum action cadence.
+  These are catalog fields rather than Rust constants.
 - Buildings provides template-based creation, an interactive logical placement
   footprint editor with rotate/row/column controls and atomic model/runtime
   synchronization, visual GLB inspection, and an optional physical-navigation
@@ -70,13 +72,16 @@ access or refresh tokens to RON.
   wall, gate, and path connectivity is derived by the runtime. Explicit
   overrides are intended for fully solid military structures and the compact
   central blockers used by storage buildings and the Windmill.
-  construction and level costs, storage, role capacity, passive production,
-  station and target settings, projectiles, and model hierarchy bindings. Every
-  stable reference is chosen from the loaded catalog.
+  The tab also edits base construction costs; the additive percentage of base
+  cost charged per existing copy (zero keeps prices fixed); the upgrade fraction
+  charged for every requested target-level rung; and per-level health, global
+  gather rate, kill XP, station XP, projectile damage, linear storage, role
+  capacity, and passive-production effects. Every stable reference is chosen
+  from the loaded catalog.
 - Roles edits every shipping role's balance/progression values, stable resource,
   station, target and ability references, Animator action contracts, character
   body nodes, hand items, helmets, and carry behavior. Role/model fields use
-  catalog and converted-hierarchy choices instead of free-form reference text.
+  catalog and model-hierarchy choices instead of free-form reference text.
   Its live composed-character preview uses the shipping character rig and
   authored materials, applies the selected body/cosmetics/role equipment, and
   plays any player Animator state with the normal playback and camera controls.
@@ -98,16 +103,32 @@ access or refresh tokens to RON.
   node and selecting a search result focuses it. Fit-all, deterministic
   auto-layout, cycle/dangling-reference checks, and a clickable/drag-recentered
   minimap are included.
+  Shipping building-cap research advances one level at a time, costs 1.5 times
+  the preceding rung, and is distributed across the authored ages. Role-upgrade
+  research uses the same authored 1.5-times ladder. Each rung remains an
+  individually editable Technology objective rather than a runtime formula.
+  A global Age-Up technology is separate from Town Hall
+  cap research: it becomes eligible only after the matching cap is researched and
+  a completed Town Hall has physically reached that level. Other technologies are
+  hidden until the Town Hall has unlocked their authored age.
 - World + Nav edits the terrain seed, dimensions, spatial scale, height/water
   levels and resource density; land and shoreline-water resource rules; every
-  foliage layer's Unity-compatible noise, habitat, spacing, material, GLB
+  foliage layer's authored noise, habitat, spacing, material, GLB
   variants, and base scales; and enemy-camp placement rules. Resource, foliage,
   and camp archetype fields are catalog/search backed. Preview modes show
   elevation/water, navigation occupancy, land resources, water resources,
   selected foliage layers, camp placement ranges, and live 3D models. The
-  redundant point-to-point A* probe has been removed.
-- Migration and Validation retain conversion, data-integrity, and packaging
-  workflows. Runtime control, player settings, Twitch setup, and inspection are
+  redundant point-to-point A* probe has been removed. Runtime foliage evaluates
+  these layers on a deterministic third-cell lattice, jitters within (never
+  across) each third, and classifies habitat from the final jittered height.
+- Music opens with the song currently applied to the live runtime. `Load saved
+  song` restores the source-controlled project version, `Load live song` rereads
+  the runtime override, and `Save song` validates and writes both. Start/stop
+  controls audition the exact adaptive renderer used by the world; preview inputs
+  cover enemy intensity, season, time of day, population, and building count,
+  with the resulting score expression available for inspection.
+- Validation retains data-integrity and packaging workflows. Runtime control,
+  player settings, Twitch setup, and inspection are
   no longer duplicate tool tabs: Twitch setup lives in Main Menu > Secrets, and
   the local operator panel owns stream telemetry, player settings, Twitch chat,
   and moderation.

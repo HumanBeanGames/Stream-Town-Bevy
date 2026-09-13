@@ -5,30 +5,31 @@ use thiserror::Error;
 
 use crate::StableId;
 
-/// Shipping Unity accepted these misspellings as aliases for character creation.
-pub const UNITY_CREATE_COMMAND_ALIASES: [&str; 10] = [
+/// Shipping chat accepted these misspellings as aliases for character creation.
+pub const CREATE_COMMAND_ALIASES: [&str; 10] = [
     "create", "crate", "crete", "join", "start", "creta", "ceate", "cate", "crtea", "ligma",
 ];
 
-/// Returns the source-authored usage string for a recognized Unity command.
+/// Returns the authored usage string for a recognized command.
 ///
 /// This intentionally takes the raw chat input so malformed commands can still
-/// receive the same useful response Unity sent before dispatch.
+/// receive the same useful response before dispatch.
 #[must_use]
-pub fn unity_command_usage(input: &str) -> Option<&'static str> {
+pub fn command_usage(input: &str) -> Option<&'static str> {
     let command = input
         .split_whitespace()
         .next()?
         .strip_prefix('!')?
         .to_ascii_lowercase();
-    if UNITY_CREATE_COMMAND_ALIASES.contains(&command.as_str()) {
+    if CREATE_COMMAND_ALIASES.contains(&command.as_str()) {
         return Some("!join");
     }
     Some(match command.as_str() {
         "role" => "!role <role> (or !role to view your current role)",
-        "build" => "!build <building>",
+        "build" => "!build <building|thickpath>",
         "cost" | "buildcost" => "!cost <building>",
         "move" => "!move <up|down|left|right|rotate> [amount]",
+        "center" => "!center",
         "up" => "!up [amount]",
         "down" => "!down [amount]",
         "left" => "!left [amount]",
@@ -37,7 +38,7 @@ pub fn unity_command_usage(input: &str) -> Option<&'static str> {
         "level" => "!level <role> OR !level <building> <id> [amount]",
         "remove" => "!remove <building> <id>",
         "bid" => "!bid <building>",
-        "upgrade" => "!upgrade <building> <BID>",
+        "upgrade" => "!upgrade <building> <BID> [levels]",
         "beginplace" => "!beginplace",
         "endplace" => "!endplace",
         "rotatebuilding" => "!rotatebuilding <building> <BID> [quarter turns]",
@@ -75,8 +76,8 @@ pub fn unity_command_usage(input: &str) -> Option<&'static str> {
         "rrole" => "!rrole <id> <role>",
         "rinfo" => "!rinfo <id>",
         "rdismiss" => "!rdismiss <id>",
-        // The Unity handler consumes both values even though its validator and
-        // usage table accidentally claimed there was only one argument.
+        // The command consumes both values even though the old usage table
+        // accidentally claimed there was only one argument.
         "resetid" => "!resetid <kind> <value>",
         "roles" => "!roles",
         "help" => "!help",
@@ -109,7 +110,8 @@ pub fn unity_command_usage(input: &str) -> Option<&'static str> {
         "rid" => "!rid",
         "recruits" => "!recruits",
         "resign" => "!resign",
-        // Bevy-only debug/convenience commands deliberately have no Unity usage.
+        "event" => "!event <event type>",
+        // Debug/convenience commands deliberately have no public usage entry.
         _ => return None,
     })
 }
@@ -123,6 +125,7 @@ pub enum ChatCommand {
     Build(StableId),
     BuildingCost(StableId),
     MoveBuilding(Vec<BuildingAction>),
+    CenterBuilding,
     BeginBuildingLine,
     EndBuildingLine,
     ConfirmBuilding,
@@ -132,6 +135,7 @@ pub enum ChatCommand {
     Upgrade {
         building: StableId,
         index: u16,
+        levels: u16,
     },
     RotateBuilding {
         building: StableId,
@@ -214,6 +218,7 @@ pub enum ChatCommand {
     Vote(StableId),
     StartRulerVote,
     Resign,
+    RequestEvent(StableId),
     TriggerEvent(StableId),
     Discord,
     ToggleBuildCosts,
@@ -598,10 +603,15 @@ impl FromStr for ChatCommand {
                     .next()
                     .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))
                     .and_then(parse_index)?;
+                let levels = parts.next().map_or(Ok(1), parse_index)?;
                 if parts.next().is_some() {
                     return Err(CommandParseError::TooManyArguments);
                 }
-                Ok(Self::Upgrade { building, index })
+                Ok(Self::Upgrade {
+                    building,
+                    index,
+                    levels,
+                })
             }
             "hair" | "eyes" | "facialhair" | "body" | "haircolor" | "eyecolor" => {
                 let index = parts
@@ -669,7 +679,7 @@ impl FromStr for ChatCommand {
                     return Err(CommandParseError::TooManyArguments);
                 }
                 match command.as_str() {
-                    command if UNITY_CREATE_COMMAND_ALIASES.contains(&command) => {
+                    command if CREATE_COMMAND_ALIASES.contains(&command) => {
                         no_argument(argument, Self::Join)
                     }
                     "experience" | "exp" => no_argument(argument, Self::Experience),
@@ -685,6 +695,7 @@ impl FromStr for ChatCommand {
                     "stuck" => no_argument(argument, Self::Unstuck),
                     "ping" => no_argument(argument, Self::Ping),
                     "resetcam" => no_argument(argument, Self::ResetCamera),
+                    "center" => no_argument(argument, Self::CenterBuilding),
                     "save" => no_argument(argument, Self::Save),
                     "help" => no_argument(argument, Self::Help),
                     "confirm" | "accept" => no_argument(argument, Self::ConfirmBuilding),
@@ -707,7 +718,7 @@ impl FromStr for ChatCommand {
                     "build" => with_id(&command, argument, Self::Build),
                     "cost" | "buildcost" => with_id(&command, argument, Self::BuildingCost),
                     "vote" => with_id(&command, argument, Self::Vote),
-                    "event" => with_id(&command, argument, Self::TriggerEvent),
+                    "event" => with_id(&command, argument, Self::RequestEvent),
                     "revive" => optional_id(argument).map(Self::Revive),
                     "praise" => no_argument(argument, Self::Praise),
                     "tbuildcosts" => no_argument(argument, Self::ToggleBuildCosts),
@@ -931,22 +942,8 @@ fn parse_level_command<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
 
-    const UNITY_COMMAND_DICTIONARY_SOURCE: &str =
-        include_str!("../../../../Assets/Scripts/Twitch/Commands/CommandDictionary.cs");
-
-    fn source_registered_commands() -> BTreeSet<String> {
-        UNITY_COMMAND_DICTIONARY_SOURCE
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("//"))
-            .filter_map(|line| line.split(".Add(\"").nth(1))
-            .filter_map(|tail| tail.split('"').next())
-            .map(str::to_owned)
-            .collect()
-    }
-
-    fn valid_source_command(command: &str) -> String {
+    fn valid_shipping_command(command: &str) -> String {
         let arguments = match command {
             "build" | "bid" => " house",
             "upgrade" | "remove" => " house 1",
@@ -958,6 +955,7 @@ mod tests {
             "kill" | "grevive" => " viewer",
             "givexp" | "levelup" => " viewer 1",
             "qevent" => " fishgod",
+            "event" => " economic",
             "buy" | "sell" => " 8 wood",
             "levelall" => " house 2",
             "recruit" => " logger 1",
@@ -971,31 +969,100 @@ mod tests {
     }
 
     #[test]
-    fn every_source_registered_command_has_usage_and_a_valid_bevy_parser_path() {
-        let commands = source_registered_commands();
-        assert_eq!(commands.len(), 68, "Unity command surface changed");
+    fn shipping_commands_have_usage_and_a_valid_parser_path() {
+        let commands = [
+            "accept",
+            "addresource",
+            "bid",
+            "body",
+            "build",
+            "buildings",
+            "buy",
+            "cam",
+            "cancel",
+            "cobj",
+            "confirm",
+            "down",
+            "eyecolor",
+            "eyes",
+            "facialhair",
+            "gaction",
+            "givepet",
+            "givexp",
+            "givexpall",
+            "grevive",
+            "hair",
+            "haircolor",
+            "health",
+            "help",
+            "info",
+            "kill",
+            "left",
+            "level",
+            "levelall",
+            "levelup",
+            "modrole",
+            "move",
+            "pet",
+            "pets",
+            "ping",
+            "praise",
+            "qevent",
+            "randtech",
+            "rdismiss",
+            "recruit",
+            "recruits",
+            "remove",
+            "resetcam",
+            "resetid",
+            "resign",
+            "revive",
+            "rid",
+            "right",
+            "rinfo",
+            "role",
+            "roles",
+            "rotate",
+            "rrole",
+            "rulervote",
+            "sell",
+            "station",
+            "stdiscord",
+            "stopevent",
+            "stuck",
+            "target",
+            "tbuildcosts",
+            "techvote",
+            "townstats",
+            "trolelimits",
+            "unlockage2",
+            "unlockall",
+            "up",
+            "vote",
+            "event",
+        ];
         for command in commands {
-            let input = valid_source_command(&command);
+            let input = valid_shipping_command(command);
             assert!(
-                unity_command_usage(&input).is_some(),
-                "missing Unity usage for {input}"
+                command_usage(&input).is_some(),
+                "missing command usage for {input}"
             );
             assert!(
                 input.parse::<ChatCommand>().is_ok(),
-                "missing Bevy parser path for {input}"
+                "missing parser path for {input}"
             );
         }
-        for alias in UNITY_CREATE_COMMAND_ALIASES {
+        for alias in CREATE_COMMAND_ALIASES {
             let input = format!("!{alias}");
             assert_eq!(input.parse(), Ok(ChatCommand::Join));
-            assert_eq!(unity_command_usage(&input), Some("!join"));
+            assert_eq!(command_usage(&input), Some("!join"));
         }
     }
 
     #[test]
     fn parses_shipping_command_grammar() {
         assert_eq!("!join".parse(), Ok(ChatCommand::Join));
-        for alias in UNITY_CREATE_COMMAND_ALIASES {
+        for alias in CREATE_COMMAND_ALIASES {
             assert_eq!(format!("!{alias}").parse(), Ok(ChatCommand::Join));
         }
         assert_eq!("!experience".parse(), Ok(ChatCommand::Experience));
@@ -1004,6 +1071,16 @@ mod tests {
         assert_eq!(
             "!build building:house".parse(),
             Ok(ChatCommand::Build(StableId::new("building:house").unwrap()))
+        );
+        assert_eq!(
+            "!build thickpath".parse(),
+            Ok(ChatCommand::Build(StableId::new("thickpath").unwrap()))
+        );
+        assert_eq!("!center".parse(), Ok(ChatCommand::CenterBuilding));
+        assert_eq!(command_usage("!center"), Some("!center"));
+        assert_eq!(
+            command_usage("!build thickpath"),
+            Some("!build <building|thickpath>")
         );
         assert_eq!(
             "!cost ore_storage".parse(),
@@ -1020,6 +1097,15 @@ mod tests {
             Ok(ChatCommand::Upgrade {
                 building: StableId::new("tower").unwrap(),
                 index: 3,
+                levels: 1,
+            })
+        );
+        assert_eq!(
+            "!upgrade Tower 3 4".parse(),
+            Ok(ChatCommand::Upgrade {
+                building: StableId::new("tower").unwrap(),
+                index: 3,
+                levels: 4,
             })
         );
         assert_eq!(
@@ -1059,6 +1145,7 @@ mod tests {
             Ok(ChatCommand::Upgrade {
                 building: StableId::new("orestorage").unwrap(),
                 index: 4,
+                levels: 1,
             })
         );
         assert_eq!(
@@ -1308,11 +1395,11 @@ mod tests {
     #[test]
     fn reports_source_authored_usage_for_invalid_shipping_commands() {
         assert_eq!(
-            unity_command_usage("!move sideways"),
+            command_usage("!move sideways"),
             Some("!move <up|down|left|right|rotate> [amount]")
         );
-        assert_eq!(unity_command_usage("!CrTeA extra"), Some("!join"));
-        assert_eq!(unity_command_usage("!health extra"), Some("!health"));
-        assert_eq!(unity_command_usage("!not-a-command"), None);
+        assert_eq!(command_usage("!CrTeA extra"), Some("!join"));
+        assert_eq!(command_usage("!health extra"), Some("!health"));
+        assert_eq!(command_usage("!not-a-command"), None);
     }
 }

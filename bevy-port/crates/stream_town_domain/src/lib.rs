@@ -21,9 +21,8 @@ pub use animation::{
     WeightedAnimationMotion,
 };
 pub use command::{
-    BuildingAction, BuildingDirection, CameraAction, CameraDirection, ChatCommand,
-    CommandParseError, CustomizationKind, UNITY_CREATE_COMMAND_ALIASES, parse_chat_commands,
-    unity_command_usage,
+    BuildingAction, BuildingDirection, CREATE_COMMAND_ALIASES, CameraAction, CameraDirection,
+    ChatCommand, CommandParseError, CustomizationKind, command_usage, parse_chat_commands,
 };
 pub use config::{
     AdaptiveMusicConfig, BroadcastConfig, BroadcastEncoderPreference, BroadcastRenderMode,
@@ -36,11 +35,11 @@ pub use content::{
     BuildingDef, BuildingModelDef, CURRENT_CONTENT_SCHEMA, ContentCatalog, EnemyCampGenerationDef,
     EnemyDef, EnemyModelSetDef, EnemyRunAnimation, EnemySpawnerDef, EnemyWeaponModelDef,
     FoliageHabitat, FoliageLayerDef, FoliageVariantDef, HealthDef, LoadingScreenDef, ObjectiveDef,
-    ObjectiveKind, PassiveResourceContribution, PetDef, PetModelDef, ProjectileShooterDef,
-    ResourceGenerationHabitat, ResourceGenerationLayerDef, ResourceReward, RoleDef,
-    RoleEquipmentDef, RoleSlotContribution, RotatingNodeDef, StationDef, StationUpdateMode,
-    StorageContribution, StorageModelDef, TargetingScoreDef, TechGroup, TechNode, TechTree,
-    WeightedEnemySpawn, default_resource_generation_layers,
+    ObjectiveKind, PassiveResourceContribution, PetDef, PetModelDef, ProgressionDef,
+    ProjectileShooterDef, ResourceGenerationHabitat, ResourceGenerationLayerDef, ResourceReward,
+    RoleDef, RoleEquipmentDef, RoleSlotContribution, RotatingNodeDef, StationDef,
+    StationUpdateMode, StorageContribution, StorageModelDef, TargetingScoreDef, TechGroup,
+    TechNode, TechTree, WeightedEnemySpawn, default_resource_generation_layers,
 };
 pub use id::{StableId, StableIdError};
 pub use menu_scene::{
@@ -78,23 +77,26 @@ pub use settings::{
     AudioMixSettings, BuildingHealthDisplayMode, CURRENT_PLAYER_SETTINGS_SCHEMA, CameraSettings,
     DisplayMode, InterfaceSettings, NameDisplayMode, PlayerSettings, PlayerSettingsStore,
     PlayerSettingsStoreError, PlayerSettingsValidationError, PostProcessAntiAliasing,
-    VideoSettings,
+    TimelapseInterval, TimelapseSettings, VideoSettings,
 };
 pub use simulation::{
-    ActorCustomization, ActorState, BUILDING_MAX_HEALTH, BuildingState, CURRENT_SIMULATION_SCHEMA,
-    DAYS_PER_SEASON, EnemyCampState, FishGodState, MAX_ROLE_LEVEL, ObjectiveEvent,
-    ObjectiveProgress, RULER_VOTE_DURATION_SECONDS, RULER_VOTE_INTERVAL_SECONDS, RaidState,
-    RoleProgress, RulerVoteKind, RulerVoteState, SEASON_TRANSITION_SECONDS, SEASONS_PER_YEAR,
-    Season, SimulationError, StreamUserType, TechVote, TownEvent, TownGoalState, Weather,
-    WorldSimulation, required_role_experience,
+    ActorCustomization, ActorState, BUILDING_MAX_HEALTH, BuildingState,
+    COMMUNITY_EVENT_REQUEST_COOLDOWN_SECONDS, CURRENT_SIMULATION_SCHEMA, CommunityEvent,
+    CommunityVoteOutcome, CommunityVoteProposal, CommunityVoteState, DAYS_PER_SEASON,
+    EnemyCampState, FishGodState, ObjectiveEvent, ObjectiveProgress, RULER_VOTE_DURATION_SECONDS,
+    RULER_VOTE_INTERVAL_SECONDS, RaidState, RoleProgress, RulerVoteKind, RulerVoteState,
+    SEASON_TRANSITION_SECONDS, SEASONS_PER_YEAR, Season, SimulationError, StreamUserType, TechVote,
+    TownEvent, TownGoalState, Weather, WorldSimulation, required_role_experience,
 };
 pub use technology_layout::{
     CURRENT_TECHNOLOGY_LAYOUT_SCHEMA, GraphPoint, GraphSize, TechnologyGraphLayout,
     TechnologyGroupLayout, TechnologyLayoutError, TechnologyNodeLayout,
 };
 pub use world::{
-    GeneratedFoliage, GeneratedResource, GeneratedWorld, WorldGenerationStage,
-    foliage_visual_variant, foliage_visual_yaw_milliradians, generate_world,
+    GeneratedFoliage, GeneratedResource, GeneratedWorld, VISIBLE_WATER_SURFACE_LIFT_METRES,
+    WorldGenerationStage, foliage_visual_variant, foliage_visual_yaw_milliradians, generate_world,
     generate_world_with_content, generate_world_with_content_observed, legacy_v1_world_hash,
-    legacy_v2_world_hash, legacy_v3_world_hash, resource_visual_variant, shoreline_approaches,
+    legacy_v2_world_hash, legacy_v3_world_hash, navigation_corner_height_metres,
+    navigation_surface_height_at_world, resource_visual_variant, shoreline_approaches,
+    visible_water_surface_height,
 };

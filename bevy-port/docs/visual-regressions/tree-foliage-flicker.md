@@ -136,6 +136,40 @@ Use the same fixed seed, camera, day, season, and tree for every toggle. Change 
   - User result: GPU-validated candidate for the reported washed-out colour; awaiting ordinary-play confirmation.
   - Reuse rule: do not restore the 100% seasonal replacement or remove the narrow blue-atlas guard.
 
+- [ ] **FAILED AS A COMPLETE FIX — ground and classify foliage from occupied mesh vertices**
+  - Object/spawn path: generated foliage and primitive-loaded resource visuals passing through `PendingSurfaceGrounding`.
+  - Fixed seed/camera/day/season: default deterministic foliage sweep; Spring/Rain; twelve 1920x1080 frames.
+  - Single changed variable: replaced conservative transformed-AABB corner contact with the loaded mesh's transformed vertices; the same bottom two-percent contact band rejects land meshes extending onto visible water, while the exact top rejects emergent underwater grass.
+  - Duplicate renderer count: zero duplicate mesh/quantized-global-transform groups across 19,787 accepted resource/foliage renderers; 114 shoreline/emergent meshes were rejected by the new envelope.
+  - Stationary-camera result: frames 00–01 in `.stream-town/diagnostics/foliage-grounding-paths-20260907` retain grounded foliage, lighting, and ground shadows without a shader error.
+  - Moving-camera result: all twelve frames and `foliage-sweep.mp4` pass the scripted orbit/zoom/return sweep.
+  - Shadows still cast: yes; the manifest reports 19,787/19,787 casters. Existing grass/critter receiver suppression remains unchanged.
+  - User result: failed — ordinary Tonyville play still showed dense floating grass/flowers and land foliage visibly over water.
+  - Reuse rule: exact vertex contact remains useful, but it must not execute before `WorldRuntime` exists; a loading-order regression must exercise the real foliage-before-world sequence.
+
+- [ ] **FAILED — make Tonyville runtime grounding and shoreline classification authoritative**
+  - Object/spawn path: gameplay generated land foliage and visible resource trees/bushes; baked main-menu foliage remains independent, hidden fish resource nodes remain intact, and protruding underwater seaweed/coral presentation is omitted beneath opaque gameplay water.
+  - Fixed seed/camera/day/season: Tonyville native save, seed `7004668131361051943`; Spring/Rain; the same deterministic shoreline camera plus a straight-down water camera.
+  - Single changed variable: runtime meshes remain hidden until `WorldRuntime` and CPU mesh data exist; bottom-band vertices are lowered to the most restrictive rendered-terrain contact; the complete mesh plus a one-cell dry buffer must pass the land habitat test; gameplay water writes depth.
+  - Duplicate renderer count: zero across 18,965 resource/foliage renderers in the final Tonyville release sweep after underwater and shoreline-invalid presentation was removed.
+  - Stationary-camera result: failed review. `.stream-town/diagnostics/tonyville-water-topdown.png` visibly contains grass-like foliage throughout the cyan water; it must never be cited as a passing artifact.
+  - Moving-camera result: `.stream-town/diagnostics/foliage-tonyville-final-20260907-153054` completed all twelve orbit/zoom/return frames; a transient DX12 resize race was caught by the existing recovery path and did not lose a frame or fail the structural gate.
+  - Shadows still cast: yes; the final Tonyville manifest reports 18,965/18,965 casters, and the grounding/filtering changes do not add `NotShadowCaster`.
+  - User result: failed — the user explicitly identified both floating Tonyville grass and grass visible in the purported final top-down water verification.
+  - Reuse rule: do not let an AABB arriving during incremental world construction remove `PendingSurfaceGrounding`; do not restore visible underwater seaweed/coral without a real depth-aware underwater presentation; never treat missing runtime terrain or CPU mesh data as habitat acceptance.
+
+- [ ] **`current candidate` — bootstrap Tonyville's saved seed and classify from one final rendered surface**
+  - Object/spawn path: generated terrain, gameplay water, resources, fish schools, and generated foliage during automatic/native save loading.
+  - Fixed seed/camera/day/season: Tonyville native save, seed `7004668131361051943`; in-game elapsed time 3225 minutes; Spring/Clear.
+  - Single changed variable: automatic resume now reads the saved seed before generating any world presentation; terrain triangles, habitat classification, water height, and foliage grounding share the domain final-surface sampler; native load rebuilds the water/fish data and requeues every existing surface visual for grounding.
+  - Duplicate renderer count: zero across 19,126 resource/foliage renderers; the same manifest reports matching configured/generated Tonyville seeds, zero pending groundings, and zero final-height habitat violations.
+  - Stationary-camera result: `.stream-town/diagnostics/tonyville-water-final-height.png` recreates the failed top-down lake view and shows the water clear of grass, flowers, and trees. The prior top-down image remains failed evidence and is not reusable.
+  - Moving-camera result: `.stream-town/diagnostics/foliage-tonyville-seed-authority-20260907` contains all twelve orbit/zoom/return frames and `foliage-sweep.mp4`; its structural gate passes.
+  - Shadows still cast: yes; the new manifest reports 19,126/19,126 shadow casters.
+  - Production result: Tonyville was rebuilt and redeployed from `target/release/stream_town_game.exe`; nineteen live health samples averaged 29.92 captured FPS, 30.00 encoded FPS, and 46.88 audio packets/s, with empty audio queues and a responsive process.
+  - User result: not checked.
+  - Reuse rule: a passing manifest must report matching configured/generated seeds, zero pending groundings, and zero final-height habitat violations, and the water frame must also pass explicit visual review.
+
 The recorded local acceptance set is `.stream-town/diagnostics/foliage-moving-final-2026-08-25-v2`. It is intentionally ignored because twelve full-resolution PNGs are machine evidence, not shipping assets. Reproduce it from `bevy-port` with:
 
 ```powershell

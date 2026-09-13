@@ -1,1 +1,0 @@
-public class Access_ZoomingSensitivityText : Access_Text { }

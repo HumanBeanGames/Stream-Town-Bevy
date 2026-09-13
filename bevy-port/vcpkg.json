@@ -11,9 +11,11 @@
         "avcodec",
         "avformat",
         "amf",
+        "gpl",
         "openh264",
         "swresample",
-        "swscale"
+        "swscale",
+        "x264"
       ]
     }
   ]

@@ -1,6 +1,6 @@
 # Audio provenance
 
-The Bevy migration does not redistribute the Unity project's removed audio files.
+The Bevy game does not redistribute the former project's removed audio files.
 
 Role-action cues are generated at runtime by `stream_town_game` as mono 16-bit
 PCM WAV data. Presentation schema 19 retains the 35 original `AudioClip` GUID

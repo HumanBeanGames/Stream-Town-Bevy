@@ -1,1 +1,0 @@
-public class Access_SoundEffectsVolumeSlider : Access_Slider { }

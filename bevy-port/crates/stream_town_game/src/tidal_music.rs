@@ -468,6 +468,28 @@ fn adaptive_song_program(
     })
 }
 
+pub(super) fn preview_adaptive_music_program(
+    config: &AdaptiveMusicConfig,
+    intensity: f64,
+    season: f64,
+    time_of_day: f64,
+    population: usize,
+    building_count: usize,
+) -> Result<(String, f64), String> {
+    let program = adaptive_song_program(
+        &IntensitySongInput {
+            intensity,
+            season,
+            time_of_day,
+            population,
+            building_count,
+            ..default()
+        },
+        config,
+    )?;
+    Ok((program.expression, program.cycles_per_second))
+}
+
 #[cfg(test)]
 fn intensity_song_program(intensity: f64) -> Result<IntensitySongProgram, String> {
     adaptive_song_program(
@@ -595,6 +617,30 @@ mod tests {
                 .expression
                 .ends_with("-- 2.400000 2.000000 0.500000 17 9 2.400000")
         );
+    }
+
+    #[test]
+    fn tools_preview_renders_the_exact_live_world_program() {
+        let config = AdaptiveMusicConfig::default();
+        let input = IntensitySongInput {
+            intensity: 4.25,
+            season: 2.0,
+            time_of_day: 0.75,
+            population: 23,
+            building_count: 17,
+            ..default()
+        };
+        let live = adaptive_song_program(&input, &config).unwrap();
+        let preview = preview_adaptive_music_program(
+            &config,
+            input.intensity,
+            input.season,
+            input.time_of_day,
+            input.population,
+            input.building_count,
+        )
+        .unwrap();
+        assert_eq!(preview, (live.expression, live.cycles_per_second));
     }
 
     #[test]

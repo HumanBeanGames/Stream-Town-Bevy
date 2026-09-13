@@ -7,7 +7,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const CURRENT_PLAYER_SETTINGS_SCHEMA: u32 = 4;
+pub const CURRENT_PLAYER_SETTINGS_SCHEMA: u32 = 5;
 const LEGACY_BEVY_EXPOSURE_OFFSET_EV: f32 = 0.5;
 const PREVIOUS_INGAME_BRIGHTNESS_OFFSET_EV: f32 = 1.0;
 
@@ -44,6 +44,48 @@ pub enum BuildingHealthDisplayMode {
     Always,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum TimelapseInterval {
+    Off,
+    TenMinutes,
+    #[default]
+    OneHour,
+    ThreeHours,
+    SixHours,
+    TwelveHours,
+    TwentyFourHours,
+}
+
+impl TimelapseInterval {
+    #[must_use]
+    pub const fn seconds(self) -> Option<u32> {
+        match self {
+            Self::Off => None,
+            Self::TenMinutes => Some(10 * 60),
+            Self::OneHour => Some(60 * 60),
+            Self::ThreeHours => Some(3 * 60 * 60),
+            Self::SixHours => Some(6 * 60 * 60),
+            Self::TwelveHours => Some(12 * 60 * 60),
+            Self::TwentyFourHours => Some(24 * 60 * 60),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TimelapseSettings {
+    pub interval: TimelapseInterval,
+    pub dynamic: bool,
+}
+
+impl Default for TimelapseSettings {
+    fn default() -> Self {
+        Self {
+            interval: TimelapseInterval::OneHour,
+            dynamic: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PlayerSettings {
     pub schema_version: u32,
@@ -52,6 +94,8 @@ pub struct PlayerSettings {
     pub camera: CameraSettings,
     pub interface: InterfaceSettings,
     pub autosave_minutes: u16,
+    #[serde(default)]
+    pub timelapse: TimelapseSettings,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -151,6 +195,7 @@ impl Default for PlayerSettings {
             // runtime is being hardened. The authored Unity intervals remain
             // available in the settings menu.
             autosave_minutes: 1,
+            timelapse: TimelapseSettings::default(),
         }
     }
 }
@@ -203,6 +248,10 @@ impl PlayerSettings {
             // every existing player's rendered image unchanged.
             self.video.brightness_ev =
                 (self.video.brightness_ev + PREVIOUS_INGAME_BRIGHTNESS_OFFSET_EV).clamp(-5.0, 5.0);
+            self.schema_version = 4;
+        }
+        if self.schema_version == 4 {
+            // Schema 5 adds a serde-defaulted city timelapse policy.
             self.schema_version = CURRENT_PLAYER_SETTINGS_SCHEMA;
         }
         self.validate()?;
@@ -272,95 +321,6 @@ impl PlayerSettings {
         }
         Ok(())
     }
-
-    pub fn from_unity_json(encoded: &str) -> Result<Self, serde_json::Error> {
-        let legacy: UnitySettingsData = serde_json::from_str(encoded)?;
-        let defaults = Self::default();
-        let shadow_type = legacy.shadow_type.unwrap_or(2).clamp(0, 2);
-        let shadow_resolution = legacy.shadow_resolution.unwrap_or(4).clamp(0, 4);
-        let msaa = legacy.anti_aliasing.unwrap_or(3).clamp(0, 3);
-        let mut settings = Self {
-            video: VideoSettings {
-                display_mode: match legacy.display_mode.unwrap_or(2).clamp(0, 2) {
-                    0 => DisplayMode::Windowed,
-                    1 => DisplayMode::Borderless,
-                    _ => DisplayMode::Fullscreen,
-                },
-                shadows_enabled: shadow_type != 0,
-                shadow_map_resolution: [256, 512, 1_024, 2_048, 4_096]
-                    [usize::try_from(shadow_resolution).unwrap_or(4)],
-                ambient_occlusion: legacy.enabled_ao.unwrap_or(true),
-                vsync: legacy.v_sync.unwrap_or(true),
-                fps_limit: match legacy.fps_limiter.unwrap_or(5).clamp(0, 5) {
-                    0 => Some(24),
-                    1 => Some(30),
-                    2 => Some(60),
-                    3 => Some(120),
-                    4 => Some(240),
-                    _ => None,
-                },
-                brightness_ev: legacy.brightness.unwrap_or(0.0).clamp(-5.0, 5.0),
-                gamma: legacy.gamma.unwrap_or(0.0).clamp(-5.0, 5.0),
-                msaa_samples: [1, 2, 4, 8][usize::try_from(msaa).unwrap_or(3)],
-                post_process_aa: match legacy.camera_aa.unwrap_or(2).clamp(0, 2) {
-                    1 => PostProcessAntiAliasing::Fxaa,
-                    2 => PostProcessAntiAliasing::Smaa,
-                    _ => PostProcessAntiAliasing::None,
-                },
-                ..defaults.video
-            },
-            audio: AudioMixSettings {
-                master: clamp_unit(legacy.master_volume.unwrap_or(1.0)),
-                music: clamp_unit(legacy.music_volume.unwrap_or(1.0)),
-                sound_effects: clamp_unit(legacy.player_volume.unwrap_or(1.0)),
-                ambience: clamp_unit(legacy.environment_volume.unwrap_or(1.0)),
-            },
-            camera: CameraSettings {
-                pan_sensitivity: clamp_sensitivity(legacy.pan_sensitivity.unwrap_or(10.0)),
-                zoom_sensitivity: clamp_sensitivity(legacy.zoom_sensitivity.unwrap_or(10.0)),
-                keyboard_pan_sensitivity: clamp_sensitivity(
-                    legacy.wasd_sensitivity.unwrap_or(10.0),
-                ),
-                edge_scroll_sensitivity: clamp_sensitivity(
-                    legacy.edge_scrolling_sensitivity.unwrap_or(10.0),
-                ),
-                field_of_view_degrees: u16::try_from(legacy.fov.unwrap_or(60).clamp(30, 120))
-                    .unwrap_or(60),
-                edge_scrolling: legacy.edge_scrolling.unwrap_or(true),
-                keyboard_movement: legacy.keyboard_movement.unwrap_or(true),
-                mouse_controls: legacy.mouse_controls.unwrap_or(true),
-            },
-            interface: InterfaceSettings {
-                display_names: match legacy.display_names.unwrap_or(0).clamp(0, 2) {
-                    1 => NameDisplayMode::StaffAndSubscribers,
-                    2 => NameDisplayMode::AllPlayers,
-                    _ => NameDisplayMode::None,
-                },
-                display_building_health: match legacy
-                    .display_building_damage
-                    .unwrap_or(1)
-                    .clamp(0, 2)
-                {
-                    0 => BuildingHealthDisplayMode::None,
-                    2 => BuildingHealthDisplayMode::Always,
-                    _ => BuildingHealthDisplayMode::DamagedOnly,
-                },
-                ui_scale_percent: default_ui_scale_percent(),
-                high_contrast: false,
-                reduced_motion: false,
-            },
-            autosave_minutes: match legacy.autosave_time.unwrap_or(3).clamp(0, 4) {
-                0 => 0,
-                1 => 5,
-                2 => 10,
-                3 => 30,
-                _ => 60,
-            },
-            ..defaults
-        };
-        settings.schema_version = CURRENT_PLAYER_SETTINGS_SCHEMA;
-        Ok(settings)
-    }
 }
 
 fn valid_signed_setting(value: f32) -> bool {
@@ -369,22 +329,6 @@ fn valid_signed_setting(value: f32) -> bool {
 
 const fn default_ui_scale_percent() -> u16 {
     100
-}
-
-fn clamp_unit(value: f32) -> f32 {
-    if value.is_finite() {
-        value.clamp(0.0, 1.0)
-    } else {
-        1.0
-    }
-}
-
-fn clamp_sensitivity(value: f32) -> f32 {
-    if value.is_finite() {
-        value.clamp(0.0, 100.0)
-    } else {
-        10.0
-    }
 }
 
 #[derive(Debug, Error)]
@@ -458,38 +402,6 @@ impl PlayerSettingsStore {
         let settings: PlayerSettings = ron::from_str(&encoded)?;
         Ok(settings.upgrade()?)
     }
-}
-
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct UnitySettingsData {
-    display_mode: Option<i32>,
-    shadow_type: Option<i32>,
-    shadow_resolution: Option<i32>,
-    #[serde(rename = "enabledAO")]
-    enabled_ao: Option<bool>,
-    v_sync: Option<bool>,
-    fps_limiter: Option<i32>,
-    brightness: Option<f32>,
-    gamma: Option<f32>,
-    anti_aliasing: Option<i32>,
-    #[serde(rename = "cameraAA")]
-    camera_aa: Option<i32>,
-    master_volume: Option<f32>,
-    music_volume: Option<f32>,
-    player_volume: Option<f32>,
-    environment_volume: Option<f32>,
-    pan_sensitivity: Option<f32>,
-    zoom_sensitivity: Option<f32>,
-    wasd_sensitivity: Option<f32>,
-    edge_scrolling_sensitivity: Option<f32>,
-    fov: Option<i32>,
-    autosave_time: Option<i32>,
-    display_names: Option<i32>,
-    display_building_damage: Option<i32>,
-    edge_scrolling: Option<bool>,
-    keyboard_movement: Option<bool>,
-    mouse_controls: Option<bool>,
 }
 
 #[cfg(test)]
@@ -590,47 +502,6 @@ mod tests {
         assert_eq!(
             settings.validate(),
             Err(PlayerSettingsValidationError::UiScale)
-        );
-    }
-
-    #[test]
-    fn imports_unity_json_indices_and_clamps_values() {
-        let settings = PlayerSettings::from_unity_json(
-            r#"{
-                "displayMode": 1, "shadowType": 0, "shadowResolution": 2,
-                "enabledAO": false, "vSync": false, "fpsLimiter": 2,
-                "antiAliasing": 1, "cameraAA": 1,
-                "masterVolume": 0.5, "playerVolume": 2.0,
-                "wasdSensitivity": 17.0, "autosaveTime": 4,
-                "displayNames": 2, "displayBuildingDamage": 0
-            }"#,
-        )
-        .unwrap();
-        assert_eq!(settings.video.display_mode, DisplayMode::Borderless);
-        assert!(!settings.video.shadows_enabled);
-        assert_eq!(settings.video.shadow_map_resolution, 1_024);
-        assert_eq!(settings.video.fps_limit, Some(60));
-        assert_eq!(settings.video.msaa_samples, 2);
-        assert_eq!(
-            settings.video.post_process_aa,
-            PostProcessAntiAliasing::Fxaa
-        );
-        assert!((settings.audio.master - 0.5).abs() < f32::EPSILON);
-        assert!((settings.audio.sound_effects - 1.0).abs() < f32::EPSILON);
-        assert_eq!(settings.autosave_minutes, 60);
-        assert_eq!(
-            settings.interface.display_names,
-            NameDisplayMode::AllPlayers
-        );
-        settings.validate().unwrap();
-    }
-
-    #[test]
-    fn imports_unity_subscriber_name_display_index() {
-        let settings = PlayerSettings::from_unity_json(r#"{"displayNames":1}"#).unwrap();
-        assert_eq!(
-            settings.interface.display_names,
-            NameDisplayMode::StaffAndSubscribers
         );
     }
 

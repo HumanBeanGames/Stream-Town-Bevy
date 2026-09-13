@@ -13,6 +13,7 @@ pub const WINDOWS_PACKAGE_NAME: &str = "stream-town-windows-x86_64.zip";
 const FFMPEG_SOURCE_SHA512: &str = "e858e92e5eb08d562302cde371af55917df6e1fe53994e18462a3c929a40ede1828c2bd53c2a7d65a2cfd791782ead3cd94efb2def904f49cb5dd8ab5cd4256f";
 const OPENH264_SOURCE_SHA512: &str = "26a03acde7153a6b40b99f00641772433a244c72a3cc4bca6d903cf3b770174d028369a2fb73b2f0774e1124db0e269758eed6d88975347a815e0366c820d247";
 const AMD_AMF_SOURCE_SHA512: &str = "b992d4a1f59f7b1c789d03e7bd9876417a569fb239bfe2e2178f2434ae18653bbacc912de2b8a5f8ff0a85fad28b0c1091c2a8d3417407a37c22c1e907e4c159";
+const X264_SOURCE_SHA512: &str = "707ff486677a1b5502d6d8faa588e7a03b0dee45491c5cba89341be4be23d3f2e48272c3b11d54cfc7be1b8bf4a3dfc3c3bb6d9643a6b5a2ed77539c85ecf294";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackageReport {
@@ -113,6 +114,7 @@ pub fn package_windows(workspace: &Path, output: &Path, skip_build: bool) -> Res
         "avutil-60.dll",
         "swresample-6.dll",
         "swscale-9.dll",
+        "libx264-164.dll",
         "openh264-7.dll",
     ]
     .map(|name| native_bin.join(name));
@@ -129,7 +131,14 @@ pub fn package_windows(workspace: &Path, output: &Path, skip_build: bool) -> Res
     let ffmpeg_source = downloads.join("ffmpeg-ffmpeg-n8.1.1.tar.gz");
     let openh264_source = downloads.join("cisco-openh264-v2.6.0.tar.gz");
     let amd_amf_source = downloads.join("AMF-headers-v1.5.2.tar.gz");
-    for source in [&ffmpeg_source, &openh264_source, &amd_amf_source] {
+    let x264_source =
+        downloads.join("videolan-x264-31e19f92f00c7003fa115047ce50978bc98c3a0d.tar.gz");
+    for source in [
+        &ffmpeg_source,
+        &openh264_source,
+        &amd_amf_source,
+        &x264_source,
+    ] {
         if !source.is_file() {
             bail!(
                 "corresponding native-library source archive is missing: {}",
@@ -140,6 +149,7 @@ pub fn package_windows(workspace: &Path, output: &Path, skip_build: bool) -> Res
     verify_sha512(&ffmpeg_source, FFMPEG_SOURCE_SHA512)?;
     verify_sha512(&openh264_source, OPENH264_SOURCE_SHA512)?;
     verify_sha512(&amd_amf_source, AMD_AMF_SOURCE_SHA512)?;
+    verify_sha512(&x264_source, X264_SOURCE_SHA512)?;
 
     fs::create_dir_all(output)
         .with_context(|| format!("failed to create package directory {}", output.display()))?;
@@ -210,7 +220,15 @@ pub fn package_windows(workspace: &Path, output: &Path, skip_build: bool) -> Res
         &mut files,
         &mut bytes,
     )?;
-    for package in ["ffmpeg", "openh264", "amd-amf"] {
+    add_file(
+        &mut zip,
+        &x264_source,
+        "StreamTown/third_party/source/videolan-x264-31e19f92f00c7003fa115047ce50978bc98c3a0d.tar.gz",
+        options,
+        &mut files,
+        &mut bytes,
+    )?;
+    for package in ["ffmpeg", "openh264", "amd-amf", "x264"] {
         let share = native_root.join("share").join(package);
         if !share.is_dir() {
             bail!("vcpkg package metadata is missing: {}", share.display());
@@ -394,11 +412,13 @@ pub fn validate_windows_package(archive: &Path) -> Result<()> {
         "StreamTown/avutil-60.dll",
         "StreamTown/swresample-6.dll",
         "StreamTown/swscale-9.dll",
+        "StreamTown/libx264-164.dll",
         "StreamTown/openh264-7.dll",
         "StreamTown/third_party/FFMPEG_RELINKING.md",
         "StreamTown/third_party/source/ffmpeg-ffmpeg-n8.1.1.tar.gz",
         "StreamTown/third_party/source/cisco-openh264-v2.6.0.tar.gz",
         "StreamTown/third_party/source/AMF-headers-v1.5.2.tar.gz",
+        "StreamTown/third_party/source/videolan-x264-31e19f92f00c7003fa115047ce50978bc98c3a0d.tar.gz",
         "StreamTown/assets/config/game.ron",
         "StreamTown/assets/config/player-settings.ron",
         "StreamTown/assets/content/catalog.ron",

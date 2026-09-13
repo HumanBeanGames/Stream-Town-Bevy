@@ -1,1 +1,0 @@
-public class Access_ResolutionDropdown : Access_Dropdown { }

@@ -1,11 +1,11 @@
-(
+GameConfig(
     schema_version: 8,
-    window: (
-        title: "Stream Town — Bevy Migration",
+    window: WindowConfig(
+        title: "Stream Town",
         width: 1920,
         height: 1080,
     ),
-    world: (
+    world: WorldGenConfig(
         seed: 1580290387,
         width: 200,
         height: 200,
@@ -14,7 +14,7 @@
         water_level_centimetres: 5,
         resource_density_per_thousand: 38,
     ),
-    time: (
+    time: TimeCycleConfig(
         seconds_per_day: 3600,
         daylight_per_thousand: 666,
         transition_seconds: 100,
@@ -22,7 +22,7 @@
         night_light_intensity_milli: 5000,
         max_building_emission_milli: 5000,
     ),
-    gameplay: (
+    gameplay: GameplayConfig(
         initial_agents: 5,
         agent_speed_cells_per_second: 4.0,
         repath_interval_seconds: 1.0,
@@ -40,7 +40,7 @@
             "resource:wood": 15000,
         },
     ),
-    twitch: (
+    twitch: TwitchConfig(
         enabled: false,
         client_id: "",
         bot_login: "humanbeanbot",
@@ -48,13 +48,14 @@
         require_broadcaster_connect: false,
         game_master_ids: [],
         fish_god_reward_id: Some("5a760033-50b5-4e47-911b-d63993d2860c"),
-        broadcast: (
+        broadcast: BroadcastConfig(
             enabled: false,
+            render_mode: StreamOnly,
             start_on_launch: false,
             width: 1280,
             height: 720,
             frames_per_second: 30,
-            video_bitrate_kbps: 3000,
+            video_bitrate_kbps: 6000,
             audio_bitrate_kbps: 160,
             encoder: Auto,
             ingest: "",

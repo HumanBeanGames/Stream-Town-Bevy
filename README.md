@@ -1,36 +1,37 @@
-# Stream Town: Bevy Migration
+# Stream Town
 
-This repository preserves the original Unity project as the migration oracle and
-contains the active Bevy rewrite in [`bevy-port`](bevy-port/README.md). The
-`unity-baseline` tag marks the frozen Unity starting point; new implementation
-work is developed on `codex/bevy-migration` until it is ready to replace the
-legacy runtime.
+Stream Town is a Bevy-based town simulation controlled through Twitch chat. The
+shipping Rust workspace, authored data, runtime assets, tools, and deployment
+scripts live in [`bevy-port`](bevy-port/README.md).
 
-The current implementation is an early, compiling migration milestone rather
-than a complete gameplay-parity release. See
-[`MIGRATION_STATUS.md`](MIGRATION_STATUS.md) for what is working, what remains,
-and the validation commands.
+The former Unity source and one-time conversion pipeline have been retired. The
+checked-in RON catalogs and GLB/texture assets are now the project’s native
+authoring source. Historical engine provenance retained inside those catalogs is
+metadata only and is not a build-time dependency.
 
-## Original project notes
+## Development
 
-This is the public repo of Stream Town.
+```powershell
+cd bevy-port
+cargo run -p xtask -- validate
+cargo test --workspace
+cargo run -p stream_town_tools
+.\scripts\launch-game.ps1
+```
 
-Please remember that this was a student project and that things may not be to an industry standard, this project was only ever an educational or personal development project.
+For the crate boundaries and ECS conventions, see
+[`ARCHITECTURE.md`](ARCHITECTURE.md). Twitch setup is documented in
+[`TWITCH_SETUP.md`](TWITCH_SETUP.md), and the public command list is in
+[`TWITCH_COMMANDS.md`](TWITCH_COMMANDS.md).
 
-The third party library A* Pathfinding project has been removed from the repo as it is a paid asset on the unity store.
-The game will not run without work, as this library is required for a lot of scripts.
+## License and media
 
-Installing A* Pathfinding Project will fix this issue, or, feel free to implement your own pathfinding solution and fix any errors.
+The code is licensed under GPL-3.0-only. Some original soundtrack files were not
+redistributable and are not included; the Bevy runtime provides its own adaptive
+score and procedural ambience.
 
-You will also need to provide your own Twitch bot details into the TL_Secrets.cs file. (Here is a wonderful guide to TwitchLib https://docs.google.com/document/d/1GfYC3BGW2gnS7GmNE1TwMEdk0QYY2zHccxXp53-WiKM/edit)
+The original student-project design documents remain useful historical context:
 
-All audio files were removed too due to potential licensing issues and we want to cover ourselves just in case. This may cause some errors to show up with the audio manager, but should be rather easy to resolve.
-
-Here you will also find some of the documents we created for Stream Town to help guide development.
-Please note that they may be in an unfinished state:
-
-Game Design Document: https://docs.google.com/document/d/1vqnT3kpXjyaRRbm3R8cjF-40W9evqaksKq3ECvn-7AM/edit?usp=share_link
-
-Technical Design Document: https://docs.google.com/document/d/12nDNNhhOYKf_gBjGFj0iP7-hvdjTWxNs_fvL98HrrQ8/edit?usp=share_link
-
-Art Bible: https://docs.google.com/presentation/d/1VG11I8TGiMwpkelAd9ERPDhKpsiAkukuqHoUEt8hr7E/edit?usp=share_link
+- [Game Design Document](https://docs.google.com/document/d/1vqnT3kpXjyaRRbm3R8cjF-40W9evqaksKq3ECvn-7AM/edit?usp=share_link)
+- [Technical Design Document](https://docs.google.com/document/d/12nDNNhhOYKf_gBjGFj0iP7-hvdjTWxNs_fvL98HrrQ8/edit?usp=share_link)
+- [Art Bible](https://docs.google.com/presentation/d/1VG11I8TGiMwpkelAd9ERPDhKpsiAkukuqHoUEt8hr7E/edit?usp=share_link)

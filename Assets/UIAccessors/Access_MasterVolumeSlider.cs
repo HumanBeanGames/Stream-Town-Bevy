@@ -1,1 +1,0 @@
-public class Access_MasterVolumeSlider : Access_Slider { }

@@ -36,6 +36,10 @@ use bevy_egui::{
     EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, EguiStartupSet,
     EguiTextureHandle, EguiUserTextures, PrimaryEguiContext, egui,
 };
+use bevy_tidal::{
+    NativeAudioRouting, NativeAudioState, NativeAudioStatus, TidalBackendStatus, TidalConfig,
+    TidalController, TidalPlugin,
+};
 use stream_town_domain::{
     AnimationClipDef, AnimationConditionDef, AnimationConditionMode, AnimationControllerDef,
     AnimationEventDef, AnimationFloatKeyframe, AnimationLayerBlendMode, AnimationLayerDef,
@@ -69,11 +73,11 @@ use technology_graph::{TechnologyGraphViewState, show as show_technology_graph};
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum ToolTab {
     #[default]
-    Migration,
     Authority,
     Assets,
     Buildings,
     Roles,
+    Balance,
     Technology,
     Terrain,
     Music,
@@ -139,6 +143,7 @@ const DEFAULT_PREVIEW_YAW: f32 = 0.0;
 const DEFAULT_PREVIEW_PITCH: f32 = 0.18;
 const DEFAULT_PREVIEW_DISTANCE: f32 = 10.0;
 const AUTHORING_COMBO_MAX_HEIGHT: f32 = 320.0;
+const TOOL_MUSIC_PREVIEW_TRACK: u64 = 1;
 
 #[derive(Clone, Debug)]
 struct ModelPreviewControls {
@@ -185,11 +190,11 @@ impl ModelPreviewControls {
 
 impl ToolTab {
     const ALL: [Self; 10] = [
-        Self::Migration,
         Self::Authority,
         Self::Assets,
         Self::Buildings,
         Self::Roles,
+        Self::Balance,
         Self::Technology,
         Self::Terrain,
         Self::Music,
@@ -199,11 +204,11 @@ impl ToolTab {
 
     const fn label(self) -> &'static str {
         match self {
-            Self::Migration => "Migration",
             Self::Authority => "Game Authority",
             Self::Assets => "Models + Assets",
             Self::Buildings => "Buildings",
             Self::Roles => "Roles",
+            Self::Balance => "Progression",
             Self::Technology => "Technology",
             Self::Terrain => "Terrain",
             Self::Music => "Music",
@@ -213,10 +218,15 @@ impl ToolTab {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MusicPreviewState {
+    Stopped,
+    Playing,
+}
+
 #[derive(Resource)]
 struct ToolState {
     tab: ToolTab,
-    unity_root: String,
     command: String,
     status: String,
     config: GameConfig,
@@ -324,6 +334,13 @@ struct ToolState {
     runtime_sequence: u64,
     runtime_actor_id: String,
     runtime_login: String,
+    music_preview_intensity: f64,
+    music_preview_season: f64,
+    music_preview_time_of_day: f64,
+    music_preview_population: usize,
+    music_preview_building_count: usize,
+    music_preview_state: MusicPreviewState,
+    music_preview_rendered_score: String,
 }
 
 #[derive(Resource)]
@@ -569,8 +586,15 @@ impl Default for ToolState {
             .unwrap_or_default();
         let new_clip_asset = discovered_model_assets.first().cloned().unwrap_or_default();
         let config_path = default_config_path();
-        let config = load_game_config(config_path.to_string_lossy().as_ref())
+        let mut config = load_game_config(config_path.to_string_lossy().as_ref())
             .expect("checked-in game configuration must parse and validate");
+        if stream_town_game::runtime_config_path().is_file()
+            && let Ok(runtime_config) = stream_town_game::load_runtime_config()
+        {
+            // The Music tab should open on the score the world actually loaded,
+            // while the other authoring sections retain their project values.
+            config.music = runtime_config.music;
+        }
         let player_settings_store =
             PlayerSettingsStore::new(stream_town_game::player_settings_path());
         let player_settings = player_settings_store.load().unwrap_or_default();
@@ -586,7 +610,6 @@ impl Default for ToolState {
         let role_preview_animation = default_role_preview_animation(&presentation, &catalog);
         Self {
             tab: ToolTab::default(),
-            unity_root: "..".to_owned(),
             command: "!join".to_owned(),
             status: "Ready. Content edits remain drafts until their catalog validates and saves."
                 .to_owned(),
@@ -695,6 +718,13 @@ impl Default for ToolState {
             runtime_sequence: 0,
             runtime_actor_id: "tool:operator".to_owned(),
             runtime_login: "tool_operator".to_owned(),
+            music_preview_intensity: 4.0,
+            music_preview_season: 0.0,
+            music_preview_time_of_day: 0.5,
+            music_preview_population: 20,
+            music_preview_building_count: 10,
+            music_preview_state: MusicPreviewState::Stopped,
+            music_preview_rendered_score: String::new(),
         }
     }
 }
@@ -727,6 +757,13 @@ fn main() -> anyhow::Result<()> {
     App::new()
         .add_plugins(default_plugins)
         .add_plugins(EguiPlugin::default())
+        .add_plugins(TidalPlugin {
+            config: TidalConfig {
+                samples_path: asset_root.join("music").join("samples"),
+                cycles_per_second: 0.3125,
+                scheduler_lookahead: Duration::from_millis(100),
+            },
+        })
         .init_resource::<ToolState>()
         .add_systems(
             PreStartup,
@@ -1537,6 +1574,10 @@ fn tools_ui(
     mut contexts: EguiContexts,
     mut state: ResMut<ToolState>,
     mut preview: ResMut<ModelPreviewRuntime>,
+    tidal: Res<TidalController>,
+    tidal_backend: Res<TidalBackendStatus>,
+    native_audio: Res<NativeAudioStatus>,
+    audio_routing: Res<NativeAudioRouting>,
 ) -> Result {
     poll_twitch_tool_events(&mut state);
     poll_tool_job_events(&mut state);
@@ -1567,7 +1608,6 @@ fn tools_ui(
         ui.label(&state.status);
     });
     egui::CentralPanel::default().show(&mut viewport_ui, |ui| match state.tab {
-        ToolTab::Migration => migration_tab(ui, &mut state),
         ToolTab::Authority => authority_tab(ui, &mut state),
         ToolTab::Assets => content_tab(
             ui,
@@ -1592,9 +1632,17 @@ fn tools_ui(
             &preview_status,
             &mut preview.controls,
         ),
+        ToolTab::Balance => progression_tab(ui, &mut state),
         ToolTab::Technology => technology_tab(ui, &mut state),
         ToolTab::Terrain => terrain_tab(ui, &mut state),
-        ToolTab::Music => music_tab(ui, &mut state),
+        ToolTab::Music => music_tab(
+            ui,
+            &mut state,
+            &tidal,
+            &tidal_backend,
+            &native_audio,
+            &audio_routing,
+        ),
         ToolTab::World => world_tab(
             ui,
             &mut state,
@@ -1605,43 +1653,6 @@ fn tools_ui(
         ToolTab::Validation => validation_tab(ui, &mut state),
     });
     Ok(())
-}
-
-fn migration_tab(ui: &mut egui::Ui, state: &mut ToolState) {
-    ui.heading("Unity migration dashboard");
-    ui.label("Inventory GUIDs, YAML assets, prefab references, and legacy saves without modifying Unity sources.");
-    ui.horizontal(|ui| {
-        ui.label("Unity root");
-        ui.text_edit_singleline(&mut state.unity_root);
-    });
-    if ui.button("Prepare inventory command").clicked() {
-        state.status = format!(
-            "Run: cargo run -p stream_town_migrate -- inventory {:?} --out generated/content-manifest.json",
-            state.unity_root
-        );
-    }
-    ui.separator();
-    ui.label(format!(
-        "Active catalog: {} archetypes, {} buildings, {} roles, {} technologies, {} materials, {} renderer bindings, {} controllers, {} source records",
-        state.catalog.archetypes.len(),
-        state.catalog.buildings.len(),
-        state.catalog.roles.len(),
-        state.catalog.technology.nodes.len(),
-        state.presentation.materials.len(),
-        state
-            .presentation
-            .prefab_renderer_materials
-            .values()
-            .map(Vec::len)
-            .sum::<usize>(),
-        state.presentation.controllers.len(),
-        state.catalog.source_records.len()
-    ));
-    ui.monospace(".\\bevy-port\\scripts\\export-unity.ps1");
-    ui.monospace(".\\bevy-port\\scripts\\convert-models.ps1");
-    ui.label(
-        "Manifest stages: discovered -> referenced -> converted -> manually reviewed -> packaged",
-    );
 }
 
 fn authority_tab(ui: &mut egui::Ui, state: &mut ToolState) {
@@ -1933,14 +1944,159 @@ fn terrain_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     });
 }
 
-fn music_tab(ui: &mut egui::Ui, state: &mut ToolState) {
+fn music_tab(
+    ui: &mut egui::Ui,
+    state: &mut ToolState,
+    tidal: &TidalController,
+    tidal_backend: &TidalBackendStatus,
+    native_audio: &NativeAudioStatus,
+    audio_routing: &NativeAudioRouting,
+) {
     ui.heading("Adaptive Bevy Tidal score");
     ui.label(
-        "The five live variables below are available both as weighted energy inputs and as score-template placeholders. Changes take effect after saving and restarting the game.",
+        "This editor and preview use the same score renderer as the live world. The tab initially loads the live runtime song when one exists.",
     );
-    authoring_config_save_bar(ui, state);
+    let preview_ready = tidal_backend.is_ready() && native_audio.state() == NativeAudioState::Ready;
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Load saved song").clicked() {
+            state.status = match load_game_config(&state.config_path) {
+                Ok(config) => {
+                    state.config.music = config.music;
+                    "Loaded the project song".to_owned()
+                }
+                Err(error) => format!("Could not load the project song: {error:#}"),
+            };
+        }
+        if ui.button("Load live song").clicked() {
+            state.status = match stream_town_game::load_runtime_config() {
+                Ok(config) => {
+                    state.config.music = config.music;
+                    "Loaded the song currently configured for the live game".to_owned()
+                }
+                Err(error) => format!("Could not load the live song: {error:#}"),
+            };
+        }
+        if ui.button("Save song").clicked() {
+            state.status = match save_and_apply_game_config(&state.config, &state.config_path) {
+                Ok((project, runtime)) => format!(
+                    "Saved the song to {} and {}; restart the game to apply it to the world",
+                    project.display(),
+                    runtime.display()
+                ),
+                Err(error) => format!("Could not save the song: {error:#}"),
+            };
+        }
+        if ui
+            .add_enabled(preview_ready, egui::Button::new("Start preview"))
+            .clicked()
+        {
+            state.status = match stream_town_game::adaptive_music_preview_program(
+                &state.config.music,
+                state.music_preview_intensity,
+                state.music_preview_season,
+                state.music_preview_time_of_day,
+                state.music_preview_population,
+                state.music_preview_building_count,
+            )
+            .and_then(|(expression, cycles_per_second)| {
+                tidal
+                    .transition(TOOL_MUSIC_PREVIEW_TRACK, &expression, cycles_per_second)
+                    .map(|()| (expression, cycles_per_second))
+            }) {
+                Ok((expression, cycles_per_second)) => {
+                    audio_routing.set_local_monitor_enabled(true);
+                    audio_routing.set_master_gain(1.0);
+                    state.music_preview_state = MusicPreviewState::Playing;
+                    state.music_preview_rendered_score = expression;
+                    format!(
+                        "Playing the exact world score preview at {:.2} cycles/minute",
+                        cycles_per_second * 60.0
+                    )
+                }
+                Err(error) => {
+                    state.music_preview_state = MusicPreviewState::Stopped;
+                    format!("Could not start the song preview: {error}")
+                }
+            };
+        }
+        if ui
+            .add_enabled(
+                state.music_preview_state == MusicPreviewState::Playing,
+                egui::Button::new("Stop preview"),
+            )
+            .clicked()
+        {
+            state.status = match tidal.silence(TOOL_MUSIC_PREVIEW_TRACK) {
+                Ok(()) => {
+                    state.music_preview_state = MusicPreviewState::Stopped;
+                    "Stopped the song preview".to_owned()
+                }
+                Err(error) => format!("Could not stop the song preview: {error}"),
+            };
+        }
+    });
+    if preview_ready {
+        ui.colored_label(
+            egui::Color32::LIGHT_GREEN,
+            if state.music_preview_state == MusicPreviewState::Playing {
+                "Native music preview: playing"
+            } else {
+                "Native music preview: ready"
+            },
+        );
+    } else {
+        ui.colored_label(
+            egui::Color32::LIGHT_YELLOW,
+            format!(
+                "Music preview is starting: {} | {}",
+                tidal_backend.detail(),
+                native_audio.detail()
+            ),
+        );
+    }
     ui.separator();
     egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.heading("Preview town state");
+        ui.label("These values replace the corresponding live-world inputs while auditioning.");
+        ui.add(
+            egui::Slider::new(
+                &mut state.music_preview_intensity,
+                0.0..=f64::from(state.config.music.maximum_energy.max(0.1)),
+            )
+            .text("Enemy intensity"),
+        );
+        ui.add(
+            egui::Slider::new(&mut state.music_preview_season, 0.0..=3.0)
+                .text("Season (0 spring .. 3 winter)"),
+        );
+        ui.add(
+            egui::Slider::new(&mut state.music_preview_time_of_day, 0.0..=1.0)
+                .text("Time of day"),
+        );
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::DragValue::new(&mut state.music_preview_population)
+                    .range(0..=10_000)
+                    .prefix("Population "),
+            );
+            ui.add(
+                egui::DragValue::new(&mut state.music_preview_building_count)
+                    .range(0..=10_000)
+                    .prefix("Buildings "),
+            );
+        });
+        if !state.music_preview_rendered_score.is_empty() {
+            ui.collapsing("Rendered world score sent to the preview", |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut state.music_preview_rendered_score)
+                        .code_editor()
+                        .interactive(false)
+                        .desired_rows(10)
+                        .desired_width(f32::INFINITY),
+                );
+            });
+        }
+        ui.separator();
         let music = &mut state.config.music;
         ui.add(
             egui::DragValue::new(&mut music.intensity_smoothing_seconds)
@@ -3349,7 +3505,7 @@ fn animation_controller_editor(
 ) {
     ui.heading("Animation controllers");
     ui.label(
-        "Controller parameters, states, blend motions, transitions, state machines, and layers are authored here rather than displayed as migration diagnostics.",
+        "Controller parameters, states, blend motions, transitions, state machines, and layers are authored and validated here.",
     );
     let controller_choices = state
         .presentation
@@ -4631,7 +4787,7 @@ fn content_tab_contents(
             for (id, archetype) in &state.catalog.archetypes {
                 ui.collapsing(format!("{}  ({id})", archetype.display_name), |ui| {
                     ui.label(format!("Kind: {:?}", archetype.kind));
-                    ui.monospace(format!("Unity source: {}", archetype.source_path));
+                    ui.monospace(format!("Source provenance: {}", archetype.source_path));
                     for scene in &archetype.scenes {
                         ui.horizontal(|ui| {
                             ui.label(if scene.is_default { "●" } else { "○" });
@@ -4659,7 +4815,7 @@ fn content_tab_contents(
                     )
                     .into();
                     ui.colored_label(color, "████  authored base colour");
-                    ui.monospace(format!("Unity source: {}", material.source_path));
+                    ui.monospace(format!("Source provenance: {}", material.source_path));
                     ui.label(format!(
                         "Metallic {:.2} · roughness {:.2} · {:?}",
                         material.metallic, material.perceptual_roughness, material.alpha_mode
@@ -4678,7 +4834,7 @@ fn content_tab_contents(
         ui.collapsing("Animation controllers and clips", |ui| {
             for (id, controller) in &state.presentation.controllers {
                 ui.collapsing(format!("{}  ({id})", controller.display_name), |ui| {
-                    ui.monospace(format!("Unity source: {}", controller.source_path));
+                    ui.monospace(format!("Source provenance: {}", controller.source_path));
                     ui.label(format!(
                         "{} layers · {} states · {} transitions · {} parameters",
                         controller.layers.len(),
@@ -4699,7 +4855,7 @@ fn content_tab_contents(
             ui.separator();
             for (id, clip) in &state.presentation.clips {
                 ui.collapsing(format!("{}  ({id})", clip.display_name), |ui| {
-                    ui.monospace(format!("Unity source: {}", clip.source_path));
+                    ui.monospace(format!("Source provenance: {}", clip.source_path));
                     ui.label(format!(
                         "{:.3}s · {:.1} Hz · {} tracks · {} events · looping {}",
                         clip.duration_seconds,
@@ -4914,7 +5070,7 @@ fn legacy_content_tab(ui: &mut egui::Ui, state: &ToolState) {
         .filter(|archetype| archetype.enemy_models.is_some())
         .count();
     ui.heading("Content catalog and stable references");
-    ui.label("Versioned RON uses stable IDs; Unity GUIDs remain in typed provenance records.");
+    ui.label("Versioned RON uses stable IDs; historical source GUIDs remain in typed provenance records.");
     let loading_percent_tenths = state.catalog.loading_screen.progress_milli_per_second;
     ui.label(format!(
         "Loading: {}.{}%/s · {}ms ready hold · {} tooltip(s)",
@@ -5007,7 +5163,7 @@ fn legacy_content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ui.collapsing("Enemy camp generation", |ui| {
             for layer in &state.catalog.enemy_camp_generation {
                 ui.collapsing(format!("{}  ({})", layer.camp_archetype, layer.id), |ui| {
-                    ui.monospace(format!("Unity settings: {}", layer.source_path));
+                    ui.monospace(format!("Source settings: {}", layer.source_path));
                     ui.label(format!(
                         "Maximum camps: {}; placement attempts per camp: 500",
                         layer.maximum_camps
@@ -5055,7 +5211,7 @@ fn legacy_content_tab(ui: &mut egui::Ui, state: &ToolState) {
                         ));
                     }
                     ui.label(format!("Kind: {:?}", archetype.kind));
-                    ui.monospace(format!("Unity prefab: {}", archetype.source_path));
+                    ui.monospace(format!("Source prefab: {}", archetype.source_path));
                     ui.label(format!(
                         "Footprint: {} x {}; scene variants: {}",
                         archetype.footprint[0],
@@ -5216,7 +5372,7 @@ fn legacy_content_tab(ui: &mut egui::Ui, state: &ToolState) {
                             f64::from(shooter.range_milli_cells) / 1_000.0,
                             f64::from(shooter.movement_milli_cells_per_second) / 1_000.0,
                         ));
-                        ui.monospace(format!("Unity pool: {}", shooter.projectile_pool));
+                        ui.monospace(format!("Source pool: {}", shooter.projectile_pool));
                     }
                 });
             }
@@ -5277,7 +5433,7 @@ fn legacy_content_tab(ui: &mut egui::Ui, state: &ToolState) {
             ));
             for (id, material) in &state.presentation.materials {
                 ui.collapsing(format!("{}  ({id})", material.display_name), |ui| {
-                    ui.monospace(format!("Unity material: {}", material.source_path));
+                    ui.monospace(format!("Source material: {}", material.source_path));
                     ui.label(format!(
                         "PBR base {:?}; metallic {:.2}; roughness {:.2}; {:?}",
                         material.base_color,
@@ -5310,7 +5466,7 @@ fn legacy_content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ui.collapsing("Animation controllers", |ui| {
             for (id, controller) in &state.presentation.controllers {
                 ui.collapsing(format!("{}  ({id})", controller.display_name), |ui| {
-                    ui.monospace(format!("Unity controller: {}", controller.source_path));
+                    ui.monospace(format!("Source controller: {}", controller.source_path));
                     ui.label(format!(
                         "{} parameters ({} inferred), {} states, {} transitions, {} layers",
                         controller.parameters.len(),
@@ -5367,7 +5523,7 @@ fn legacy_content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ui.collapsing("Animation clips", |ui| {
             for (id, clip) in &state.presentation.clips {
                 ui.collapsing(format!("{}  ({id})", clip.display_name), |ui| {
-                    ui.monospace(format!("Unity clip: {}", clip.source_path));
+                    ui.monospace(format!("Source clip: {}", clip.source_path));
                     ui.label(format!(
                         "{:.3}s at {:.1} Hz, {} transform tracks, {} property curves, {} events, looping: {}",
                         clip.duration_seconds,
@@ -5548,9 +5704,38 @@ fn buildings_tab(
                 footprint_editor(
                     &mut columns[0],
                     &mut draft.value.footprint,
-                    "Shared logical placement footprint",
+                    "Legacy model anchor footprint",
                     64,
                 );
+                let mut custom_placement = draft.value.placement_footprint_thirds.is_some();
+                if columns[0]
+                    .checkbox(&mut custom_placement, "Override exact placement footprint")
+                    .changed()
+                {
+                    draft.value.placement_footprint_thirds = custom_placement.then(|| {
+                        draft
+                            .value
+                            .footprint
+                            .map(|axis| axis.saturating_mul(3))
+                    });
+                }
+                if let Some(placement) = draft.value.placement_footprint_thirds.as_mut() {
+                    columns[0].label("Placement/exclusion box (third-cell units)");
+                    columns[0].horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut placement[0])
+                                .range(1..=192)
+                                .prefix("Width "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut placement[1])
+                                .range(1..=192)
+                                .prefix("Depth "),
+                        );
+                    });
+                    placement[0] = placement[0].max(1);
+                    placement[1] = placement[1].max(1);
+                }
                 let mut custom_navigation = draft.value.navigation_footprint_thirds.is_some();
                 if columns[0]
                     .checkbox(
@@ -5560,28 +5745,34 @@ fn buildings_tab(
                     .changed()
                 {
                     draft.value.navigation_footprint_thirds = custom_navigation.then(|| {
-                        default_navigation_footprint_thirds(draft.value.footprint)
+                        draft.value.placement_footprint_thirds.map_or_else(
+                            || default_navigation_footprint_thirds(draft.value.footprint),
+                            |placement| placement.map(|axis| axis.saturating_sub(2).max(1)),
+                        )
                     });
                 }
                 if let Some(navigation) = draft.value.navigation_footprint_thirds.as_mut() {
-                    let maximum = draft.value.footprint.map(|axis| axis.saturating_mul(3));
+                    let maximum = draft.value.placement_footprint_thirds.unwrap_or_else(|| {
+                        draft.value.footprint.map(|axis| axis.saturating_mul(3))
+                    });
+                    let minimum = u16::from(draft.id.as_str() != "building:path");
                     columns[0].label("Physical footprint (third-cell navigation units)");
                     columns[0].horizontal(|ui| {
                         ui.add(
                             egui::DragValue::new(&mut navigation[0])
-                                .range(1..=maximum[0])
+                                .range(minimum..=maximum[0])
                                 .prefix("Width "),
                         );
                         ui.add(
                             egui::DragValue::new(&mut navigation[1])
-                                .range(1..=maximum[1])
+                                .range(minimum..=maximum[1])
                                 .prefix("Depth "),
                         );
                     });
-                    navigation[0] = navigation[0].clamp(1, maximum[0]);
-                    navigation[1] = navigation[1].clamp(1, maximum[1]);
+                    navigation[0] = navigation[0].clamp(minimum, maximum[0]);
+                    navigation[1] = navigation[1].clamp(minimum, maximum[1]);
                     columns[0].small(format!(
-                        "Occupies {:.2} × {:.2} placement cells, centered inside the placement/exclusion footprint.",
+                        "Occupies {:.2} × {:.2} authored cells, centered inside the exact placement box.",
                         f32::from(navigation[0]) / 3.0,
                         f32::from(navigation[1]) / 3.0,
                     ));
@@ -5593,16 +5784,26 @@ fn buildings_tab(
                     ));
                 }
                 columns[0].small(
-                    "Changing the model adopts its authored footprint. Applying saves this value to both the building and model archetype atomically.",
+                    "The legacy footprint anchors the model. Exact placement and physical navigation are independently authored on the shared fine grid.",
                 );
                 columns[0].horizontal_wrapped(|ui| {
                     ui.checkbox(&mut draft.value.placeable, "Placeable");
                     ui.checkbox(&mut draft.value.can_level, "Can level");
                 });
                 columns[0].add(
-                    egui::DragValue::new(&mut draft.value.level_cost_multiplier_per_thousand)
+                    egui::DragValue::new(
+                        &mut draft.value.construction_cost_multiplier_per_thousand,
+                    )
+                    .range(0..=100_000)
+                    .prefix("Existing-building cost multiplier /1000 "),
+                );
+                columns[0].small("Set this to 0 for a fixed construction price.");
+                columns[0].add(
+                    egui::DragValue::new(
+                        &mut draft.value.upgrade_cost_per_target_level_per_thousand,
+                    )
                         .range(1..=100_000)
-                        .prefix("Level cost multiplier /1000 "),
+                        .prefix("Base cost fraction per target level /1000 "),
                 );
                 draw_building_visual(
                     &mut columns[1],
@@ -5613,13 +5814,35 @@ fn buildings_tab(
                     preview_controls,
                 );
             });
-            ui.collapsing("Construction and level costs", |ui| {
+            ui.collapsing("Construction and upgrade costs", |ui| {
                 stable_u32_map_editor(ui, "Construction cost", &mut draft.value.cost, &resources);
-                stable_u32_map_editor(
-                    ui,
-                    "Per-level cost",
-                    &mut draft.value.level_cost,
-                    &resources,
+                ui.small(
+                    "Upgrade cost is derived from the construction cost above × the authored fraction × (target level - 1). Multi-level purchases sum each target level.",
+                );
+            });
+            ui.collapsing("Per-level building effects", |ui| {
+                ui.add(
+                    egui::DragValue::new(
+                        &mut draft.value.health_bonus_per_level_per_thousand,
+                    )
+                    .range(0..=100_000)
+                    .prefix("Base health bonus /1000 "),
+                );
+                ui.add(
+                    egui::DragValue::new(
+                        &mut draft
+                            .value
+                            .global_gather_rate_bonus_per_level_per_thousand,
+                    )
+                    .range(0..=100_000)
+                    .prefix("Global gather-rate bonus /1000 "),
+                );
+                ui.add(
+                    egui::DragValue::new(
+                        &mut draft.value.kill_experience_bonus_per_level_per_thousand,
+                    )
+                    .range(0..=100_000)
+                    .prefix("Kill XP bonus /1000 "),
                 );
             });
             ui.collapsing("Storage", |ui| {
@@ -5637,10 +5860,6 @@ fn buildings_tab(
                             egui::DragValue::new(&mut storage.increment_amount)
                                 .prefix("Per level "),
                         );
-                        ui.add(
-                            egui::DragValue::new(&mut storage.level_multiplier_per_thousand)
-                                .prefix("Multiplier /1000 "),
-                        );
                         if ui.small_button("Remove").clicked() {
                             remove = Some(index);
                         }
@@ -5656,7 +5875,6 @@ fn buildings_tab(
                         resource: resource.clone(),
                         base_amount: 100,
                         increment_amount: 0,
-                        level_multiplier_per_thousand: 1_000,
                     });
                 }
             });
@@ -5740,6 +5958,7 @@ fn buildings_tab(
                         max_targets: 1,
                         update_milliseconds: 1_000,
                         search_range_milli_cells: 10_000,
+                        experience_bonus_per_level_per_thousand: 0,
                     });
                 }
                 if let Some(station) = draft.value.station.as_mut() {
@@ -5769,6 +5988,13 @@ fn buildings_tab(
                         ui.add(
                             egui::DragValue::new(&mut station.search_range_milli_cells)
                                 .prefix("Range milli-cells "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(
+                                &mut station.experience_bonus_per_level_per_thousand,
+                            )
+                            .range(0..=100_000)
+                            .prefix("Role XP/level /1000 "),
                         );
                     });
                 }
@@ -5801,6 +6027,7 @@ fn buildings_tab(
                         projectile_pool: pool,
                         movement_milli_cells_per_second: 10_000,
                         damage: 1,
+                        damage_bonus_per_level_per_thousand: 0,
                         range_milli_cells: 10_000,
                         fire_milliseconds: 1_000,
                     });
@@ -5814,6 +6041,13 @@ fn buildings_tab(
                     );
                     ui.horizontal_wrapped(|ui| {
                         ui.add(egui::DragValue::new(&mut shooter.damage).prefix("Damage "));
+                        ui.add(
+                            egui::DragValue::new(
+                                &mut shooter.damage_bonus_per_level_per_thousand,
+                            )
+                            .range(0..=100_000)
+                            .prefix("Damage/level /1000 "),
+                        );
                         ui.add(
                             egui::DragValue::new(&mut shooter.fire_milliseconds)
                                 .prefix("Cadence ms "),
@@ -6228,8 +6462,8 @@ fn roles_tab(
                         role_u32(ui, "Base health", &mut draft.value.base_health);
                         role_u32(
                             ui,
-                            "Health/level (milli)",
-                            &mut draft.value.health_per_level_milli,
+                            "Base health bonus/level (/1000)",
+                            &mut draft.value.health_bonus_per_level_per_thousand,
                         );
                         role_i32(
                             ui,
@@ -6554,8 +6788,8 @@ fn legacy_roles_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                         role_u32(ui, "Base health", &mut draft.value.base_health);
                         role_u32(
                             ui,
-                            "Health/level (milli)",
-                            &mut draft.value.health_per_level_milli,
+                            "Base health bonus/level (/1000)",
+                            &mut draft.value.health_bonus_per_level_per_thousand,
                         );
                         role_i32(
                             ui,
@@ -6787,6 +7021,70 @@ fn objective_kind_choice(ui: &mut egui::Ui, value: &mut ObjectiveKind) {
                 ui.selectable_value(value, kind, format!("{kind:?}"));
             }
         });
+}
+
+fn progression_tab(ui: &mut egui::Ui, state: &mut ToolState) {
+    ui.heading("Global progression balance");
+    ui.label(
+        "These catalog values are the runtime authority for role caps, the XP curve, level announcements, and the minimum action cadence.",
+    );
+    egui::Grid::new("global_progression_balance")
+        .num_columns(2)
+        .striped(true)
+        .show(ui, |ui| {
+            ui.label("Maximum player role level");
+            ui.add(
+                egui::DragValue::new(&mut state.catalog.progression.maximum_role_level)
+                    .range(1..=u16::MAX),
+            );
+            ui.end_row();
+            ui.label("Maximum recruit role level");
+            ui.add(
+                egui::DragValue::new(&mut state.catalog.progression.maximum_recruit_role_level)
+                    .range(1..=state.catalog.progression.maximum_role_level),
+            );
+            ui.end_row();
+            ui.label("XP curve plateau level");
+            ui.add(
+                egui::DragValue::new(
+                    &mut state.catalog.progression.role_experience_curve_level_span,
+                )
+                .range(2..=u16::MAX),
+            );
+            ui.end_row();
+            ui.label("XP required at plateau");
+            ui.add(
+                egui::DragValue::new(&mut state.catalog.progression.role_experience_curve_maximum)
+                    .range(1..=u32::MAX),
+            );
+            ui.end_row();
+            ui.label("Chat announcement interval");
+            ui.add(
+                egui::DragValue::new(&mut state.catalog.progression.level_announcement_interval)
+                    .range(1..=u16::MAX),
+            );
+            ui.end_row();
+            ui.label("Minimum action cadence (ms)");
+            ui.add(
+                egui::DragValue::new(&mut state.catalog.progression.minimum_action_milliseconds)
+                    .range(1..=u32::MAX),
+            );
+            ui.end_row();
+        });
+    ui.small(
+        "The curved XP formula is unchanged: it rises to the authored plateau, then remains flat through the authored maximum role level.",
+    );
+    ui.separator();
+    ui.horizontal(|ui| {
+        if ui.button("Validate and save progression").clicked() {
+            state.status = match save_content_catalog(&state.catalog, &state.catalog_path) {
+                Ok(path) => format!("Saved progression balance to {}", path.display()),
+                Err(error) => format!("Progression save failed: {error:#}"),
+            };
+        }
+        ui.label("Catalog path");
+        ui.text_edit_singleline(&mut state.catalog_path);
+    });
 }
 
 fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
@@ -7265,7 +7563,7 @@ fn enemy_camp_generation_editor(
                 searchable_string_choice(
                     ui,
                     "enemy_camp_source",
-                    "Unity source",
+                    "Source provenance",
                     &mut layer.source_path,
                     &source_paths,
                     &mut state.world_asset_search,
@@ -7680,7 +7978,7 @@ fn world_tab(
 ) {
     ui.heading("World-generation lab");
     ui.label(
-        "Tune Unity-compatible terrain and foliage generation, then inspect deterministic elevation, occupancy, resource, and foliage previews.",
+        "Tune authored terrain and foliage generation, then inspect deterministic elevation, occupancy, resource, and foliage previews.",
     );
     ui.horizontal_wrapped(|ui| {
         ui.add(egui::DragValue::new(&mut state.config.world.seed).prefix("Seed "));
@@ -7903,7 +8201,7 @@ fn world_tab(
                         );
                     });
                 }
-                ui.label(format!("Unity provenance: {}", layer.source_path));
+                ui.label(format!("Source provenance: {}", layer.source_path));
                 draw_model_preview(
                     ui,
                     preview_texture,
@@ -8102,7 +8400,7 @@ fn world_tab(
             searchable_string_choice(
                 ui,
                 "foliage_source",
-                "Unity source",
+                "Source provenance",
                 &mut layer.source_path,
                 &source_paths,
                 &mut state.world_asset_search,
@@ -8273,7 +8571,7 @@ fn world_tab(
 #[allow(dead_code)]
 fn settings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.heading("Player settings");
-    ui.label("Unity SettingsData parity with validated, atomic RON persistence.");
+    ui.label("Native player settings with validated, atomic RON persistence.");
     let settings_path = stream_town_game::player_settings_path();
     ui.horizontal_wrapped(|ui| {
         ui.monospace(settings_path.display().to_string());
@@ -8513,10 +8811,9 @@ fn settings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                 Err(error) => format!("Could not save player settings: {error}"),
             };
         }
-        if ui.button("Restore Unity defaults").clicked() {
+        if ui.button("Restore defaults").clicked() {
             state.player_settings = PlayerSettings::default();
-            "Restored Unity-equivalent defaults; save to persist them"
-                .clone_into(&mut state.status);
+            "Restored default settings; save to persist them".clone_into(&mut state.status);
         }
     });
     ui.label("Restart the game after saving to apply window, renderer, and audio changes.");
@@ -8694,7 +8991,7 @@ fn runtime_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             }
         }
     });
-    ui.label("Local tool injection uses the explicit Unity debug-bridge bypass; the control directory contains no OAuth credentials.");
+    ui.label("Local tool injection uses an explicit debug-only bypass; the control directory contains no OAuth credentials.");
 }
 
 fn poll_runtime_console(state: &mut ToolState) {
@@ -9021,6 +9318,7 @@ fn twitch_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                     BroadcastEncoderPreference::Intel,
                     BroadcastEncoderPreference::Amd,
                     BroadcastEncoderPreference::MediaFoundation,
+                    BroadcastEncoderPreference::X264,
                     BroadcastEncoderPreference::OpenH264,
                 ] {
                     ui.selectable_value(
@@ -9100,6 +9398,7 @@ const fn broadcast_encoder_label(encoder: BroadcastEncoderPreference) -> &'stati
         BroadcastEncoderPreference::Intel => "Intel Quick Sync",
         BroadcastEncoderPreference::Amd => "AMD AMF",
         BroadcastEncoderPreference::MediaFoundation => "Windows Media Foundation",
+        BroadcastEncoderPreference::X264 => "x264 (CPU, GPL)",
         BroadcastEncoderPreference::OpenH264 => "OpenH264 (CPU)",
     }
 }
@@ -10021,7 +10320,6 @@ fn resource_choices(catalog: &ContentCatalog) -> Vec<(StableId, String)> {
     }
     for building in catalog.buildings.values() {
         ids.extend(building.cost.keys().cloned());
-        ids.extend(building.level_cost.keys().cloned());
         ids.extend(building.storage.iter().map(|value| value.resource.clone()));
         ids.extend(
             building
@@ -10847,9 +11145,23 @@ fn draw_building_visual(
             false,
         );
         ui.small(format!(
-            "Runtime placement occupies {} × {} cells",
-            building.footprint[0], building.footprint[1]
+            "Legacy anchor: {} × {} cells · exact placement: {} × {} third-cells",
+            building.footprint[0],
+            building.footprint[1],
+            building
+                .placement_footprint_thirds
+                .unwrap_or_else(|| building.footprint.map(|axis| axis.saturating_mul(3)))[0],
+            building
+                .placement_footprint_thirds
+                .unwrap_or_else(|| building.footprint.map(|axis| axis.saturating_mul(3)))[1],
         ));
+        draw_footprint_grid(
+            ui,
+            building.footprint,
+            building.placement_footprint_thirds,
+            building.navigation_footprint_thirds,
+            egui::vec2(320.0, 160.0),
+        );
     });
 }
 
@@ -10889,11 +11201,12 @@ fn footprint_editor(
                 footprint.swap(0, 1);
             }
         });
-        draw_footprint_grid(ui, *footprint, egui::vec2(300.0, 170.0));
+        draw_footprint_grid(ui, *footprint, None, None, egui::vec2(300.0, 170.0));
         ui.small(format!(
-            "{} occupied cell{} · origin is the highlighted top-left cell",
+            "{} logical cell{} / {} fine cells · origin is the highlighted top-left logical cell",
             u32::from(footprint[0]) * u32::from(footprint[1]),
-            if *footprint == [1, 1] { "" } else { "s" }
+            if *footprint == [1, 1] { "" } else { "s" },
+            u32::from(footprint[0]) * u32::from(footprint[1]) * 9,
         ));
     });
     *footprint != previous
@@ -10903,37 +11216,63 @@ fn default_navigation_footprint_thirds(placement: [u16; 2]) -> [u16; 2] {
     placement.map(|axis| axis.saturating_mul(3).saturating_sub(2).max(1))
 }
 
-fn draw_footprint_grid(ui: &mut egui::Ui, footprint: [u16; 2], desired: egui::Vec2) {
+fn draw_footprint_grid(
+    ui: &mut egui::Ui,
+    footprint: [u16; 2],
+    placement_footprint_thirds: Option<[u16; 2]>,
+    navigation_footprint_thirds: Option<[u16; 2]>,
+    desired: egui::Vec2,
+) {
     let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
     ui.painter()
         .rect_filled(rect, 5.0, egui::Color32::from_rgb(18, 27, 34));
-    let width = f32::from(footprint[0].max(1));
-    let depth = f32::from(footprint[1].max(1));
+    let fine = placement_footprint_thirds
+        .unwrap_or_else(|| footprint.map(|axis| axis.max(1).saturating_mul(3)));
+    let width = f32::from(fine[0]);
+    let depth = f32::from(fine[1]);
     let scale = (rect.width() / width).min(rect.height() / depth) * 0.86;
     let grid =
         egui::Rect::from_center_size(rect.center(), egui::vec2(width * scale, depth * scale));
     ui.painter()
         .rect_filled(grid, 3.0, egui::Color32::from_rgb(71, 120, 145));
-    let line = egui::Stroke::new(0.8, egui::Color32::from_rgb(132, 184, 207));
-    if footprint[0] <= 64 {
-        for x in 1..footprint[0] {
+    let navigation = navigation_footprint_thirds.unwrap_or_else(|| {
+        placement_footprint_thirds.map_or_else(
+            || default_navigation_footprint_thirds(footprint),
+            |placement| placement.map(|axis| axis.saturating_sub(2).max(1)),
+        )
+    });
+    let physical_size = egui::vec2(
+        f32::from(navigation[0].min(fine[0])) * scale,
+        f32::from(navigation[1].min(fine[1])) * scale,
+    );
+    let physical = egui::Rect::from_center_size(grid.center(), physical_size);
+    ui.painter().rect_filled(
+        physical,
+        2.0,
+        egui::Color32::from_rgba_premultiplied(231, 151, 48, 105),
+    );
+    let minor = egui::Stroke::new(0.45, egui::Color32::from_rgb(103, 157, 181));
+    let major = egui::Stroke::new(1.2, egui::Color32::from_rgb(181, 218, 232));
+    if fine[0] <= 192 {
+        for x in 1..fine[0] {
+            let is_major = x % 3 == 0;
             let x = grid.left() + f32::from(x) * scale;
             ui.painter().line_segment(
                 [egui::pos2(x, grid.top()), egui::pos2(x, grid.bottom())],
-                line,
+                if is_major { major } else { minor },
             );
         }
     }
-    if footprint[1] <= 64 {
-        for z in 1..footprint[1] {
+    if fine[1] <= 192 {
+        for z in 1..fine[1] {
             let y = grid.top() + f32::from(z) * scale;
             ui.painter().line_segment(
                 [egui::pos2(grid.left(), y), egui::pos2(grid.right(), y)],
-                line,
+                if z % 3 == 0 { major } else { minor },
             );
         }
     }
-    let origin = egui::Rect::from_min_size(grid.min, egui::Vec2::splat(scale));
+    let origin = egui::Rect::from_min_size(grid.min, egui::Vec2::splat(scale * 3.0));
     ui.painter().rect_filled(
         origin.shrink(1.0),
         2.0,
@@ -12581,11 +12920,11 @@ mod tests {
         assert_eq!(
             ToolTab::ALL.map(ToolTab::label),
             [
-                "Migration",
                 "Game Authority",
                 "Models + Assets",
                 "Buildings",
                 "Roles",
+                "Progression",
                 "Technology",
                 "Terrain",
                 "Music",

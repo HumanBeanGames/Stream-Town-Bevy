@@ -11,12 +11,11 @@ use image::{DynamicImage, RgbImage, imageops::FilterType};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
-    ActorKind, BuildingState, ContentCatalog, DirtyRegion, GameConfig, GridPos,
+    ActorKind, BuildingDef, BuildingState, ContentCatalog, DirtyRegion, GameConfig, GridPos,
     NATIVE_SAVE_BACKUP_GENERATIONS, NativeSaveStore, PlayerSettings, PresentationCatalog,
     SHIPPING_SECONDS_PER_DAY, SavedActor, StableId, TechnologyGraphLayout, WorldSimulation,
     WorldSnapshot, generate_world_with_content,
 };
-use walkdir::WalkDir;
 
 #[derive(Parser)]
 #[command(about = "Stream Town repository automation")]
@@ -66,6 +65,15 @@ enum Command {
         #[arg(long, default_value_t = 80)]
         percent: u8,
     },
+    /// Town-maintenance operation: prune planted bushes and reset all trees from seed.
+    ResetVegetation {
+        #[arg(long)]
+        save: std::path::PathBuf,
+        #[arg(long, default_value = ".stream-town/config.ron")]
+        config: std::path::PathBuf,
+        #[arg(long, default_value_t = 95)]
+        bush_purge_percent: u8,
+    },
     /// Rebuild a town from its seed while retaining technology and Twitch citizens.
     ResetTownForFineNavigation {
         #[arg(long)]
@@ -75,6 +83,13 @@ enum Command {
         /// Delete every other save and old backup in the target save directory.
         #[arg(long)]
         prune_save_directory: bool,
+    },
+    /// Move existing buildings only as far as needed to satisfy exact fine-grid footprints.
+    NormalizeBuildingFootprints {
+        #[arg(long)]
+        save: std::path::PathBuf,
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -140,12 +155,579 @@ fn main() -> Result<()> {
         } => visual_acceptance(&capture_dir, &scenario, update_baseline),
         Command::PurgeSaveEnemies { save } => purge_save_enemies(&save),
         Command::PrunePlacedResources { save, percent } => prune_placed_resources(&save, percent),
+        Command::ResetVegetation {
+            save,
+            config,
+            bush_purge_percent,
+        } => reset_vegetation(&save, &config, bush_purge_percent),
         Command::ResetTownForFineNavigation {
             save,
             resources,
             prune_save_directory,
         } => reset_town_for_fine_navigation(&save, resources, prune_save_directory),
+        Command::NormalizeBuildingFootprints { save, dry_run } => {
+            normalize_building_footprints(&save, dry_run)
+        }
     }
+}
+
+const BUILDING_FINE_SUBDIVISIONS: u16 = 3;
+const BUILDING_MIN_TERRAIN_HEIGHT_CENTIMETRES: i16 = 45;
+
+fn rotated_building_footprint(footprint: [u16; 2], rotation_quarter_turns: i32) -> [u16; 2] {
+    if rotation_quarter_turns.rem_euclid(2) == 0 {
+        footprint
+    } else {
+        [footprint[1], footprint[0]]
+    }
+}
+
+fn exact_building_cells(
+    position: GridPos,
+    definition: &BuildingDef,
+    fine_footprint: [u16; 2],
+    rotation_quarter_turns: i32,
+) -> Vec<GridPos> {
+    let legacy = rotated_building_footprint(definition.footprint, rotation_quarter_turns);
+    let fine = rotated_building_footprint(fine_footprint, rotation_quarter_turns);
+    if fine[0] == 0 || fine[1] == 0 {
+        return Vec::new();
+    }
+    let centre_x = position
+        .x
+        .saturating_add(legacy[0] / 2)
+        .saturating_mul(BUILDING_FINE_SUBDIVISIONS)
+        .saturating_add(BUILDING_FINE_SUBDIVISIONS / 2);
+    let centre_z = position
+        .z
+        .saturating_add(legacy[1] / 2)
+        .saturating_mul(BUILDING_FINE_SUBDIVISIONS)
+        .saturating_add(BUILDING_FINE_SUBDIVISIONS / 2);
+    let origin_x = i32::from(centre_x) - i32::from(fine[0].saturating_sub(1) / 2);
+    let origin_z = i32::from(centre_z) - i32::from(fine[1].saturating_sub(1) / 2);
+    (0..fine[1])
+        .flat_map(|z| {
+            (0..fine[0]).filter_map(move |x| {
+                Some(GridPos {
+                    x: u16::try_from(origin_x + i32::from(x)).ok()?,
+                    z: u16::try_from(origin_z + i32::from(z)).ok()?,
+                })
+            })
+        })
+        .collect()
+}
+
+fn adaptive_wall_or_gate_cells(
+    building: &BuildingState,
+    buildings: &BTreeMap<StableId, BuildingState>,
+    linear_archetypes: &BTreeSet<StableId>,
+) -> Vec<GridPos> {
+    let centre = GridPos {
+        x: building
+            .position
+            .x
+            .saturating_mul(BUILDING_FINE_SUBDIVISIONS)
+            .saturating_add(1),
+        z: building
+            .position
+            .z
+            .saturating_mul(BUILDING_FINE_SUBDIVISIONS)
+            .saturating_add(1),
+    };
+    let mut connections = buildings
+        .values()
+        .filter(|other| other.id != building.id && linear_archetypes.contains(&other.archetype))
+        .fold(0_u8, |connections, other| {
+            connections
+                | match (
+                    i32::from(other.position.x) - i32::from(building.position.x),
+                    i32::from(other.position.z) - i32::from(building.position.z),
+                ) {
+                    (1, 0) => 8,
+                    (-1, 0) => 2,
+                    (0, 1) => 16,
+                    (0, -1) => 4,
+                    _ => 0,
+                }
+        });
+    let horizontal = connections & (2 | 8) != 0;
+    let vertical = connections & (4 | 16) != 0;
+    if horizontal ^ vertical {
+        connections |= if horizontal { 2 | 8 } else { 4 | 16 };
+    } else if connections == 0 {
+        connections = if building.rotation_quarter_turns.rem_euclid(2) == 0 {
+            4 | 16
+        } else {
+            2 | 8
+        };
+    }
+    let mut cells = vec![centre];
+    for (mask, x, z) in [(2, -1, 0), (8, 1, 0), (4, 0, -1), (16, 0, 1)] {
+        if connections & mask != 0
+            && let (Ok(x), Ok(z)) = (
+                u16::try_from(i32::from(centre.x) + x),
+                u16::try_from(i32::from(centre.z) + z),
+            )
+        {
+            cells.push(GridPos { x, z });
+        }
+    }
+    cells
+}
+
+fn normalize_building_footprints(path: &Path, dry_run: bool) -> Result<()> {
+    if !path.is_file() {
+        bail!("save does not exist: {}", path.display());
+    }
+    let mut config: GameConfig = ron::from_str(
+        &fs::read_to_string("assets/config/game.ron").context("failed to read game config")?,
+    )?;
+    let content: ContentCatalog = ron::from_str(
+        &fs::read_to_string("assets/content/catalog.ron")
+            .context("failed to read content catalog")?,
+    )?;
+    config.validate()?;
+    content.validate()?;
+    let store = NativeSaveStore::new(path);
+    let mut snapshot = store
+        .load()
+        .with_context(|| format!("failed to validate save {}", path.display()))?;
+    config.world.seed = snapshot.world_seed;
+    let generated = generate_world_with_content(&config.world, &content);
+    let definitions = content
+        .buildings
+        .iter()
+        .map(|(id, definition)| (definition.archetype.clone(), (id, definition)))
+        .collect::<BTreeMap<_, _>>();
+    let linear_archetypes = ["building:wall", "building:gate"]
+        .into_iter()
+        .filter_map(|id| StableId::new(id).ok())
+        .filter_map(|id| content.buildings.get(&id))
+        .map(|definition| definition.archetype.clone())
+        .collect::<BTreeSet<_>>();
+    let path_archetype = content
+        .buildings
+        .get(&StableId::new("building:path").expect("static ID"))
+        .context("content has no path definition")?
+        .archetype
+        .clone();
+    let resource_cells = generated
+        .resources
+        .iter()
+        .filter(|resource| {
+            snapshot
+                .resource_nodes
+                .get(&resource.id)
+                .copied()
+                .unwrap_or(resource.amount)
+                > 0
+        })
+        .map(|resource| resource.position)
+        .collect::<BTreeSet<_>>();
+    let mut occupied_placement = BTreeMap::<GridPos, StableId>::new();
+    let mut occupied_navigation = BTreeMap::<GridPos, StableId>::new();
+    let fixed = snapshot
+        .simulation
+        .buildings
+        .values()
+        .filter(|building| {
+            building.id.as_str() == "building:townhall"
+                || linear_archetypes.contains(&building.archetype)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for building in &fixed {
+        let Some((building_id, definition)) = definitions.get(&building.archetype) else {
+            continue;
+        };
+        let placement_cells = if linear_archetypes.contains(&building.archetype) {
+            adaptive_wall_or_gate_cells(
+                building,
+                &snapshot.simulation.buildings,
+                &linear_archetypes,
+            )
+        } else {
+            exact_building_cells(
+                building.position,
+                definition,
+                definition
+                    .placement_footprint_thirds
+                    .unwrap_or_else(|| definition.footprint.map(|axis| axis.saturating_mul(3))),
+                building.rotation_quarter_turns,
+            )
+        };
+        let navigation_cells = if linear_archetypes.contains(&building.archetype) {
+            placement_cells.clone()
+        } else {
+            exact_building_cells(
+                building.position,
+                definition,
+                definition.navigation_footprint_thirds.unwrap_or_else(|| {
+                    definition
+                        .footprint
+                        .map(|axis| axis.saturating_mul(3).saturating_sub(2).max(1))
+                }),
+                building.rotation_quarter_turns,
+            )
+        };
+        for cell in placement_cells {
+            occupied_placement
+                .entry(cell)
+                .or_insert_with(|| (*building_id).clone());
+        }
+        for cell in navigation_cells {
+            occupied_navigation
+                .entry(cell)
+                .or_insert_with(|| (*building_id).clone());
+        }
+    }
+
+    let mut movable = snapshot
+        .simulation
+        .buildings
+        .values()
+        .filter(|building| {
+            building.archetype != path_archetype
+                && !linear_archetypes.contains(&building.archetype)
+                && building.id.as_str() != "building:townhall"
+        })
+        .map(|building| building.id.clone())
+        .collect::<Vec<_>>();
+    movable.sort();
+    let movable_count = movable.len();
+    let width = config.world.width;
+    let height = config.world.height;
+    let fine_width = width.saturating_mul(BUILDING_FINE_SUBDIVISIONS);
+    let fine_height = height.saturating_mul(BUILDING_FINE_SUBDIVISIONS);
+    let all_positions = (0..height)
+        .flat_map(|z| (0..width).map(move |x| GridPos { x, z }))
+        .collect::<Vec<_>>();
+    let candidate_is_valid =
+        |building: &BuildingState,
+         definition: &BuildingDef,
+         candidate: GridPos,
+         occupied_placement: &BTreeMap<GridPos, StableId>,
+         occupied_navigation: &BTreeMap<GridPos, StableId>| {
+            let placement = definition
+                .placement_footprint_thirds
+                .unwrap_or_else(|| definition.footprint.map(|axis| axis.saturating_mul(3)));
+            let navigation = definition
+                .navigation_footprint_thirds
+                .unwrap_or_else(|| placement.map(|axis| axis.saturating_sub(2).max(1)));
+            let placement_cells = exact_building_cells(
+                candidate,
+                definition,
+                placement,
+                building.rotation_quarter_turns,
+            );
+            let expected = rotated_building_footprint(placement, building.rotation_quarter_turns);
+            if placement_cells.len() != usize::from(expected[0]) * usize::from(expected[1])
+                || placement_cells
+                    .iter()
+                    .any(|cell| cell.x >= fine_width || cell.z >= fine_height)
+                || placement_cells
+                    .iter()
+                    .any(|cell| occupied_navigation.contains_key(cell))
+            {
+                return false;
+            }
+            let coarse = placement_cells
+                .iter()
+                .map(|cell| GridPos {
+                    x: cell.x / BUILDING_FINE_SUBDIVISIONS,
+                    z: cell.z / BUILDING_FINE_SUBDIVISIONS,
+                })
+                .collect::<BTreeSet<_>>();
+            if coarse.iter().any(|cell| {
+                generated
+                    .navigation
+                    .height_at(*cell)
+                    .is_none_or(|height| height < BUILDING_MIN_TERRAIN_HEIGHT_CENTIMETRES)
+                    || resource_cells.contains(cell)
+            }) {
+                return false;
+            }
+            let navigation_cells = exact_building_cells(
+                candidate,
+                definition,
+                navigation,
+                building.rotation_quarter_turns,
+            );
+            navigation_cells
+                .iter()
+                .all(|cell| !occupied_placement.contains_key(cell))
+        };
+
+    // Select the smallest practical set of buildings to move. Buildings that
+    // conflict with fixed Town Hall/wall/gate cells must move; for conflicts
+    // between movable buildings, repeatedly choosing the highest-degree node
+    // is a deterministic greedy vertex-cover approximation and preserves far
+    // more of a dense legacy town than insertion-order packing.
+    let original_placement_cells = movable
+        .iter()
+        .filter_map(|runtime_id| {
+            let building = snapshot.simulation.buildings.get(runtime_id)?;
+            let (_, definition) = definitions.get(&building.archetype)?;
+            let placement = definition
+                .placement_footprint_thirds
+                .unwrap_or_else(|| definition.footprint.map(|axis| axis.saturating_mul(3)));
+            Some((
+                runtime_id.clone(),
+                exact_building_cells(
+                    building.position,
+                    definition,
+                    placement,
+                    building.rotation_quarter_turns,
+                )
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let original_navigation_cells = movable
+        .iter()
+        .filter_map(|runtime_id| {
+            let building = snapshot.simulation.buildings.get(runtime_id)?;
+            let (_, definition) = definitions.get(&building.archetype)?;
+            let placement = definition
+                .placement_footprint_thirds
+                .unwrap_or_else(|| definition.footprint.map(|axis| axis.saturating_mul(3)));
+            let navigation = definition
+                .navigation_footprint_thirds
+                .unwrap_or_else(|| placement.map(|axis| axis.saturating_sub(2).max(1)));
+            Some((
+                runtime_id.clone(),
+                exact_building_cells(
+                    building.position,
+                    definition,
+                    navigation,
+                    building.rotation_quarter_turns,
+                )
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut relocate = movable
+        .iter()
+        .filter(|runtime_id| {
+            let building = &snapshot.simulation.buildings[*runtime_id];
+            let (_, definition) = definitions[&building.archetype];
+            !candidate_is_valid(
+                building,
+                definition,
+                building.position,
+                &occupied_placement,
+                &occupied_navigation,
+            )
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut edges = Vec::new();
+    for (index, left) in movable.iter().enumerate() {
+        if relocate.contains(left) {
+            continue;
+        }
+        for right in movable.iter().skip(index + 1) {
+            if relocate.contains(right) {
+                continue;
+            }
+            if original_placement_cells[left]
+                .iter()
+                .any(|cell| original_navigation_cells[right].contains(cell))
+                || original_navigation_cells[left]
+                    .iter()
+                    .any(|cell| original_placement_cells[right].contains(cell))
+            {
+                edges.push((left.clone(), right.clone()));
+            }
+        }
+    }
+    while !edges.is_empty() {
+        let mut degrees = BTreeMap::<StableId, usize>::new();
+        for (left, right) in &edges {
+            *degrees.entry(left.clone()).or_default() += 1;
+            *degrees.entry(right.clone()).or_default() += 1;
+        }
+        let selected = degrees
+            .into_iter()
+            .max_by(|(left_id, left_degree), (right_id, right_degree)| {
+                left_degree
+                    .cmp(right_degree)
+                    .then_with(|| left_id.cmp(right_id))
+            })
+            .expect("non-empty conflicts have a node")
+            .0;
+        relocate.insert(selected.clone());
+        edges.retain(|(left, right)| *left != selected && *right != selected);
+    }
+    for runtime_id in movable
+        .iter()
+        .filter(|runtime_id| !relocate.contains(*runtime_id))
+    {
+        for cell in &original_placement_cells[runtime_id] {
+            occupied_placement.insert(*cell, runtime_id.clone());
+        }
+        for cell in &original_navigation_cells[runtime_id] {
+            occupied_navigation.insert(*cell, runtime_id.clone());
+        }
+    }
+
+    let mut moved = Vec::new();
+    for runtime_id in relocate {
+        let building = snapshot.simulation.buildings[&runtime_id].clone();
+        let Some((_, definition)) = definitions.get(&building.archetype) else {
+            continue;
+        };
+        let placement = definition
+            .placement_footprint_thirds
+            .unwrap_or_else(|| definition.footprint.map(|axis| axis.saturating_mul(3)));
+        let mut candidates = all_positions.clone();
+        candidates.sort_by_key(|candidate| {
+            (
+                candidate.x.abs_diff(building.position.x)
+                    + candidate.z.abs_diff(building.position.z),
+                candidate.z,
+                candidate.x,
+            )
+        });
+        let position = candidates
+            .into_iter()
+            .find(|candidate| {
+                candidate_is_valid(
+                    &building,
+                    definition,
+                    *candidate,
+                    &occupied_placement,
+                    &occupied_navigation,
+                )
+            })
+            .with_context(|| format!("no valid fine-footprint site found for {runtime_id}"))?;
+        for cell in exact_building_cells(
+            position,
+            definition,
+            placement,
+            building.rotation_quarter_turns,
+        ) {
+            occupied_placement.insert(cell, runtime_id.clone());
+        }
+        let navigation = definition
+            .navigation_footprint_thirds
+            .unwrap_or_else(|| placement.map(|axis| axis.saturating_sub(2).max(1)));
+        for cell in exact_building_cells(
+            position,
+            definition,
+            navigation,
+            building.rotation_quarter_turns,
+        ) {
+            occupied_navigation.insert(cell, runtime_id.clone());
+        }
+        if position != building.position {
+            moved.push((runtime_id.clone(), building.position, position));
+            snapshot
+                .simulation
+                .buildings
+                .get_mut(&runtime_id)
+                .expect("movable building exists")
+                .position = position;
+        }
+    }
+    let gate_archetype = content
+        .buildings
+        .get(&StableId::new("building:gate").expect("static ID"))
+        .map(|definition| definition.archetype.clone());
+    let blocked_path_cells = snapshot
+        .simulation
+        .buildings
+        .values()
+        .filter(|building| {
+            building.archetype != path_archetype
+                && gate_archetype
+                    .as_ref()
+                    .is_none_or(|archetype| *archetype != building.archetype)
+        })
+        .filter_map(|building| {
+            let (_, definition) = definitions.get(&building.archetype)?;
+            Some(if linear_archetypes.contains(&building.archetype) {
+                adaptive_wall_or_gate_cells(
+                    building,
+                    &snapshot.simulation.buildings,
+                    &linear_archetypes,
+                )
+            } else {
+                exact_building_cells(
+                    building.position,
+                    definition,
+                    definition.navigation_footprint_thirds.unwrap_or_else(|| {
+                        definition
+                            .footprint
+                            .map(|axis| axis.saturating_mul(3).saturating_sub(2).max(1))
+                    }),
+                    building.rotation_quarter_turns,
+                )
+            })
+        })
+        .flatten()
+        .collect::<BTreeSet<_>>();
+    let covered_paths = snapshot
+        .simulation
+        .buildings
+        .values()
+        .filter(|building| building.archetype == path_archetype)
+        .filter(|building| {
+            let cell = snapshot
+                .simulation
+                .path_navigation_positions
+                .get(&building.id)
+                .copied()
+                .unwrap_or(GridPos {
+                    x: building.position.x.saturating_mul(3).saturating_add(1),
+                    z: building.position.z.saturating_mul(3).saturating_add(1),
+                });
+            blocked_path_cells.contains(&cell)
+        })
+        .map(|building| building.id.clone())
+        .collect::<Vec<_>>();
+    println!(
+        "{} would move {} of {} non-linear buildings to satisfy exact placement boxes",
+        if dry_run { "Dry run:" } else { "Update:" },
+        moved.len(),
+        movable_count
+    );
+    for (id, from, to) in moved.iter().take(30) {
+        println!("  {id}: {},{} -> {},{}", from.x, from.z, to.x, to.z);
+    }
+    if moved.len() > 30 {
+        println!("  ... and {} more", moved.len() - 30);
+    }
+    println!(
+        "{} path section(s) under physical building boxes would be removed",
+        covered_paths.len()
+    );
+    if dry_run {
+        return Ok(());
+    }
+    for path_id in covered_paths {
+        snapshot.simulation.buildings.remove(&path_id);
+        snapshot
+            .simulation
+            .path_navigation_positions
+            .remove(&path_id);
+        snapshot
+            .simulation
+            .building_night_light_colors
+            .remove(&path_id);
+    }
+    store
+        .write(&snapshot)
+        .with_context(|| format!("failed to write normalized save {}", path.display()))?;
+    let verified = NativeSaveStore::new(path)
+        .load()
+        .with_context(|| format!("normalized save did not reload: {}", path.display()))?;
+    if verified != snapshot {
+        bail!("normalized save changed during write/reload validation");
+    }
+    Ok(())
 }
 
 fn reset_town_for_fine_navigation(
@@ -682,6 +1264,214 @@ fn placed_resource_prune_rank(world_seed: u64, id: &StableId) -> u64 {
     value ^ (value >> 31)
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct VegetationResetReport {
+    bushes_before: usize,
+    bushes_removed: usize,
+    placed_tree_records_removed: usize,
+    seeded_trees_total: usize,
+    seeded_trees_restored: usize,
+    seeded_trees_reactivated: usize,
+    seeded_trees_skipped_on_buildings: usize,
+}
+
+fn reset_vegetation(path: &Path, config_path: &Path, bush_purge_percent: u8) -> Result<()> {
+    if !path.is_file() {
+        bail!("save does not exist: {}", path.display());
+    }
+    if !config_path.is_file() {
+        bail!("runtime config does not exist: {}", config_path.display());
+    }
+    if bush_purge_percent > 100 {
+        bail!("bush purge percentage must be between 0 and 100");
+    }
+    let recovery = std::path::PathBuf::from(format!("{}.pre-vegetation-reset", path.display()));
+    if recovery.exists() {
+        bail!(
+            "vegetation reset has already been applied to {}; recovery copy exists at {}",
+            path.display(),
+            recovery.display()
+        );
+    }
+
+    let config: GameConfig =
+        ron::from_str(&fs::read_to_string(config_path).with_context(|| {
+            format!("failed to read runtime config {}", config_path.display())
+        })?)?;
+    config.validate()?;
+    let content: ContentCatalog = ron::from_str(
+        &fs::read_to_string("assets/content/catalog.ron")
+            .context("failed to read content catalog")?,
+    )?;
+    content.validate()?;
+
+    let store = NativeSaveStore::new(path);
+    let snapshot = store
+        .load()
+        .with_context(|| format!("failed to validate save {}", path.display()))?;
+    let (reset, report) =
+        reset_snapshot_vegetation(snapshot, &config, &content, bush_purge_percent)?;
+
+    fs::copy(path, &recovery).with_context(|| {
+        format!(
+            "failed to create pre-reset recovery copy {}",
+            recovery.display()
+        )
+    })?;
+    let archived_backups = archive_purge_backup_history(&store, &recovery)?;
+    store
+        .write(&reset)
+        .with_context(|| format!("failed to write vegetation-reset save {}", path.display()))?;
+    let verified = store
+        .load()
+        .with_context(|| format!("vegetation-reset save did not reload: {}", path.display()))?;
+    if verified != reset {
+        bail!("vegetation-reset save changed during write/reload validation");
+    }
+    seed_clean_purge_backup(&store)?;
+
+    println!(
+        "Reset vegetation in {}: planted bushes {} -> {} (removed {}%), planted tree records removed {}, seeded trees restored {} of {} (reactivated {}, skipped on buildings {}); recovery copy: {}; archived backup generations: {}",
+        path.display(),
+        report.bushes_before,
+        report.bushes_before.saturating_sub(report.bushes_removed),
+        bush_purge_percent,
+        report.placed_tree_records_removed,
+        report.seeded_trees_restored,
+        report.seeded_trees_total,
+        report.seeded_trees_reactivated,
+        report.seeded_trees_skipped_on_buildings,
+        recovery.display(),
+        archived_backups,
+    );
+    Ok(())
+}
+
+fn reset_snapshot_vegetation(
+    mut snapshot: WorldSnapshot,
+    config: &GameConfig,
+    content: &ContentCatalog,
+    bush_purge_percent: u8,
+) -> Result<(WorldSnapshot, VegetationResetReport)> {
+    if bush_purge_percent > 100 {
+        bail!("bush purge percentage must be between 0 and 100");
+    }
+    let mut regenerated_config = config.clone();
+    regenerated_config.world.seed = snapshot.world_seed;
+    let generated = generate_world_with_content(&regenerated_config.world, content);
+    if snapshot.generator_version != generated.generator_version
+        || snapshot.world_hash != generated.deterministic_hash
+    {
+        bail!(
+            "save world identity does not match the configured generator; load and save it with the current game before resetting vegetation"
+        );
+    }
+
+    let mut bush_candidates = snapshot
+        .resource_nodes
+        .iter()
+        .filter(|(id, amount)| **amount > 0 && id.as_str().starts_with("resource:regrown_bush_"))
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    bush_candidates.sort_by_key(|id| {
+        (
+            placed_resource_prune_rank(snapshot.world_seed, id),
+            id.clone(),
+        )
+    });
+    let bushes_before = bush_candidates.len();
+    let bushes_removed = bushes_before.saturating_mul(usize::from(bush_purge_percent)) / 100;
+    let removed_bushes = bush_candidates
+        .into_iter()
+        .take(bushes_removed)
+        .collect::<BTreeSet<_>>();
+
+    let placed_tree_ids = snapshot
+        .resource_nodes
+        .keys()
+        .filter(|id| id.as_str().starts_with("resource:regrown_tree_"))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    snapshot
+        .resource_nodes
+        .retain(|id, _| !removed_bushes.contains(id) && !placed_tree_ids.contains(id));
+
+    let building_regions = saved_building_regions(&snapshot.simulation, content)?;
+    let mut report = VegetationResetReport {
+        bushes_before,
+        bushes_removed,
+        placed_tree_records_removed: placed_tree_ids.len(),
+        ..Default::default()
+    };
+    for tree in generated
+        .resources
+        .iter()
+        .filter(|resource| resource.target_kind.as_str() == "target:tree")
+    {
+        report.seeded_trees_total += 1;
+        let previous_amount = snapshot
+            .resource_nodes
+            .get(&tree.id)
+            .copied()
+            .unwrap_or(tree.amount);
+        if building_regions.iter().any(|region| {
+            tree.position.x >= region.min.x
+                && tree.position.x <= region.max.x
+                && tree.position.z >= region.min.z
+                && tree.position.z <= region.max.z
+        }) {
+            snapshot.resource_nodes.insert(tree.id.clone(), 0);
+            report.seeded_trees_skipped_on_buildings += 1;
+        } else {
+            snapshot.resource_nodes.insert(tree.id.clone(), tree.amount);
+            report.seeded_trees_restored += 1;
+            report.seeded_trees_reactivated += usize::from(previous_amount == 0 && tree.amount > 0);
+        }
+    }
+    Ok((snapshot, report))
+}
+
+fn saved_building_regions(
+    simulation: &WorldSimulation,
+    content: &ContentCatalog,
+) -> Result<Vec<DirtyRegion>> {
+    simulation
+        .buildings
+        .values()
+        .map(|building| {
+            let definition = content
+                .buildings
+                .values()
+                .find(|definition| definition.archetype == building.archetype)
+                .with_context(|| {
+                    format!(
+                        "building {} has unknown archetype {}",
+                        building.id, building.archetype
+                    )
+                })?;
+            let footprint = if building.rotation_quarter_turns.rem_euclid(2) == 0 {
+                definition.footprint
+            } else {
+                [definition.footprint[1], definition.footprint[0]]
+            };
+            let max_x = building
+                .position
+                .x
+                .checked_add(footprint[0].saturating_sub(1))
+                .context("building footprint overflows the world grid on x")?;
+            let max_z = building
+                .position
+                .z
+                .checked_add(footprint[1].saturating_sub(1))
+                .context("building footprint overflows the world grid on z")?;
+            Ok(DirtyRegion {
+                min: building.position,
+                max: GridPos { x: max_x, z: max_z },
+            })
+        })
+        .collect()
+}
+
 fn archive_purge_backup_history(store: &NativeSaveStore, recovery: &Path) -> Result<usize> {
     let backups = (1..=NATIVE_SAVE_BACKUP_GENERATIONS)
         .map(|generation| store.backup_path_at(generation))
@@ -759,29 +1549,6 @@ fn unique_purge_backup_path(path: &Path) -> std::path::PathBuf {
 }
 
 fn validate() -> Result<()> {
-    let forbidden_reference = Path::new("assets/content/unity_generation_reference.ron");
-    if forbidden_reference.exists() {
-        bail!(
-            "{} must not exist: Unity generation output is validation-only and cannot be a Bevy input",
-            forbidden_reference.display()
-        );
-    }
-    let world_source_path = Path::new("crates/stream_town_domain/src/world.rs");
-    let world_source = fs::read_to_string(world_source_path)
-        .with_context(|| format!("failed to read {}", world_source_path.display()))?;
-    for forbidden_symbol in [
-        "UnityGenerationReference",
-        "converted_unity_generation_reference",
-        "candidate_half_units",
-        "height_half_metres",
-    ] {
-        if world_source.contains(forbidden_symbol) {
-            bail!(
-                "world generator contains forbidden Unity-output replay symbol {forbidden_symbol}"
-            );
-        }
-    }
-
     let config_path = Path::new("assets/config/game.ron");
     let config: GameConfig = ron::from_str(
         &fs::read_to_string(config_path)
@@ -795,7 +1562,7 @@ fn validate() -> Result<()> {
     )?;
     player_settings.validate()?;
     if player_settings != PlayerSettings::default() {
-        bail!("checked-in player settings no longer match Unity defaults");
+        bail!("checked-in player settings no longer match the shipping defaults");
     }
     if config.time.seconds_per_day != SHIPPING_SECONDS_PER_DAY
         || config.time.daylight_per_thousand != 666
@@ -804,7 +1571,7 @@ fn validate() -> Result<()> {
         || config.time.night_light_intensity_milli != 5_000
         || config.time.max_building_emission_milli != 5_000
     {
-        bail!("shipping time-cycle settings no longer match the converted Unity assets");
+        bail!("shipping time-cycle settings no longer match the authored baseline");
     }
 
     let content_path = Path::new("assets/content/catalog.ron");
@@ -821,12 +1588,12 @@ fn validate() -> Result<()> {
     )
     .with_context(|| format!("failed to parse {}", technology_layout_path.display()))?;
     technology_layout.validate(&content.technology)?;
-    let converted_unity_nodes = technology_layout
-        .nodes
+    let authored_technology_nodes = content
+        .source_records
         .keys()
-        .filter(|id| !id.as_str().starts_with("tech:native_"))
+        .filter(|id| id.as_str().starts_with("tech:") && content.technology.nodes.contains_key(*id))
         .count();
-    let converted_unity_groups = content
+    let authored_technology_groups = content
         .technology
         .groups
         .values()
@@ -834,11 +1601,13 @@ fn validate() -> Result<()> {
             group
                 .nodes
                 .iter()
-                .any(|id| !id.as_str().starts_with("tech:native_"))
+                .any(|id| content.source_records.contains_key(id))
         })
         .count();
-    if converted_unity_nodes != 363 || converted_unity_groups != 20 {
-        bail!("technology graph layout no longer covers the verified Unity graph");
+    if authored_technology_nodes != 363 || authored_technology_groups != 20 {
+        bail!(
+            "technology graph layout no longer covers the authored graph: {authored_technology_nodes} nodes, {authored_technology_groups} groups"
+        );
     }
     let presentation_path = Path::new("assets/content/presentation.ron");
     let presentation: PresentationCatalog = ron::from_str(
@@ -849,30 +1618,6 @@ fn validate() -> Result<()> {
     presentation.validate()?;
     validate_visual_baseline_assets()?;
     validate_audio_baseline_assets()?;
-    let model_baseline_path = Path::new("assets/content/model-conversion-baseline.json");
-    let model_baseline: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(model_baseline_path)
-            .with_context(|| format!("failed to read {}", model_baseline_path.display()))?,
-    )
-    .with_context(|| format!("failed to parse {}", model_baseline_path.display()))?;
-    for (field, expected) in [
-        ("/schema_version", 3_u64),
-        ("/models", 253),
-        ("/bytes", 96_885_184),
-        ("/meshes", 820),
-        ("/skins", 43),
-        ("/animations", 165),
-        ("/materials", 253),
-        ("/images", 1),
-    ] {
-        if model_baseline
-            .pointer(field)
-            .and_then(serde_json::Value::as_u64)
-            != Some(expected)
-        {
-            bail!("model conversion baseline field {field} changed");
-        }
-    }
     let technology_edges: usize = content
         .technology
         .nodes
@@ -1002,7 +1747,7 @@ fn validate() -> Result<()> {
         || pet_archetypes.len() != 1
         || pet_model_count != 5
         || !pet_contract_matches
-        || targeting_scores != 30
+        || targeting_scores != 31
         || target_sizes != 48
         || (
             enemy_model_handlers,
@@ -1025,14 +1770,14 @@ fn validate() -> Result<()> {
             content.source_records.len(),
         ) != (
             stream_town_domain::CURRENT_CONTENT_SCHEMA,
-            220,
+            221,
             296,
-            31,
+            32,
             18,
-            431,
-            371,
+            1042,
+            598,
             22,
-            367,
+            594,
             4,
             404,
         )
@@ -1128,8 +1873,8 @@ fn validate() -> Result<()> {
         .values()
         .filter(|archetype| archetype.enemy_spawner.is_some())
         .count();
-    if building_health.len() != 31
-        || building_base_health != 4_625
+    if building_health.len() != 32
+        || building_base_health != 4_641
         || building_level_health != 1_115
         || (
             health_definitions,
@@ -1140,7 +1885,7 @@ fn validate() -> Result<()> {
             enemy_retaliation,
             goblin_sensor_ranges,
             standard_sensor_ranges,
-        ) != (47, 1, 9, 1, 9, 9, 1, 8)
+        ) != (48, 1, 9, 1, 9, 9, 1, 8)
     {
         bail!(
             "authored combat component counts differ from the verified content baseline: building health {} definitions, {} base total, {} per-level total; {health_definitions} total health, {projectile_shooters} projectile shooters, {enemy_definitions} enemies, {enemy_spawners} spawners, {enemy_resource_rewards} rewards",
@@ -1481,7 +2226,7 @@ fn validate() -> Result<()> {
             .sum::<usize>()
             != 12
     {
-        bail!("presentation counts differ from the verified Unity baseline");
+        bail!("presentation counts differ from the authored shipping baseline");
     }
     let missing_clip_sources: Vec<_> = presentation
         .clips
@@ -1490,7 +2235,7 @@ fn validate() -> Result<()> {
         .map(|clip| clip.source_guid.as_str())
         .collect();
     if missing_clip_sources != ["3efab8b2dfb3f994f82d137fd8cf2c18"] {
-        bail!("Unity missing-clip baseline changed: {missing_clip_sources:?}");
+        bail!("shipping missing-clip baseline changed: {missing_clip_sources:?}");
     }
     for (texture_id, texture) in &presentation.textures {
         let path = Path::new("assets").join(&texture.asset_path);
@@ -1522,33 +2267,8 @@ fn validate() -> Result<()> {
         }
     }
 
-    let mut checked_json = 0_usize;
-    for entry in WalkDir::new("generated").into_iter().filter_map(Result::ok) {
-        if entry
-            .path()
-            .extension()
-            .is_some_and(|extension| extension == "json")
-        {
-            let contents = fs::read_to_string(entry.path())?;
-            serde_json::from_str::<serde_json::Value>(&contents)
-                .with_context(|| format!("invalid JSON in {}", entry.path().display()))?;
-            checked_json += 1;
-        }
-    }
-    if WalkDir::new(".")
-        .into_iter()
-        .filter_map(Result::ok)
-        .any(|entry| {
-            entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "meta")
-        })
-    {
-        bail!("Unity .meta files must not be created inside bevy-port");
-    }
     println!(
-        "Configuration, 220 prefab archetypes with 48 target sizes, 1 disable-after-time lifetime, 1 unit health-bar contract, and 1 exact pet follower with 5 authored models, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 50 building model handlers, 6 storage model handlers, 3 authored rotating nodes, 1 passive resource generator, 30 target scoring definitions, 31 building health definitions, 47 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 431 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, 122 embedded FBX clips, 2 active fish-school bindings, 14 role-audio contracts with 35 variants, and all 253 converted models are valid; checked {checked_json} generated JSON files"
+        "Configuration, 221 prefab archetypes with 48 target sizes, 1 disable-after-time lifetime, 1 unit health-bar contract, and 1 exact pet follower with 5 authored models, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 50 building model handlers, 6 storage model handlers, 3 authored rotating nodes, 1 passive resource generator, 31 target scoring definitions, 32 building health definitions, 48 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 1042 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, 122 embedded clips, 2 active fish-school bindings, 14 role-audio contracts with 35 variants, and all 253 packaged models are valid"
     );
     Ok(())
 }
@@ -2145,5 +2865,100 @@ mod tests {
         assert!(!first.contains(&generated));
         assert!(!first.contains(&planted_tree));
         assert!(!first.contains(&depleted_ore));
+    }
+
+    #[test]
+    fn vegetation_reset_prunes_bushes_and_restores_only_unobstructed_seed_trees() {
+        let config = GameConfig::default();
+        let content: ContentCatalog =
+            ron::from_str(include_str!("../../assets/content/catalog.ron")).unwrap();
+        let generated = generate_world_with_content(&config.world, &content);
+        let obstructed_tree = generated
+            .resources
+            .iter()
+            .find(|resource| resource.target_kind.as_str() == "target:tree")
+            .unwrap()
+            .clone();
+        let path_definition = &content.buildings[&StableId::new("building:path").unwrap()];
+        let path_id = StableId::new("building:vegetation_reset_path").unwrap();
+        let mut simulation = WorldSimulation::new(generated.seed);
+        simulation.buildings.insert(
+            path_id.clone(),
+            BuildingState {
+                id: path_id,
+                archetype: path_definition.archetype.clone(),
+                position: obstructed_tree.position,
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: 100,
+                complete: true,
+            },
+        );
+        let mut resource_nodes = generated
+            .resources
+            .iter()
+            .map(|resource| (resource.id.clone(), resource.amount))
+            .collect::<BTreeMap<_, _>>();
+        let seeded_tree_ids = generated
+            .resources
+            .iter()
+            .filter(|resource| resource.target_kind.as_str() == "target:tree")
+            .map(|resource| resource.id.clone())
+            .collect::<BTreeSet<_>>();
+        for id in &seeded_tree_ids {
+            resource_nodes.insert(id.clone(), 0);
+        }
+        for serial in 0..20 {
+            resource_nodes.insert(
+                StableId::new(format!("resource:regrown_bush_123_123_123_{serial:08x}")).unwrap(),
+                10,
+            );
+        }
+        for serial in 0..3 {
+            resource_nodes.insert(
+                StableId::new(format!("resource:regrown_tree_123_123_123_{serial:08x}")).unwrap(),
+                10,
+            );
+        }
+        let snapshot = WorldSnapshot {
+            schema_version: CURRENT_WORLD_SNAPSHOT_SCHEMA,
+            world_seed: generated.seed,
+            generator_version: generated.generator_version,
+            world_hash: generated.deterministic_hash.clone(),
+            elapsed_seconds: 42,
+            actors: Vec::new(),
+            simulation,
+            resource_nodes,
+            traversal_wear: BTreeMap::new(),
+            legacy_terrain_mesh: None,
+            legacy_migration: None,
+        };
+
+        let (reset, report) = reset_snapshot_vegetation(snapshot, &config, &content, 95).unwrap();
+
+        assert_eq!(report.bushes_before, 20);
+        assert_eq!(report.bushes_removed, 19);
+        assert_eq!(report.placed_tree_records_removed, 3);
+        assert_eq!(report.seeded_trees_total, seeded_tree_ids.len());
+        assert_eq!(report.seeded_trees_skipped_on_buildings, 1);
+        assert_eq!(report.seeded_trees_restored, seeded_tree_ids.len() - 1);
+        assert_eq!(report.seeded_trees_reactivated, seeded_tree_ids.len() - 1);
+        assert_eq!(reset.resource_nodes[&obstructed_tree.id], 0);
+        assert_eq!(
+            reset
+                .resource_nodes
+                .iter()
+                .filter(|(id, amount)| {
+                    **amount > 0 && id.as_str().starts_with("resource:regrown_bush_")
+                })
+                .count(),
+            1
+        );
+        assert!(
+            reset
+                .resource_nodes
+                .keys()
+                .all(|id| !id.as_str().starts_with("resource:regrown_tree_"))
+        );
     }
 }

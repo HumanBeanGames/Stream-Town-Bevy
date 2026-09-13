@@ -1,15 +1,16 @@
 # Stream Town Bevy
 
-This workspace is the engine-independent rewrite of Stream Town. The Unity
-project at the repository root is frozen migration input; new runtime work lives
-here.
+This is the shipping Stream Town workspace. Rust, validated RON catalogs, and
+the packaged GLB/texture assets are the native source of truth; the retired
+source-engine project and conversion pipeline are not required to build, author,
+test, package, or run the game.
 
 ## Binaries
 
 - `stream_town_game`: shipping Bevy application and an explicit 300-agent
   vertical-slice benchmark.
-- `stream_town_tools`: focused content, migration, world-generation, and
-  validation tooling. Dedicated Buildings and Roles tabs provide complete,
+- `stream_town_tools`: focused content, world-generation, and
+  validation tooling. Dedicated Progression, Buildings, and Roles tabs provide complete,
   template-based catalog creation with typed reference choices. Models + Assets
   provides full model, texture, PBR material, animation clip/controller, and
   renderer-binding CRUD plus textured, orbit/pan/zoom and playback previews;
@@ -19,8 +20,6 @@ here.
   and enemy-camp ranges without a redundant A* probe.
   Runtime, player-settings, Twitch, and generic ECS-inspector tabs were removed
   in favor of the shipping menus and local operator panel.
-- `stream_town_migrate`: Unity metadata/YAML inventory and validated legacy-save
-  conversion.
 - `xtask`: repository validation and repeatable developer automation.
 
 The Technology tab is an interactive editor rather than only a record inspector.
@@ -41,8 +40,8 @@ defaults can never replace operator setup entered in the game. The Buildings
 and Roles tabs cover every persisted balance, station, target, ability, animation, equipment,
 production, storage, projectile, footprint, and model binding through validated
 catalog-backed choices.
-The World + Nav tab edits the Unity-scale terrain inputs, explicit land/water
-resource layers, every converted foliage-noise layer, and enemy-camp placement,
+The World + Nav tab edits the authored terrain inputs, explicit land/water
+resource layers, every foliage-noise layer, and enemy-camp placement,
 then renders elevation, occupancy, resource, foliage, camp-range, and GLB model
 previews using the production deterministic generator. See
 [`AUTHORING.md`](AUTHORING.md) for paths and the safe-save workflow.
@@ -55,17 +54,9 @@ cargo xtask validate
 cargo test --workspace
 .\scripts\launch-game.ps1
 .\scripts\redeploy-last-town.ps1
+.\scripts\redeploy-last-town.ps1 -NewTown -Town Beanville
 cargo run -p stream_town_tools
 cargo run -p stream_town_tools -- --validate-authoring
-cargo run -p stream_town_migrate -- inventory .. --out generated/content-manifest.json
-cargo run -p stream_town_migrate -- validate-unity-export generated/unity-export.json
-cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --unity-root .. --out-dir assets/content
-cargo run -p stream_town_migrate -- convert-technology-layout ../Assets/Scripts/TechTree/Editor/Graphs/TechTreeV2Graph.asset assets/content/catalog.ron --out assets/content/technology_layout.ron
-cargo run -p stream_town_migrate -- validate-models assets/migrated/models/model-conversion.json --repository-root .. --expected-count 253
-cargo run -p stream_town_migrate -- convert-main-menu-reference ../generated/main-menu-reference.json --out generated/main-menu-scene.ron
-cargo run -p stream_town_migrate -- bake-main-menu-scene generated/main-menu-scene.ron --config assets/config/game.ron --content assets/content/catalog.ron --out assets/content/main_menu_scene.ron
-cargo run -p stream_town_migrate -- import-save StreamTownSave.stsave --out generated/imported.stbevy --config assets/config/game.ron
-cargo run -p stream_town_migrate -- export-world-oracle StreamTownSave.stsave --out generated/unity-world-oracle.json
 cargo run -p xtask -- reset-town-for-fine-navigation --save .stream-town/saves/<Town>.stbevy --resources 300000 --prune-save-directory
 cargo run -p xtask -- package-windows --output dist
 ```
@@ -142,96 +133,18 @@ its files. Operator-facing telemetry and controls live in the local operator
 window instead.
 
 The Windows packager builds optimized game and tools executables, bundles the
-validated runtime assets, README, GPL license, replaceable LGPL
-FFmpeg/OpenH264 DLLs, exact corresponding source archives, vcpkg
-recipes/patches, SPDX metadata, and relinking instructions, validates safe
-archive paths and required files, and atomically writes
+validated runtime assets, README, GPL license, replaceable GPL FFmpeg/x264 and
+BSD OpenH264 DLLs, exact corresponding source archives, vcpkg recipes/patches,
+SPDX metadata, and relinking instructions, validates safe archive paths and
+required files, and atomically writes
 `dist/stream-town-windows-x86_64.zip`. The tools Validation tab can launch the
 same repository validator and release-packaging jobs. CI publishes the validated
 ZIP as a branch artifact after the full test job passes.
 
-Generate the ignored neutral Unity export from the repository root with the
-exact editor version recorded by the project:
-
-```powershell
-.\bevy-port\scripts\export-unity.ps1
-cd bevy-port
-cargo run -p stream_town_migrate -- validate-unity-export generated/unity-export.json
-cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --unity-root .. --out-dir assets/content
-```
-
-The editor exporter resolves GUIDs, object references, prefab sources and
-overrides, ScriptableObject data, and the four shipping scene hierarchies. Its
-migration-only A* types are inert compile stubs and are not navigation code.
-The content conversion selects the active Unity containers and emits the 26
-production buildings, 215 prefab archetypes, 288 model scene variants, 15 roles,
-and 363-node shipping technology graph. The checked-in catalog then adds three
-Bevy-native resource-renewal buildings, archetypes, roles, objectives, and
-technology roots, for validated totals of 29 buildings, 218 archetypes, 294
-scene variants, 18 roles, 425 objectives, and 366 technology nodes. It derives
-building footprints from Unity's authored two-unit grid sizes, emits typed build
-and level costs, `Placeable`, `CanLevel`, per-level multipliers, and all 413
-authored technology effects plus every shipping role's action, XP multiplier,
-level curves, health, retained defense data, movement, carry, resource-affinity, station/target
-  masks, all 18 equipment sets, all four reachable building storage components,
-  all 14 reachable building role-slot modifiers,
-  all 45 reachable prefab health definitions, all nine pooled enemy combat definitions,
-  the authored Goblin camp weights and spawn transforms, the Tower's consolidated projectile
-  shooter, the Marketplace's authored level-scaled passive gold generator, all
-  nine authored enemy kill rewards, all 48 reachable construction/upgrade model
-handlers, all six storage-fill model handlers, and 425 typed objectives from the production
-technology graph, all three authored prefab rotors, the heal-burst prefab's
-authored self-disable lifetime, and the player prefab's three-second damaged-health-bar
-hide contract in content schema 30. The same schema promotes the shipping loader's
-50%-per-second display rate, half-second completion hold, and tooltip catalog, and
-follows nested prefabs to
-their source FBX models. Those effects comprise 28 building unlocks, 177 level
-caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
-boosts, and 12 building-age upgrades.
-The same command copies all 133 reachable
-textures and emits `presentation.ron`: 33 material definitions with 141 retained
-Unity vector/color shader parameters and 32 texture transforms, 184 clip records,
-31 controller definitions, 94 stable states, 166 transitions, and inherited
-prefab/controller/model bindings. The YAML fallback converts 57 standalone
-`.anim` files into 1,196 stable transform tracks. Presentation schema 15 also
-maps 122 embedded FBX takes to stable model-GUID/local-ID clip records and their
-exact GLB animation indexes. It
-retains 110 component/UI property curves with 261 keys across 18 clips, including
-the four transform-free clips, plus all twelve authored animation events, and
-fixed/normalized duration plus destination offset for all 166 transitions. It retains
-11 authored 1D blend states and
-typed transition conditions; the stale `Slam` and `Swipe` conditions become
-provenance-marked inferred parameters. Renderer inheritance resolves to 141
-prefab material bindings and 181 material dependencies. Presentation schema 7
-additionally resolves 241 model-importer material names plus 912 authored slots
-across 903 prefab renderers, preserving distinct materials on multi-primitive
-GLB meshes. The known missing Necrolands camera clip is an explicit validated
-record. The same schema converts the two reachable global URP volume profiles
-and all three shipping scene bindings. Runtime mapping applies the authored
-bloom, vignette, motion blur, ACES tonemapping, exposure, and the town's
-inverse-daylight night color grade while retaining player brightness/gamma.
-The authored night RGB filter is folded continuously into the clear color, fog,
-ambient light, and sun color. Keeping the tint in scene lighting avoids an extra
-fullscreen render-target swap, which caused alternating color states on the
-offscreen stream target during dusk.
-
-Convert all FBX models with the pinned Blender version, then validate every
-source/output hash and GLB header:
-
-```powershell
-.\bevy-port\scripts\convert-models.ps1
-cd bevy-port
-cargo run -p stream_town_migrate -- validate-models assets/migrated/models/model-conversion.json --repository-root .. --expected-count 253
-```
-
-Converted GLBs are reproducible package inputs under `assets/migrated/models`.
-They are versioned with Git LFS; reports and Blender logs remain generated files.
-The converter uses exported Unity renderer bounds to bake model units into
-geometry, rigs, and translation animation curves. It exports every imported FBX
-take as a named GLB animation rather than retaining only the active action.
+The checked-in catalogs and packaged assets are maintained directly with stream_town_tools. Historical source paths and GUIDs retained in authored records are provenance metadata only.
 
 The first native save is written to `.stream-town/StreamTownSave.stbevy`.
-During migration hardening, gameplay autosaves every minute by default and also
+Gameplay autosaves every minute by default and also
 writes on the transition back to the Main Menu. Both paths use the same
 checksummed atomic replacement and retain five rolling recovery generations
 (`.bak` through `.bak.5`). Backup generations are recovery-only and do not appear
@@ -259,16 +172,9 @@ role. With `--prune-save-directory`, the target must be a direct child of its
 save directory: every other town and every old recovery generation there is
 deleted, then a fresh `.bak` of the validated reset state is created. Stop the
 game and make an external copy first unless that deletion is intentional.
-Legacy Unity saves are never modified by migration tools. `import-save` is an
-optional one-time compatibility command only. The production generator never
-loads a Unity save: `export-world-oracle` emits sanitized counts and position
-hashes solely for offline tests that compare generated output with ground truth.
-
 Player preferences are written atomically to `.stream-town/settings.ron` with a
-backup. On first launch, the Windows game imports Unity's
-`Documents/Panda Belly/Stream Town/SettingsData.json` when available; set
-`STREAM_TOWN_PLAYER_SETTINGS_PATH` or `STREAM_TOWN_UNITY_SETTINGS_PATH` to use
-explicit paths. The shipping Main Menu/in-game settings surfaces and local
+backup. Set `STREAM_TOWN_PLAYER_SETTINGS_PATH` to use an explicit native settings
+path. The shipping Main Menu/in-game settings surfaces and local
 operator panel edit and validate the native file. The runtime panel
 extends Unity's authored Video, Audio, Gameplay, and Connection shell with a
 focused Accessibility tab, pointer controls, Apply, Defaults, Back, and the
@@ -280,8 +186,14 @@ screen, not the external authoring suite.
 Window mode/resolution, VSync/FPS limit, MSAA/post-process AA,
 shadows/shadow-map size, SSAO, brightness/gamma, four independent audio gains,
 the authored camera projection, name/building-health overlays, the Unity
-0/1/5/10/30/60-minute autosave choices, UI scale, high contrast, and reduced
-motion are applied by the runtime. Schema-2 settings upgrade without changing
+0/1/5/10/30/60-minute autosave choices, city-timelapse frequency and dynamic mode,
+UI scale, high contrast, and reduced motion are applied by the runtime. City timelapses default
+to one hour with dynamic timing enabled; the first frame is captured as soon as the town finishes
+launching, and each validly confirmed build subtracts ten minutes from the current countdown after
+that baseline. Captures use the `!cam home` composition with UI, health bars, diagnostics,
+and build previews hidden, and are stored under `.stream-town/timelapses/<town>/`. Each named PNG
+records its active rate and mode, while the town's single `city-timelapse.mp4` is rebuilt with the
+current rate and `Fixed`/`Dynamic` label burned into every appended frame. Schema-2 settings upgrade without changing
 their existing appearance; the three new accessibility fields use neutral
 defaults. See [`docs/accessibility.md`](docs/accessibility.md) for keyboard and
 screen-reader controls and the manual Windows Narrator acceptance procedure.
@@ -446,24 +358,41 @@ Bevy render mesh and Avian collider on load, and preserved by later native saves
 Building type arguments use one no-space PascalCase name (`OreStorage`,
 `ProspectorHut`, and so on). `!build` starts a Unity-style per-player placement preview at the last successful
 position, `!move`/direction aliases and `!rotate` adjust
-the exact grid cell and retained 90-degree rotation, `!confirm`/`!accept` spends
-schema-4 resources and commits valid occupancy, and `!cancel` exits without
+the exact grid cell and retained 90-degree rotation, and `!center` raycasts the
+centre of the broadcast view to reposition that player's cursor (including
+one-third-cell path positions). `!confirm`/`!accept` spends
+schema-4 resources and commits valid occupancy, removing any existing path
+sections covered by the new building, and `!cancel` exits without
 spending. Walls use the separate `!beginplace`, orthogonal movement,
 `!endplace`, and `!confirm` line workflow. Paths use the same commands but move
 and persist on individual one-third-cell navigation samples. After `!beginplace`,
 the complete preview is recalculated with diagonal-aware A* from the saved start
-to the cursor, routing through available fine-grid gaps before confirmation.
+to the cursor, softly preferring each floorplan cell's central third while still
+routing through tight fine-grid gaps, completed gate doors, and existing path
+sections. Existing paths are not rebuilt. `!build thickpath` uses the same path,
+constructs independent flank sections on either side, and fills both inner bridge
+cells where the centreline steps diagonally.
 `!bid <BuildingName>` exposes stable,
-one-based per-type BID numbers; `!upgrade <BuildingName> <BID>`,
+one-based per-type BID numbers; `!upgrade <BuildingName> <BID> [levels]`,
 `!rotatebuilding`, `!buildinglight`, and Ruler-only `!remove` consume those same
-numbers. An untouched placement expires after 30 seconds. Placed rotation, occupancy, station/target
+numbers. An untouched placement expires after 60 seconds. Placed rotation, occupancy, station/target
 geometry, and last player placement round-trip through native saves; the legacy
 importer retains authored building Y rotation. Confirmed structures spawn the
 converted building GLB with a primitive fallback. New
 structures start at Unity's 10% construction health; Builder agents path to a
-reachable perimeter cell and advance the 33%/66% presentation stages to
-completion. Upgrades spend the authored level cost and multiplier and respect
-maximum levels granted by unlocked technology. Unlocked technologies also apply
+reachable perimeter cell—including every diagonal corner and open fine-grid
+third inside a coarse-blocked floorplan cell—and advance the 33%/66%
+presentation stages to completion. Work reservations pre-empt idle wandering,
+and a rejected fine route tries another approach or construction target. Paths use one third of their authored maximum health so each section
+builds faster, and their building-health overlay is one fifth of the standard
+width. Agent arrival paths prefer the centre third of that coarse cell but
+fall back to any open third when the centre is obstructed. Idle, regeneration,
+farm, station-deposit, and construction approaches are reserved per agent so
+coworkers do not stack on one destination. Upgrades can request several levels
+atomically and charge each target rung at the building-authored fraction of base
+cost multiplied by `(target level - 1)`; they respect maximum levels granted by
+unlocked technology. Construction scaling is likewise authored as an additive
+fraction of base cost for every existing copy. Unlocked technologies also apply
 their authored placement/upgrade discounts, expand storage-building
 contributions, modify actor health/movement/action/combat percentages, and select
 age-two GLB variants for constructed buildings and the always-present Town Hall.
@@ -506,8 +435,18 @@ an hourly yes/no retention vote. Ruler identity, previous role, active ballot,
 tallies, and cooldown survive native saves; the legacy importer restores ruler
 names and vote cooldowns. Election wins assign `role:ruler`, while replacement
 or `!resign` restores the prior role. `!buy`, `!sell`, `!recruit`, `!recruits`,
-and `!save` enforce ruler-or-staff access, while `!rulervote` and forced `!event`
-remain broadcaster/moderator commands. Recruiting creates stable NPC entities,
+and `!save` enforce ruler-or-staff access, while `!rulervote` remains a
+broadcaster/moderator command. Any viewer can use `!event` once per shared
+one-hour cooldown to propose Prospecting, Reforestation, Agricultural,
+Rebalance, Awakening, Economic, Invasion, or Market. Event proposals wait behind an
+active ruler election in a persistent, extensible vote queue and then use the
+same two-minute yes/no panel. A strict yes majority changes the one active
+community event; ties and no majorities retain the current event. Worker booms
+apply their authored 3x/0.5x tradeoff, Awakening grants 20% more XP, Economic
+Boom accelerates gathering by 10%, and Invasion increases wave sizes by 50%
+while doubling monster-kill gold. Market lets resource workers keep gathering
+at capacity and converts overflow to gold at 25% of the normal trade value,
+preserving fractional value across deliveries. Recruiting creates stable NPC entities,
 consumes the House-backed recruit capacity, and persists normally.
 
 New towns start with exactly Unity's stable five-NPC roster: Defender, Logger,
@@ -544,9 +483,11 @@ Workers gather using `BaseActionAmount`, carry the
 authored 10-unit `BaseMaxResource`, then path back to the Town Hall and deposit
 into the town balances shown by the HUD. Successful actions award Unity-scaled
 role XP; per-role progress survives role changes and saves, levels follow the
-Unity curve through level 99, and action amount/cadence/range, health and
-regeneration, movement, and carrying use the reachable converted level curves
-plus role-specific unlocked technology percentages. Serialized defense curves
+authored Unity curve through its configured span and plateau through the
+catalog-authored level-1000 ceiling. Twitch chat announces each configured
+ten-level milestone. Per-level movement bonuses are disabled; authored action,
+gathering, damage, health, regeneration, and carrying curves plus role-specific
+unlocked technology percentages provide progression instead. Serialized defense curves
 remain inspectable but do not reduce melee or projectile damage because neither
 shipping Unity attack helper consumes `PlayerRoleData.DamageReduction`.
 `!experience` reports the active role's current level and XP threshold.
@@ -556,22 +497,33 @@ the current role's resource, and depositing transfers only that bucket rather
 than silently unloading resources retained from earlier roles.
 Food, ore, and wood start with Unity's 15,000-unit capacity, recruit capacity
 starts at five, and gold is unbounded. Completed Food/Ore/Wood Storage buildings
-add the authored level-scaled capacity; Houses add recruit slots. A capped
+add an authored linear 10,000 base plus 5,000 per level above one. Houses add one
+recruit slot each, and their upgraded levels contribute the authored global
+gather-rate bonus. A capped
 deposit leaves overflow on the actor until spending or new construction creates
 space.
 Node depletion and carried inventories are part of native save/load state.
 The optional Nursery, ProspectorHut, and Greenhouse technology roots have no
 prerequisite technology and deliberately use objectives unrelated to the
 resource they restore. Their completed buildings provide Forester, Prospector,
-and Tender slots. Foresters plant first around recently depleted trees, then
-living trees, then deterministic reachable sites near their Nursery, scaling
-from five minutes to twenty seconds per tree. Prospectors repeatedly survey an
-outward 5–20-cell spiral around their hut, scaling from a 1-in-4,000 to a
-1-in-400 discovery roll per surveyed cell and creating 3–5-node ore deposits.
-Tenders choose open fields at least ten cells from buildings and five from trees,
-scaling from thirty to six minutes per berry bush. New resources receive stable
-IDs, deterministic central-half-cell offsets, navigation occupancy, runtime
-visuals, and native-save restoration.
+and Tender slots. Foresters score deterministic reachable planting sites by
+nearby living trees, recently depleted trees, and distance from their own
+Nursery; the Nursery-distance contribution peaks five cells away and falls off
+on either side. Recent and currently reserved plantings penalize the same compass
+direction from that Nursery, so coworkers spread between useful forest regions
+instead of converging on one grove. A one-in-ten fallback still seeds a random
+reachable site at least three cells from every building. Their interval scales
+from five minutes to twenty seconds per tree.
+Prospectors repeatedly survey an outward 5–20-cell spiral around their
+hut, scaling from a 1-in-4,000 to a 1-in-400 discovery roll per surveyed cell and
+creating 3–5-node ore deposits. Active ore within ten cells multiplies the next
+discovery denominator; that local penalty decays by one on each later check.
+Tenders choose open fields at least ten cells from buildings and three to six from trees,
+scaling from thirty to six minutes per berry bush. Nearby bushes apply the same
+temporary, decaying chance penalty. New resources receive stable IDs,
+deterministic central-half-cell offsets, navigation occupancy, runtime visuals,
+and native-save restoration. Town-controlled recruits remain level 1 with zero
+profession XP; Twitch players retain normal profession progression.
 All seven combat roles—Defender, Necromancer, Paladin, Ranger, Ruler, Soldier,
 and Wizard—acquire a living enemy and path into authored range. Melee roles
 apply deterministic damage directly; Necromancer, Ranger, and Wizard attacks
@@ -609,8 +561,8 @@ The clock retains Unity's shipping 3,600-second day, 66.6% daylight boundary,
 and 100-second dusk/dawn transitions; its 10/5 day/night light values drive sun,
 ambient, sky, and building emission. Night point lights use a fixed reusable
 pool rather than growing with the town or battle: the camera-nearest 32 living
-citizens, 20 completed non-wall buildings, and 12 projectiles may illuminate at
-once. Wall/gate runs and off-camera candidates retain gameplay state without
+citizens, 20 completed torches or streetlights, and 12 projectiles may illuminate at
+once. Other buildings, wall/gate runs, and off-camera candidates retain gameplay state without
 creating overlapping whole-map light work. Each source's stable identity also
 assigns a deterministic 0–10 second dusk/dawn delay, spreading activation and
 deactivation without save-state randomness. Normal enemies therefore first appear at
@@ -636,7 +588,9 @@ frame. Moving targets retain the authored one-second response interval. Player c
 roles intercept enemies within Unity's 100-world-unit sensor region. Defenders
 and Guardhouse guards first engage threats within five town cells of themselves;
 when none are nearby, they choose the enemy nearest their Town Hall or Guardhouse
-defence anchor respectively. Other combat roles remain nearest-threat driven. Attacks,
+defence anchor respectively. Guardhouse-spawned guards have half the maximum
+health of an otherwise equivalent Defender, while player and recruit Defenders
+retain their normal health. Other combat roles remain nearest-threat driven. Attacks,
 projectiles, health, death, 60-second player revival, player-attributed kill
 objectives, and exact enemy gold rewards share the normal authoritative save
 state. Tower/environment kills intentionally do not grant player rewards or
@@ -646,7 +600,7 @@ strike or projectile impact, and a lethal result; the reverse enemy-to-citizen
 lethal path and the Tower's authored target/projectile/impact path are covered
 independently.
 
-`!event raid` disables normal camp spawning and starts the Unity-authored
+The moderator-only `!qevent raid` queue can start the separate Unity-authored
 five-wave Minotaur raid: each of the first four waves distributes 50 tracked
 enemies across eligible camp spawn points, and the final Minotaur Boss has at
 least 1,000 health or 50 health per active player/recruit. The next wave waits
@@ -669,16 +623,21 @@ placement and central 4x4 blockers. Towers and the other military structures
 remain fully solid. Resources reserve one placement cell but block only its
 central fine cell so actors can squeeze between adjacent nodes. Connected
 walls and gates derive 1x3 straight blockers and the corresponding corner/T/
-cross shapes; gates remove those blockers for citizens but retain them for
-enemies. Paths uniquely occupy one 1x1 fine-grid sample (one ninth of a placement
+cross shapes from their neighbours; gates remove those blockers for citizens
+but retain them for enemies. The native Streetlight is a fixed-price
+wooden pole and emissive lamp with matching 1x1 placement and navigation boxes;
+it unlocks alongside Paths. Construction prices otherwise retain each building's
+authored per-existing-copy multiplier, editable in the Buildings tool, while Paths
+and Streetlights explicitly use zero so their unit prices stay fixed.
+Paths uniquely occupy one 1x1 fine-grid sample (one ninth of a placement
 cell's area), can bend between inset building blockers, and provide their movement
 bonus without blocking either side. Movement and A* permit diagonals only
 when both adjacent cardinal fine cells are open.
 The shipping Fish God event is also live: its configurable channel-point reward
 ID and `!praise` feed the same deterministic command path, with Unity's one-in-ten
 summon chance, 20-praise requirement, 300-second timeout, 1,000-food reward, and
-70% Fish God pet roll across joined Twitch players. `!event fish_god` provides a
-forced moderator/debug start. Event attempts, remaining time, praise progress,
+70% Fish God pet roll across joined Twitch players. `!qevent fish_god` provides a
+moderator/debug queue path. Event attempts, remaining time, praise progress,
 rewarded pet IDs, and resources persist in native saves. Live player pets use
 converted GLBs: subscribers receive and auto-equip Red Panda, while Gatherer,
 Fisher, and Logger actions retain Unity's deterministic one-in-5,000 Giraffe,
@@ -706,7 +665,10 @@ available only when both adjoining cardinal cells are open, preventing actors
 from clipping across resource and building corners. Unstuck recovery tracks
 both repeated route failures and five seconds without meaningful world-space
 progress on an otherwise valid route; recovered actors choose distinct open
-Town Hall approaches. Regeneration revalidates live actor occupancy when a
+Town Hall approaches. Station-anchored idle targets are accepted only when the
+live fine navigation—including constructed buildings—can actually reach them,
+preventing dense towns from collapsing workers into a tiny coarse-grid pendulum.
+Regeneration revalidates live actor occupancy when a
 tree or bush is planted, so delayed planting cannot create a blocker beneath a
 citizen.
 
@@ -724,7 +686,9 @@ is cleared across load/new-world boundaries rather than entering save data. The
 shipping game does not schedule the pointer picker or expose selection actions.
 The generated heightfield uses a Bevy PBR material extension whose WGSL port
 reconstructs the Unity terrain shader's authored sand/grass height blend, grid
-texture, palette, and tint controls. Runtime-generated terrain now follows the
+texture, palette, and tint controls. The source texture's 2x2 checker is sampled
+at half its authored repetition frequency so each visible square covers one
+complete logical cell. Runtime-generated terrain now follows the
 shipping Unity scale: 200x200 samples, two-unit cells, half-unit height
 quantization, the authored terrain curve and island falloff, and globally
 normalized multi-octave noise generated from Unity-compatible `System.Random`
@@ -765,30 +729,30 @@ threshold, seed, LOD, scale, material, and 21 FBX variant references. Bevy
 regenerates stable instances from the source layer sizes, seeds, thresholds,
 spacing, normalized octave noise, fixed base scale, and quarter-turn rotations.
 Resources use their three shipping generation layers and 100-unit amounts.
-Unity's shared generation-occupancy keys are preserved exactly: valid
-half-cell candidates and same-cell clusters are not collapsed, while subsequent
-foliage layers still reject occupied source keys. Raw glTF primitive loads restore
+Unity's resource-generation occupancy keys remain unchanged. Foliage now
+samples the same physical noise field on all nine thirds of each logical cell,
+with deterministic bounded jitter inside each third; later foliage layers and
+gameplay resources still exclude an occupied third. Raw glTF primitive loads restore
 Blender's omitted 0.01 centimetre-to-metre scene-node conversion before applying
 authored scale; this prevents tree, ore, bush, grass, and coral primitives from
 becoming roughly one hundred times too large and overlapping. Runtime resource
-and foliage presentation derives a second deterministic offset from the world
-seed, stable generated identity, source location, and source sub-cell position.
-Each axis is constrained to the central 50% of its navigation cell, so the
-result is visibly distributed without drifting into neighboring gameplay cells,
-using entity IDs, or reading legacy-save coordinates. Presentation suppresses
-land foliage below the deliberately raised visible water surface and grounds
+and foliage presentation preserves each generated source position exactly.
+Jitter never crosses its assigned third, and final height/habitat is sampled at
+the jittered point rather than at the pre-shift source cell. Presentation suppresses
+land foliage at or below the deliberately raised visible water surface and grounds
 each loaded GLB's transformed bounds to the unchanged generated terrain height.
-This corrects underwater grass and imported off-ground pivots without modifying
-Unity-parity generation records. The converted
+This corrects underwater grass and imported off-ground pivots without changing
+the saved terrain or simulation. The converted
 grass, flower, seaweed, and coral primitives use Bevy's native mesh/material
-instancing: the 16,581 shipping records collapse to 12 maximum GPU mesh batches
-and 281 deterministic 32-cell spatial audit groups without duplicating geometry.
+instancing: the 37,320 shipping records collapse to 12 maximum GPU mesh batches
+and 293 deterministic 32-cell spatial audit groups without duplicating geometry.
 A camera-relative 96-unit ground-cover range with an 18-unit dither band streams
 sub-pixel distant instances while preserving their authoritative generation
 records, transforms, PBR lighting, and shadows. Current building and enemy-camp
-footprints hide intersecting
-foliage, and the visibility is derived again after removal or save load so stale
-clearings cannot leak between world states. Resource trees use a typed
+footprints hide intersecting foliage. Completed paths hide foliage on their
+exact fine-navigation third instead of clearing a whole terrain cell. Visibility
+is derived again after removal or save load so stale clearings cannot leak
+between world states. Resource trees use a typed
 `TreeMaterial` WGSL port with the authored atlas, world-synchronized vertex
 wind, per-object color variation, and spring/autumn/winter controls. The Blender
 pipeline promotes Unity's FBX `colorSet1` masks to glTF `COLOR_0`, preserving
@@ -860,7 +824,9 @@ construction sites remain blocked to both sides. Their visual controllers are
 live as well: age-one wood and age-two stone gates retarget the converted
 `Open`/`Close` FBX takes onto the building model, preserve the Unity Animator's
 quarter-second crossfade, and react only to living players inside the authored
-4x4 trigger. `STREAM_TOWN_SMOKE_GATE=1` places a completed gate around the first
+4x4 trigger. Gate renderers neither cast nor receive realtime shadows: the
+animated skinned doors and static frame otherwise disagree in the shadow depth
+pass and visibly flicker. `STREAM_TOWN_SMOKE_GATE=1` places a completed gate around the first
 starting player and frames it for a deterministic opened-pose capture; combine
 it with `STREAM_TOWN_DEBUG_AGE_TWO=1` to exercise the stone-root retarget.
 The shipping `!ping` command now attaches the converted `PointerArrow.glb` and
@@ -1057,7 +1023,11 @@ one persistent Tidal track; the library atomically applies the newest pattern,
 tempo, and low-pass values at the next unscheduled cycle boundary while
 preserving musical phase and natural effect tails. Repeated intensity changes
 therefore coalesce instead of restarting or layering the score. The player's
-master/music gain remains a live routing control. The reachable town
+master/music gain remains a live routing control. The external tools' Music tab
+loads either the source project song or the current live override, saves both
+authorities, and starts/stops an audible preview through this exact same renderer.
+Its town-state controls expose the score generated for representative intensity,
+season, time, population, and building-count inputs. The reachable town
 seagull now uses its converted GLB, exact 32-second cross-town flight contract,
 three generated calls on the source's random 1–5 second cadence, and authored
 ambience rolloff. Its converted +X nose axis receives the handedness-corrected
@@ -1154,20 +1124,14 @@ its tinted left-half panel, copyright line, and five packaged sliced-image
 buttons in authored order. New Game, Load Game, Settings, Credits, and Quit are
 mouse-operable while retaining their keyboard paths; Load Game selects the exact
 disabled sprite and cannot activate until a native save exists. Its background
-is no longer a synthetic blank stage: the migration exporter resolves the
-authored `Main_Menu_02` camera, 285 model instances, and its 4,900-vertex island
-mesh into checked RON. The converter reflects camera and instance positions,
-rotations, mesh vertices/normals, and triangle winding together into Bevy's
-right-handed coordinates, preserving the left UI/right town composition. Bevy
-reconstructs that scene with the converted GLBs and restores the town camera when
-gameplay loading begins.
-The landscape is a schema-3 corrective bake produced once by the ordinary
-deterministic world generator, not by reading a Unity save. The bake weights
-generated height by the authored shoreline mask, flattens building foundations,
-lifts model instances, and writes generated resource/foliage placements into
-`main_menu_scene.ron` for load-only runtime use. Re-run the documented
-`bake-main-menu-scene` command from an unbaked schema-2 reference whenever
-generator configuration intentionally changes. Corrective-bake version 3
+is no longer a synthetic blank stage: `main_menu_scene.ron` authors the camera,
+285 model instances, and its 4,900-vertex island mesh in Bevy's right-handed
+coordinates, preserving the left UI/right town composition. Bevy reconstructs
+that scene with packaged GLBs and restores the town camera when gameplay loading
+begins. The landscape is a schema-3 bake produced by the deterministic world
+generator. It weights generated height by the authored shoreline mask, flattens
+building foundations, lifts model instances, and stores resource/foliage
+placements for load-only runtime use. Corrective-bake version 3
 samples every foundation from the untouched generated surface before flattening;
 this prevents the dense farm/wall layout from propagating one artificial plateau
 through its neighbors. It applies a presentation-only 3x vertical multiplier so
@@ -1225,7 +1189,7 @@ nine-slice frame; its right-hand technology region is part of that header rather
 than an independently framed tab. It shows the active technology, first
 incomplete requirement, exact progress, and the packaged objective slider in
 place of the non-functional `TECH TREE` label. Optional runtime diagnostics
-remain available for migration testing without becoming an interactive HUD.
+remain available for automated testing without becoming an interactive HUD.
 
 The authoritative object-selection model remains available for future automatic
 camera targeting. Pointer selection is not enabled in the shipping game, so its
@@ -1297,8 +1261,9 @@ resources, or 192 world foliage descriptors), so every batch can be extracted
 and presented before loading continues. Runtime logs report both construction
 updates and actually presented render frames for cold-load diagnostics.
 
-The migration now has source-diff closure for reachable gameplay and balance,
-shipping-scene shader/VFX reachability, converted authoring data and assets,
+The native runtime has coverage for reachable gameplay and balance,
+shipping-scene shader/VFX behavior, authored data and packaged assets,
 curated visual/audio acceptance contracts, and automated runtime/package gates.
-The repository-level [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) records the
-few remaining external release-certification constraints.
+The retired Unity project and one-time conversion utilities are no longer part
+of the production repository; Bevy assets, authoring tools, and native saves are
+now the sole supported content pipeline.

@@ -1,1 +1,0 @@
-public class Access_EdgeScrollingToggle : Access_Toggle { }

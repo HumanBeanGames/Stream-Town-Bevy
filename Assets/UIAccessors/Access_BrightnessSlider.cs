@@ -1,1 +1,0 @@
-public class Access_BrightnessSlider : Access_Slider { }

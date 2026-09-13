@@ -8,12 +8,14 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 36;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 37;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
     pub schema_version: u32,
     pub loading_screen: LoadingScreenDef,
+    /// Global progression rules authored in Stream Town Tools.
+    pub progression: ProgressionDef,
     #[serde(default)]
     pub archetypes: BTreeMap<StableId, ArchetypeDef>,
     #[serde(default)]
@@ -34,6 +36,18 @@ pub struct ContentCatalog {
     pub technology: TechTree,
     #[serde(default)]
     pub source_records: BTreeMap<StableId, AuthoredRecord>,
+}
+
+/// Catalog-owned progression rules shared by simulation, presentation, and tools.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProgressionDef {
+    pub maximum_role_level: u16,
+    pub maximum_recruit_role_level: u16,
+    /// Level at which the existing curved XP requirement reaches its plateau.
+    pub role_experience_curve_level_span: u16,
+    pub role_experience_curve_maximum: u32,
+    pub level_announcement_interval: u16,
+    pub minimum_action_milliseconds: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -407,6 +421,14 @@ pub struct BuildingDef {
     pub archetype: StableId,
     /// Logical placement/exclusion footprint in authored town cells.
     pub footprint: [u16; 2],
+    /// Exact placement/exclusion footprint measured in thirds of an authored cell.
+    ///
+    /// Rectangular buildings normally keep a one-unit border around the physical
+    /// navigation footprint. Walls and gates use the same adaptive linear cells
+    /// for placement and navigation, while paths occupy one placement cell and
+    /// block no navigation cells.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement_footprint_thirds: Option<[u16; 2]>,
     /// Optional physical navigation footprint measured in thirds of an authored cell.
     ///
     /// When omitted, the runtime uses the placement footprint with one fine-navigation
@@ -415,10 +437,23 @@ pub struct BuildingDef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub navigation_footprint_thirds: Option<[u16; 2]>,
     pub cost: BTreeMap<StableId, u32>,
+    /// Additional construction cost per existing building of this definition.
+    ///
+    /// `0` keeps the construction price fixed. `500` adds half of the base
+    /// price for every existing copy, matching the authored Unity multiplier.
+    #[serde(default)]
+    pub construction_cost_multiplier_per_thousand: u32,
     pub placeable: bool,
     pub can_level: bool,
-    pub level_cost: BTreeMap<StableId, u32>,
-    pub level_cost_multiplier_per_thousand: u32,
+    /// Fraction of base construction cost charged for each target level above one.
+    /// `500` means 50% × (`target_level` - 1).
+    pub upgrade_cost_per_target_level_per_thousand: u32,
+    /// Percentage of authored base health added for every level above one.
+    pub health_bonus_per_level_per_thousand: u32,
+    /// Global gather-rate percentage added for every level above one.
+    pub global_gather_rate_bonus_per_level_per_thousand: u32,
+    /// Extra role XP on a killing blow contributed by matching military buildings.
+    pub kill_experience_bonus_per_level_per_thousand: u32,
     #[serde(default)]
     pub storage: Vec<StorageContribution>,
     #[serde(default)]
@@ -482,6 +517,8 @@ pub struct ProjectileShooterDef {
     pub projectile_pool: String,
     pub movement_milli_cells_per_second: u32,
     pub damage: u32,
+    /// Percentage of base projectile damage added for every building level above one.
+    pub damage_bonus_per_level_per_thousand: u32,
     pub range_milli_cells: u32,
     pub fire_milliseconds: u32,
 }
@@ -491,7 +528,6 @@ pub struct StorageContribution {
     pub resource: StableId,
     pub base_amount: u32,
     pub increment_amount: u32,
-    pub level_multiplier_per_thousand: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -514,6 +550,8 @@ pub struct StationDef {
     pub update_milliseconds: u32,
     /// Unity ranges converted through its authored two-unit building grid.
     pub search_range_milli_cells: u32,
+    /// Percentage XP added per building level when this was the actor's last station.
+    pub experience_bonus_per_level_per_thousand: u32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -559,7 +597,8 @@ pub struct RoleDef {
     pub base_action_range_milli_cells: u32,
     pub action_range_milli_cells_per_level: u32,
     pub base_health: u32,
-    pub health_per_level_milli: u32,
+    /// Percentage of base health added for every role level above one.
+    pub health_bonus_per_level_per_thousand: u32,
     pub base_health_regen_per_second: i32,
     pub health_regen_milli_per_second_per_level: u32,
     pub base_damage_reduction_percent: i32,
@@ -646,7 +685,8 @@ pub struct TechNode {
     /// Authored percentage stat boosts keyed first by role, then by stat type.
     #[serde(default)]
     pub role_stat_boost_percent: BTreeMap<StableId, BTreeMap<StableId, i32>>,
-    /// Authored `Age Up Building` effects. An unlocked effect selects the age-two scene.
+    /// Authored `Age Up Building` effects. The effect unlocks this technology's
+    /// authored age for the building, capped by the Town Hall's global age.
     #[serde(default)]
     pub aged_buildings: BTreeSet<StableId>,
     pub objectives: Vec<StableId>,
@@ -696,6 +736,8 @@ pub enum ContentError {
     Schema(u32),
     #[error("loading-screen timing or tooltip data is invalid")]
     InvalidLoadingScreen,
+    #[error("global progression settings are invalid")]
+    InvalidProgression,
     #[error("technology {node} references missing prerequisite {prerequisite}")]
     MissingPrerequisite {
         node: StableId,
@@ -705,6 +747,8 @@ pub enum ContentError {
     TechnologyCycle(StableId),
     #[error("building {0} has an empty footprint")]
     EmptyFootprint(StableId),
+    #[error("building {0} has an invalid fine-placement footprint")]
+    InvalidPlacementFootprint(StableId),
     #[error("building {0} has an invalid fine-navigation footprint")]
     InvalidNavigationFootprint(StableId),
     #[error("building {building} references missing archetype {archetype}")]
@@ -712,13 +756,8 @@ pub enum ContentError {
         building: StableId,
         archetype: StableId,
     },
-    #[error("building {0} has an invalid zero level-cost multiplier")]
-    InvalidLevelCostMultiplier(StableId),
-    #[error("building {building} has an invalid zero storage multiplier for {resource}")]
-    InvalidStorageMultiplier {
-        building: StableId,
-        resource: StableId,
-    },
+    #[error("building {0} has an invalid zero upgrade-cost multiplier")]
+    InvalidUpgradeCostMultiplier(StableId),
     #[error("building {building} grants slots for missing role {role}")]
     MissingBuildingRoleSlot { building: StableId, role: StableId },
     #[error("building {0} has invalid station timing, range, or target capacity")]
@@ -824,6 +863,16 @@ impl ContentCatalog {
                 .any(|tooltip| tooltip.trim().is_empty())
         {
             return Err(ContentError::InvalidLoadingScreen);
+        }
+        if self.progression.maximum_role_level == 0
+            || self.progression.maximum_recruit_role_level == 0
+            || self.progression.maximum_recruit_role_level > self.progression.maximum_role_level
+            || self.progression.role_experience_curve_level_span < 2
+            || self.progression.role_experience_curve_maximum == 0
+            || self.progression.level_announcement_interval == 0
+            || self.progression.minimum_action_milliseconds == 0
+        {
+            return Err(ContentError::InvalidProgression);
         }
         let shipping_target_kinds = [
             "target:player",
@@ -1113,14 +1162,32 @@ impl ContentCatalog {
             if building.footprint[0] == 0 || building.footprint[1] == 0 {
                 return Err(ContentError::EmptyFootprint(id.clone()));
             }
+            let placement = building
+                .placement_footprint_thirds
+                .unwrap_or_else(|| building.footprint.map(|axis| axis.saturating_mul(3)));
+            if placement[0] == 0 || placement[1] == 0 {
+                return Err(ContentError::InvalidPlacementFootprint(id.clone()));
+            }
             if building
                 .navigation_footprint_thirds
                 .is_some_and(|footprint| {
-                    footprint[0] == 0
-                        || footprint[1] == 0
-                        || footprint[0] > building.footprint[0].saturating_mul(3)
-                        || footprint[1] > building.footprint[1].saturating_mul(3)
+                    let empty = footprint[0] == 0 || footprint[1] == 0;
+                    (empty && id.as_str() != "building:path")
+                        || footprint[0] > placement[0]
+                        || footprint[1] > placement[1]
                 })
+            {
+                return Err(ContentError::InvalidNavigationFootprint(id.clone()));
+            }
+            if building.placement_footprint_thirds.is_some()
+                && matches!(id.as_str(), "building:wall" | "building:gate")
+                && building.navigation_footprint_thirds != Some(placement)
+            {
+                return Err(ContentError::InvalidNavigationFootprint(id.clone()));
+            }
+            if building.placement_footprint_thirds.is_some()
+                && id.as_str() == "building:path"
+                && building.navigation_footprint_thirds != Some([0, 0])
             {
                 return Err(ContentError::InvalidNavigationFootprint(id.clone()));
             }
@@ -1130,18 +1197,8 @@ impl ContentCatalog {
                     archetype: building.archetype.clone(),
                 });
             }
-            if building.level_cost_multiplier_per_thousand == 0 {
-                return Err(ContentError::InvalidLevelCostMultiplier(id.clone()));
-            }
-            if let Some(storage) = building
-                .storage
-                .iter()
-                .find(|storage| storage.level_multiplier_per_thousand == 0)
-            {
-                return Err(ContentError::InvalidStorageMultiplier {
-                    building: id.clone(),
-                    resource: storage.resource.clone(),
-                });
+            if building.can_level && building.upgrade_cost_per_target_level_per_thousand == 0 {
+                return Err(ContentError::InvalidUpgradeCostMultiplier(id.clone()));
             }
             for contribution in &building.role_slots {
                 if !self.roles.contains_key(&contribution.role) {

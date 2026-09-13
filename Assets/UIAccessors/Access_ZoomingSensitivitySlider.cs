@@ -1,1 +1,0 @@
-public class Access_ZoomingSensitivitySlider : Access_Slider { }

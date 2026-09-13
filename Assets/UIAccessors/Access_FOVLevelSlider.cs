@@ -1,1 +1,0 @@
-public class Access_FOVLevelSlider : Access_Slider { }

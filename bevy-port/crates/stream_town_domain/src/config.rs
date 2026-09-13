@@ -70,7 +70,7 @@ impl Default for TerrainAppearanceConfig {
                 traversal_tint,
             },
             winter: SeasonalTerrainPalette {
-                base_color: [0.76, 0.88, 1.0, 1.0],
+                base_color: [1.05, 1.05, 1.08, 1.0],
                 path_tint: [0.50, 0.53, 0.56, 0.92],
                 traversal_tint: [0.34, 0.32, 0.27, 0.45],
             },
@@ -285,6 +285,7 @@ pub enum BroadcastEncoderPreference {
     Intel,
     Amd,
     MediaFoundation,
+    X264,
     OpenH264,
 }
 
@@ -386,7 +387,7 @@ impl Default for GameConfig {
         Self {
             schema_version: CURRENT_CONFIG_SCHEMA,
             window: WindowConfig {
-                title: "Stream Town — Bevy Migration".to_owned(),
+                title: "Stream Town".to_owned(),
                 width: 1_920,
                 height: 1_080,
             },

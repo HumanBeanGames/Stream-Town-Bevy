@@ -1,1 +1,0 @@
-public class Access_ChannelNameInput : Access_TextInput { }

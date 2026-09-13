@@ -1,5 +1,5 @@
 (
-    schema_version: 4,
+    schema_version: 5,
     video: (
         display_mode: Fullscreen,
         width: 1920,
@@ -38,4 +38,8 @@
         reduced_motion: false,
     ),
     autosave_minutes: 1,
+    timelapse: (
+        interval: OneHour,
+        dynamic: true,
+    ),
 )

@@ -1,1 +1,0 @@
-public class Access_MusicVolumeSlider : Access_Slider { }

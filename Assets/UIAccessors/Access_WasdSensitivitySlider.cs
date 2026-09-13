@@ -1,1 +1,0 @@
-public class Access_WasdSensitivitySlider : Access_Slider { }
