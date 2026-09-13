@@ -65,19 +65,21 @@ and `warmwhite`. Hex colours use six digits, such as `#72C8FF`.
 |---|---|
 | `!buildings` | List unlocked building types using their exact no-space PascalCase command names. |
 | `!cost <BuildingName>` | Show the current construction cost and technology-limited maximum level. Alias: `!buildcost`. Example: `!cost OreStorage`. |
-| `!build <BuildingName>` | Start a placement preview. The preview times out after 30 seconds without another placement command. |
+| `!build <BuildingName>` | Start a placement preview. The preview times out after 60 seconds without another placement command. |
+| `!build thickpath` | Place ordinary paths three fine cells wide. Diagonal steps fill their two inner bridge cells; only the routed centreline must be valid, while blocked flank/bridge sections are skipped independently. Existing paths may be crossed and are not rebuilt. |
 
 ### Placing ordinary buildings
 
 After `!build <BuildingName>`, use any of the following commands to position the translucent
-blueprint. Every move resets its 30-second timeout.
+blueprint. Every move resets its 60-second timeout.
 
 | Command | Purpose |
 |---|---|
 | `!move <up\|down\|left\|right\|rotate> [amount]` | Move in visible screen directions or rotate in 90-degree quarter turns. Several actions may be supplied in one command. |
 | `!up [amount]`, `!down [amount]`, `!left [amount]`, `!right [amount]` | Short forms for moving the pending blueprint. |
+| `!center` | Move the pending blueprint to the town position under the exact centre of the broadcast view. Paths retain one-third-cell precision and refresh an active routed preview. |
 | `!rotate [amount]` | Rotate the pending blueprint by quarter turns. |
-| `!confirm` / `!accept` | Pay the displayed cost and create the construction site if the preview is valid. |
+| `!confirm` / `!accept` | Pay the displayed cost and create the construction site if the preview is valid. Existing path sections under its footprint are removed. |
 | `!cancel` | Discard the pending blueprint immediately. |
 
 If the town cannot afford the building, the rejection identifies every missing resource and amount.
@@ -98,8 +100,10 @@ multiple sections instead:
 
 Calling `!beginplace` again replaces the start. `!endplace` remains a compatibility alias for
 freezing the current endpoint but is not required. A diagonal wall endpoint is rejected, and a route
-that exceeds available resources is not constructed. Paths cost 150 Wood and 130 Ore per fine-grid
-section at level 1, conform to the terrain, remain walkable, and do not consume building capacity.
+that exceeds available resources is not constructed. Path routing softly favours the central third
+of each town cell while retaining narrow side passages and completed gatehouse doors as valid
+options. Paths cost 150 Wood and 130 Ore per successfully placed fine-grid section at level 1,
+conform to the terrain, remain walkable, and do not consume building capacity.
 Each completed Path level gives citizens on that fine-grid section 5% additional movement speed. Path
 technologies form their own branch beginning in Age 1. Citizen route planning prices that speed into
 its A* cost, so a faster path can be preferred over a slightly shorter unsurfaced route. Imported
@@ -134,16 +138,15 @@ configured operators for bulk progression/testing; normal play should use `!upgr
 | `!rrole <id> <role>` | Assign a recruit's role. |
 | `!rdismiss <id>` | Dismiss a recruit. |
 
-Recruits can reach at most level 10 in each profession. Twitch player citizens retain the full
-profession progression range; this keeps large NPC-heavy towns useful without letting recruits
-erase the combat-pressure tradeoff created by their contribution to enemy-wave scaling.
+Recruits remain at level 1 in every profession and do not retain profession XP. Twitch player
+citizens retain the full profession progression range.
 
 ## Camera and locating citizens
 
 | Command | Purpose |
 |---|---|
 | `!ping` | Briefly mark your citizen in the world. |
-| `!cam <direction> [amount]` | Ruler/operator: smoothly move the broadcast camera with `up`, `down`, `left`, `right`, `in`, or `out`. Multiple direction/amount pairs are accepted. |
+| `!cam <direction> [amount]` | Ruler/operator: smoothly move the broadcast camera with `up`, `down`, `left`, `right`, `in`, or `out`. Left/right use finer steps than up/down; multiple direction/amount pairs are accepted. |
 | `!cam home` / `!resetcam` | Ruler/operator: return to the authored town composition and base zoom. |
 | `!follow <username>` / `!follow me` | During an automatic-camera shot, follow one living player citizen without leaving automatic mode. |
 | `!focus <BuildingName> <BID>` | During automatic direction or while you are placing a building, focus that building for 15 seconds. Successful placement commands refresh the focus timer. |
@@ -171,9 +174,30 @@ that view. Both modes are visual only: they do not modify navigation, placement,
 
 | Command | Purpose |
 |---|---|
-| `!vote <option>` | Vote in a technology ballot by number (`!vote 1`, `!vote 2`, or `!vote 3`), or in a simultaneous ruler ballot by player name. A keep-the-current-ruler ballot uses `!vote yes` or `!vote no`. |
+| `!vote <option>` | Vote in a technology ballot by number (`!vote 1`, `!vote 2`, or `!vote 3`), in a ruler ballot by player name, or in an event/keep-ruler ballot with `!vote yes` or `!vote no`. |
+| `!event <event type>` | Request a public vote to switch the active community event. Valid types are `prospecting`, `reforestation`, `agricultural`, `rebalance`, `awakening`, `economic`, and `invasion`. Valid requests share a one-hour global cooldown. |
 | `!rulervote` | Ruler/operator: start a ruler vote. |
 | `!resign` | Resign as ruler. |
+
+Anyone can request an event. For example, enter `!event prospecting` in Twitch chat. When the
+event ballot appears, viewers vote with `!vote yes` or `!vote no` before the two-minute timer ends.
+The accepted event requests and their effects are:
+
+| Request | Effect when the vote passes |
+|---|---|
+| `!event prospecting` | Prospectors work at 3x speed; Foresters and Tenders work at 0.5x speed. |
+| `!event reforestation` | Foresters work at 3x speed; Prospectors and Tenders work at 0.5x speed. |
+| `!event agricultural` | Tenders work at 3x speed; Prospectors and Foresters work at 0.5x speed. |
+| `!event rebalance` | Restore normal Prospector, Forester, and Tender rates. |
+| `!event awakening` | Increase all experience gains by 20%. |
+| `!event economic` | Make all gathering actions 10% faster. |
+| `!event invasion` | Increase monster-wave size by 50% and double gold from monster kills. |
+
+Only one community event is active at a time. A request waits in the reusable vote queue when a
+ruler election is already in progress, then uses the same two-minute ballot panel. A strict
+majority of cast votes activates the proposal; a tie or majority `no` retains the current event.
+The one-hour request cooldown is global, rather than per viewer, and starts when a valid request is
+accepted.
 
 The Nursery, ProspectorHut, and Greenhouse technologies begin locked but have no prerequisite
 technology, so each can appear in a technology vote immediately. Their post-vote objectives use a
@@ -203,6 +227,25 @@ tracked while a three-choice ballot is visible and follows the Gold option only 
 | `!info <resource\|role\|building\|enemy> [BID]` | Show authored information; add a BID for one building instance. |
 | `!stdiscord` | Show the Stream Town community link. |
 
+## City timelapse output
+
+Timelapse frequency and Dynamic mode are configured in the in-game Settings menu. The defaults are
+`1 hour` and Dynamic enabled. Each validly confirmed build subtracts ten minutes from the current
+countdown while Dynamic mode is enabled.
+
+For each town, screenshots, source frames, and the continuously rebuilt video are stored below the
+Bevy project in `.stream-town/timelapses/<town>/`. For Tonyville, the files are:
+
+| Output | Location |
+|---|---|
+| Clean screenshots | `.stream-town/timelapses/Tonyville/city-<timestamp>-<rate>-<mode>.png` |
+| Video source frames | `.stream-town/timelapses/Tonyville/video-frames/` |
+| Timelapse video | `.stream-town/timelapses/Tonyville/city-timelapse.mp4` |
+
+Each capture uses the `!cam home` composition with gameplay UI, health bars, diagnostics, and build
+previews hidden. Screenshot names include the active frequency and Fixed/Dynamic mode, and every
+video frame burns the current values into its lower-left corner.
+
 ## Moderator and game-master commands
 
 Game-master access is granted only to Twitch user IDs configured in the operator settings.
@@ -210,7 +253,7 @@ Game-master access is granted only to Twitch user IDs configured in the operator
 | Command | Purpose |
 |---|---|
 | `!modrole <player> <role>` | Change another player's role. |
-| `!event <event>` / `!qevent <event>` | Trigger or queue a supported town event. |
+| `!qevent <event>` | Queue a supported legacy transient town event. Public community-event changes use `!event` and a vote. |
 | `!stopevent` | Stop the active event. |
 | `!tbuildcosts` | Toggle building costs. |
 | `!trolelimits` | Toggle player role limits. |
