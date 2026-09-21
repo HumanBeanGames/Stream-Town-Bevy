@@ -54,9 +54,9 @@ Do not create or paste a Client Secret. This desktop app uses a public client. [
 1. Launch the game using the **Stream Town** desktop shortcut.
 2. Open **Main Menu > Connections**, read the privacy prompt, and choose **Yes**.
 3. Select **Twitch accounts**.
-4. Paste the public **Client ID**.
-5. Set **Bot login** to the bot account, for example `humanbeanbot`.
-6. Set **Stream account login** to the broadcaster, for example `humanbeangames`.
+4. Paste the public Client ID into **Twitch application Client ID**.
+5. Set **Bot account login** to the bot account, for example `humanbeanbot`.
+6. Set **Broadcaster/channel login** to the streamer, for example `humanbeangames`.
 7. Select **Save and apply**.
 
 While playing, use **Settings > Connection > Set up connections**. The privacy prompt and Connections screen replace the game's own stream picture with **Sensitive Information Hidden**. Close separate capture or screen-sharing apps before handling credentials; the game cannot hide their recordings.
