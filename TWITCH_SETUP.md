@@ -1,268 +1,164 @@
-# Twitch setup
+# Connect Twitch to Stream Town
 
-Stream Town uses three deliberately separate identities:
+This guide connects both Twitch accounts through the Bevy game: the **chat bot** that receives player commands and posts announcements, and the **stream account** that broadcasts your town. No coding is needed. The game captures and streams its own picture and audio; OBS is not required.
 
-- **Broadcaster/channel:** `HumanBeanGames`
-- **Chat bot:** `HumanBeanBot`
-- **Twitch application:** the OAuth registration that lets Stream Town act as the bot
+**Both Twitch connections are required for normal play.** The town stays paused until Twitch confirms your channel is publicly live. Discord is optional; follow the separate [Discord setup guide](DISCORD_SETUP.md) if you want announcements there.
 
-Stream Town authorizes the chat bot for IRC and independently authorizes the
-broadcaster for stream-key lookup, operator-panel chat output, and channel
-moderation. Automated game replies and announcements come from the bot;
-messages typed into the operator panel, plus operator timeouts and bans, come
-from the streamer account. The game captures,
-encodes, and publishes its own output; OBS is not required. Never authorize the
-bot grant while signed in as the broadcaster, or the broadcaster grant while
-signed in as the bot.
+Open this document from **Main Menu > Connections > Twitch accounts > Open Twitch setup guide**, or **Tools > Twitch**. **Open command guide** opens the [complete chat command reference](TWITCH_COMMANDS.md). These buttons open readable local browser pages with keyboard-accessible links and printable text. Guide edits appear when you reopen them, without rebuilding the game.
 
-The shipping setup path is **Main Menu > Secrets**. Opening it requires an
-explicit Yes/No privacy confirmation. From the instant the confirmation appears
-until the Secrets screen closes, Stream Town's own Twitch video output is
-replaced with opaque black frames labelled **Sensitive Information Hidden**.
-Stream Town cannot stop OBS, Streamlabs,
-screen sharing, a capture card, or another third-party recorder, so close all of
-those applications before choosing Yes. The public Client ID and account logins
-are saved to `.stream-town/config.ron`; OAuth access and refresh tokens stay in
-the operating-system credential vault. The stream key is fetched only in memory
-and is never displayed or saved.
+## Find what you need
 
-## 1. Secure the old credentials
+- [Before you start](#before-you-start)
+- [1. Register a Twitch application](#1-register-a-twitch-application)
+- [2. Enter your account details](#2-enter-your-account-details)
+- [3. Connect the chat bot](#3-connect-the-chat-bot)
+- [4. Connect the stream account](#4-connect-the-stream-account)
+- [5. Choose stream settings](#5-choose-stream-settings)
+- [6. Start a town and confirm it is live](#6-start-a-town-and-confirm-it-is-live)
+- [Optional bandwidth test](#optional-bandwidth-test)
+- [Stopping and reconnecting](#stopping-and-reconnecting)
+- [Troubleshooting](#troubleshooting)
+- [Using Tools instead](#using-tools-instead)
+- [Credentials and permissions](#credentials-and-permissions)
+- [Scheduled fresh Beanville launch](#scheduled-fresh-beanville-launch)
 
-The former `Assets/StreamingAssets/twitch_secrets.json` contained credential material and was tracked in Git. It has been removed, but removal does not erase older commits.
+## Before you start
 
-Before using this repository publicly:
+Have the game, a browser, and access to both Twitch accounts ready.
 
-1. In the Twitch Developer Console, replace/revoke the old application secret.
-2. While signed in to the old bot account, disconnect the old application in Twitch **Settings > Connections** so its user tokens are revoked.
-3. Scrub `Assets/StreamingAssets/twitch_secrets.json` from Git history before publishing or mirroring the repository.
+| Item | Meaning | Example for this project |
+| --- | --- | --- |
+| Stream account login | The account whose channel broadcasts the game. | `humanbeangames` |
+| Bot login | A separate account that speaks in chat as the game bot. | `humanbeanbot` |
+| Client ID | The public identifier for your Twitch application, created in Step 1. | A string of letters and numbers. |
 
-Do not add Twitch tokens, refresh tokens, client secrets, or OBS stream keys anywhere under `Assets`.
+Use account **logins**, without `@`, spaces, or a Twitch URL. Substitute your accounts if different. A private browser window for the bot helps keep it separate from the streamer. Menu paths mean open each item in sequence. No step depends on screenshots or colour recognition. Scroll within the setup page if controls extend below the window; keyboard focus also brings controls into view.
 
-## 2. Register the Twitch application
+## 1. Register a Twitch application
 
-1. Sign in to the [Twitch Developer Console](https://dev.twitch.tv/console/apps) as the account that should own the app. `HumanBeanGames` is the sensible owner.
-2. Enable two-factor authentication; Twitch requires it for developer application registration.
-3. Register a uniquely named application, for example `Stream Town Reloaded - HumanBeanGames`.
-4. Use `http://localhost:3000` as the OAuth redirect URL. The device flow does not redirect there, but Twitch requires a registered URL.
-5. Choose **Chat Bot** as the category.
-6. Set the client type to **Public**. Stream Town runs on an end user's PC and must not embed a client secret.
-7. Copy the **Client ID**. A Client ID is public; a Client Secret is not needed and must not be pasted into Stream Town.
+Skip registration if you already have this application's public Client ID.
 
-## 3. Configure and authorize `HumanBeanBot`
+1. Sign into the [Twitch Developer Console](https://dev.twitch.tv/console/apps) with the account that will own the application, usually the streamer.
+2. Enable two-factor authentication if Twitch asks you to do so.
+3. Select **Register Your Application** and give it a unique name, such as **Stream Town - HumanBeanGames**.
+4. Enter `http://localhost:3000` as an OAuth redirect URL. The game uses device authorization; you do not need to run a local website there.
+5. Choose **Chat Bot** as the category and **Public** as the client type.
+6. Complete registration, open the app's management page, and copy **Client ID**.
 
-1. Close OBS and every other screen-capture or streaming application.
-2. Launch Stream Town and choose **Secrets** on the main menu.
-3. Read the confirmation. Choose **No** to return safely, or **Yes** to enter the
-   protected screen and black out Stream Town's internal stream.
-4. Paste the application's public **Client ID** and set **Bot login** to
-   `humanbeanbot`.
-5. Set **Stream account login** to `humanbeangames`. Keeping both names visible
-   makes it harder to authorize the wrong identity.
-6. Choose **Save and apply**, then **Authorize bot account**. Stream Town opens
-   Twitch's activation page in the default browser as soon as Twitch returns the
-   device code. If Windows blocks that launch, the same URL remains visible in
-   the Secrets screen as a manual fallback.
-7. Enter the device code displayed by Stream Town into the opened page.
-8. Verify that the signed-in account is `HumanBeanBot`. Use a private browser
-   window if the browser keeps selecting `HumanBeanGames`.
-9. Approve only `chat:read` and `chat:edit`. Stream Town rejects the grant if
-   Twitch returns a different account, Client ID, or scope set.
-10. Turn **Chat bot** to **Enabled**. The connection restarts immediately; a game
-    restart is not required.
+Do not create or paste a Client Secret. This desktop app uses a public client. [Twitch's registration instructions](https://dev.twitch.tv/docs/authentication/register-app/)
 
-The Secrets screen validates the returned token, refuses a token for the wrong
-account or app, and writes it to the operating-system credential vault (Windows
-Credential Manager on the initial supported platform). No token file is created.
-Stream Town validates the token at startup and hourly, refreshes it before the
-last 90 minutes of its lifetime, securely replaces Twitch's rotated refresh
-token, and rebuilds the IRC connection with the new access token. The tools app
-remains available as a diagnostic and advanced-configuration alternative.
+**Check:** you have the Client ID and both correct account logins.
 
-## 4. Prepare the channel
+## 2. Enter your account details
 
-1. In `HumanBeanGames` chat, run `/mod HumanBeanBot`. This is recommended for normal bot rate limits and moderation visibility.
-2. The main-menu Secrets screen has already saved the channel as
-   `humanbeangames`.
-3. **Chat bot** should already read **Enabled** in Main Menu > Secrets. When
-   launched from `bevy-port`, its public settings are in
-   `bevy-port/.stream-town/config.ron`; credentials remain in Windows Credential
-   Manager.
-4. Wait for the bot card to report that it connected automatically. No chat-side
-   connection command is required.
-5. Start or load the world. Stream Town blocks this action and points back to
-   Secrets until the bot is connected and both account grants are stored.
-6. From a separate viewer account, send `!join`, then `!help`. The viewer should receive a stable actor and the bot should return command help in chat.
+1. Launch the game using the **Stream Town** desktop shortcut.
+2. Open **Main Menu > Connections**, read the privacy prompt, and choose **Yes**.
+3. Select **Twitch accounts**.
+4. Paste the public **Client ID**.
+5. Set **Bot login** to the bot account, for example `humanbeanbot`.
+6. Set **Stream account login** to the broadcaster, for example `humanbeangames`.
+7. Select **Save and apply**.
 
-Broadcaster and moderator status grants the existing staff command set, but it
-does not grant game-master cheats. Those commands require an exact ID from
-`twitch.game_master_ids`; the checked-in list is intentionally empty. Local
-debug injection bypasses the list in the same way Unity's session bridge did.
+While playing, use **Settings > Connection > Set up connections**. The privacy prompt and Connections screen replace the game's own stream picture with **Sensitive Information Hidden**. Close separate capture or screen-sharing apps before handling credentials; the game cannot hide their recordings.
 
-## 5. Bind the Fish God Channel Points reward
+## 3. Connect the chat bot
 
-The checked-in configuration retains the reward ID recovered from the Unity
-project. In the `HumanBeanGames` Creator Dashboard, use that reward with
-**Require Viewer to Enter Text** enabled so Twitch emits the chat message and
-its `custom-reward-id` IRC tag. Redeeming it should enter the same deterministic
-praise path as `!praise`. If the production reward is replaced, update
-`twitch.fish_god_reward_id` in the authoritative or local `config.ron`; no OAuth
-credential is stored there.
+1. Select **Authorize bot account**. Twitch's activation page opens in your browser. If it does not open, use the address displayed in the game.
+2. Enter the device code shown in the game if the page asks for it.
+3. Check that Twitch is signed in as the **bot**, for example **HumanBeanBot**. If it shows the streamer, switch accounts or use a private window.
+4. Approve the chat permissions. The bot uses `chat:read` and `chat:edit`.
+5. Return to the game and wait for its authorization result.
+6. Set **Chat bot** to **Enabled**. Save and apply any changed account fields, then wait for the bot card to report **Connected**.
+7. In your channel's chat, use the streamer account to enter `/mod HumanBeanBot`, replacing the name if needed. This gives channel moderator status, not game-master cheats.
 
-## 6. Authorize direct broadcasting
+**Check:** the connected bot's login matches the intended account. A stored token alone is not an active chat connection.
 
-1. Install/run a packaged Windows build, which already contains the required
-   shared FFmpeg/OpenH264 DLLs. Developers building from source must complete
-   `bevy-port/third_party/ffmpeg/README.md` first.
-2. Close every third-party capture application, then open **Main Menu > Secrets**
-   and choose **Yes**. Confirm that the public Client ID and stream account login
-   are correct.
-3. Click **Authorize stream account**. Stream Town automatically opens Twitch's
-   activation page; enter the device code, sign in as `HumanBeanGames` (not
-   `HumanBeanBot`), and approve `channel:read:stream_key`, `user:write:chat`,
-   and `moderator:manage:banned_users`. Stream Town
-   rejects a grant for a different account. The broadcaster status changes to
-   **Broadcaster authorized** when the validated token is in Windows Credential
-   Manager.
-4. If the streamer was authorized by an older build, authorize it again once;
-   refreshing an old token cannot add the operator-chat or moderation scopes.
+## 4. Connect the stream account
 
-This second token has a distinct Windows Credential Manager entry. Stream Town
-uses it to fetch the stream key from Twitch Helix only after an explicit Go Live
-or operator-panel Restart stream action, to send operator-panel chat messages,
-and to submit operator-panel timeout/ban requests. The key is never written to configuration, the repository, logs,
-diagnostics, or the runtime console.
+1. In the same tab, select **Authorize stream account**.
+2. Use the activation page and device code as before, this time signed in as the **streamer**, for example **HumanBeanGames**.
+3. Approve `channel:read:stream_key`, `user:write:chat`, and `moderator:manage:banned_users`.
+4. Return to the game and wait for successful broadcaster authorization for the expected stream account.
 
-## 7. Choose broadcast quality and test bandwidth
+This grant lets the game fetch your stream key, send operator-panel messages as the streamer, and perform the panel's timeout/ban actions. Automatic replies and town announcements still use the bot.
 
-Start in Main Menu > **Secrets**:
+**Check:** the bot is connected and the stream account is separately authorized. The wrong account is rejected. If an older grant lacks a permission, authorize that account again; refreshing a token cannot add scopes. [Twitch device-code flow](https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/#device-code-grant-flow) and [permission reference](https://dev.twitch.tv/docs/authentication/scopes/)
 
-1. Set **Direct stream** to **Enabled**. Keep **Bandwidth test** enabled for the
-   first test, then save the settings. Choose New Town or Load Town and answer
-   **Yes** to the go-live confirmation. Authorization and ingest selection begin
-   during loading, but this preparation does not open RTMP or start the media
-   clocks. The encoder starts only after every loading/GPU-readiness leaf has
-   completed, the loading cover has retired, and gameplay has unpaused.
-2. Exit the Secrets screen and open **Settings > Streaming**. Start with
-   **1280×720, 30 FPS, 3000 Kbps video, 160 Kbps audio**, with **Stream-only
-   rendering** enabled. Streaming settings are
-   read-only while a session is connecting, live, reconnecting, or stopping;
-   use the operator panel's **End Stream** control first. Automatic encoder
-   selection prefers AMD AMF, then tries other available hardware paths and
-   forced-hardware Windows Media Foundation before the OpenH264 CPU fallback.
-   Select a specific encoder only when diagnosing hardware support. The local
-   operator telemetry reports the selected backend and rejected fallback
-   candidates.
-3. Leave **Preferred ingest** empty for Twitch's default, or enter a region name
-   substring such as `Sydney`.
-4. With **Bandwidth test** enabled, launch the game. It will send
-   the full configured bitrate but Twitch will not put
-   the channel live. Open [Twitch Inspector](https://inspector.twitch.tv/) while
-   signed in as the broadcaster and confirm that the test session is stable.
-   Let gameplay run for at least five minutes. The local operator dashboard
-   reports rolling captured/output FPS, selected encoder/ingest,
-   capture replacements, cadence skips, actual audio/video rejection counts,
-   queue depth, and encode latency. Stream-only mode
-   hides the original game window and opens a lightweight 1100×680 operator
-   window with a low-resolution preview, scrollable Twitch chat with account
-   badges and line selection, moderation, and local settings. The operator
-   surface is never sent to Twitch.
-5. End the test with **End Stream** in the operator panel. Relaunch to the Main
-   Menu, open **Secrets**, accept the warning, and turn **Bandwidth test** off.
-   Start/load a town, answer **Yes**, and wait for the operator panel to show
-   **LIVE** after loading completes.
+## 5. Choose stream settings
 
-Twitch requires H.264 video, AAC audio, constant bitrate, and a two-second
-keyframe interval; the game sets those details internally. The AMD AMF path
-also enables HRD enforcement and filler packets so low-motion or static scenes
-remain at the configured transport bitrate instead of collapsing to a nominal
-CBR stream with almost no data. It uses the quality preset with variance-based
-adaptive quantization and disables AMF preanalysis so static, high-frequency
-terrain detail is not periodically reclassified and softened between IDR
-frames. Higher presets may be selected as follows,
-subject to Twitch's current guidance and the available upload bandwidth:
+1. In **Connections > Twitch accounts**, enable **Direct stream**.
+2. For a real public stream, turn **Bandwidth test** off.
+3. Leave **Preferred ingest** empty for Twitch's default, or enter a regional name such as `Sydney`.
+4. Leave Connections and open **Settings > Streaming** to choose resolution, frame rate, bitrate, and render mode. Apply your settings.
 
-- 1920×1080 30 FPS: 4500 Kbps
-- 1280×720 60 FPS: 4500 Kbps
-- 1920×1080 60 FPS: 6000 Kbps
+A modest starting profile is **1280 × 720, 30 FPS, 3000 Kbps video, 160 Kbps audio**. Choose higher settings when your PC and upload can sustain them. Automatic encoder selection tries available hardware before CPU encoding. **Stream-only rendering** uses a separate local operator window with preview and chat; that window is never sent to Twitch. End the current broadcast before changing streaming settings.
 
-`Output FPS` is the constant encoder cadence; `captured FPS` is the number of
-distinct game renders delivered to it. The validated development machine held
-59.9–60.1 output FPS with zero steady-state A/V drops at 1080p60, while the
-maximum visual profile supplied about 50–52 distinct frames per second. Prefer
-720p60 when motion cadence matters most, or 1080p30 when resolution matters
-most. Repeated latest frames preserve timestamps and A/V sync during isolated
-render stalls without allowing latency to accumulate.
+Packaged Windows builds include the required media DLLs. Desktop launch scripts also stage the local runtime.
 
-## 8. Go live without OBS
+## 6. Start a town and confirm it is live
 
-1. Verify **Bandwidth-test mode** is off.
-2. Launch `stream_town_game.exe`; it always starts offline. Choose New Town or
-   Load Town. If setup is incomplete, the game directs you to Secrets. Otherwise,
-   answer **Yes** to the go-live confirmation. No media is sent until the final
-   loading cover has retired. The local operator panel appears with gameplay and
-   changes its toggle from the starting state to **LIVE · END STREAM**.
-3. Check Twitch's Stream Manager/Inspector from another device. To stop the
-   broadcast, click **LIVE · END STREAM** in the operator panel. The encoder
-   flushes the stream trailer, restores the ordinary game window in stream-only
-   mode, and closes RTMP without exiting the game. The same toggle can start a
-   new session from the already-loaded town. Use the adjacent **Restart stream**
-   control when you want to rebuild an active or failed encoder session in place.
+1. Close Connections. Choose **New Town** or **Load Town**.
+2. If the game reports missing Twitch setup, complete Steps 3 and 4 first.
+3. Answer **Yes** to the go-live confirmation when ready to broadcast.
+4. Wait for world loading and the encoder connection to finish.
+5. Wait for Twitch's public-live check. The operator panel then reports **LIVE** and the town begins running.
+6. Check the public picture and audio on your Twitch channel from another device or browser. As a viewer, send `!join`, then `!help` in chat.
 
-WASAPI capture is scoped to the Stream Town process tree, so both the Bevy sound
-engine and Bevy Tidal music are included while unrelated desktop/application
-audio is excluded. A microphone, voice call, browser alert, webcam, composited
-overlay, BRB scene, or capture-card input is intentionally not included. Those
-sources require a future in-game source/mixer feature or an external production
-switcher; they are not silently captured from the desktop.
+**Connected chat or an active encoder does not unlock gameplay.** While Twitch is being checked, the town displays a paused notice. Town simulation, construction, citizen actions, and game command execution wait. Connections, encoding, checks, and menus keep working. Verification retries after temporary failures. Reconnection pauses gameplay until public-live status is confirmed again. Commands received while paused wait to execute when play resumes.
 
-## Connection controls and diagnostics
+Bandwidth tests never pass this gate. Discord setup and delivery do not affect it. The game captures its own audio, including music; microphones, webcams, voice calls, browser audio, and unrelated desktop applications are not included.
 
-- `F1`: intentionally disconnect the Twitch bot.
-- `F2`: reconnect after credentials or channel settings change.
-- Connection success: the Secrets bot card reports the validated bot and
-  authenticated IRC join; the stream card reports the separately authorized
-  broadcaster.
-- Main-menu status success: the bot card says **Connected** and New/Load Town
-  opens the explicit go-live confirmation. After Yes, the operator panel appears
-  only with gameplay and changes to **LIVE · END STREAM** after gameplay
-  readiness. Encoded video and audio frame counts then increase.
-- **Restart stream** is in the local operator panel, not Secrets. It stops the
-  current in-process encoder if one exists, revalidates the broadcaster grant,
-  fetches a fresh stream key and ingest list, and starts a new encoder
-  connection using the already-saved settings.
-- In-game HUD state: `Twitch: Connected`; the local-only operator toggle reports
-  **NOT LIVE · GO LIVE**, a transitional starting state, or **LIVE · END STREAM**.
-  In stream-only mode the HUD is sent to Twitch while the operator sees the
-  separate diagnostics/preview window.
-- A wrong bot-account authorization is rejected before IRC is started. A
-  broadcaster-account or moderation-scope failure is reported separately on the
-  broadcaster card and does not masquerade as a bot connection error.
-- If authorization is revoked, the app registration changes, the streamer token
-  lacks the moderation scope, or a refresh token expires, reopen Main Menu >
-  Secrets and authorize the affected account again. A successful broadcaster
-  authorization refreshes moderation authority without disconnecting healthy
-  bot chat.
-- `Login authentication failed` normally means the wrong bot authorized the app or the stored grant was revoked.
-- A channel-join timeout normally means the channel login is wrong or Twitch IRC is unreachable from the machine.
-- `WaitingForBroadcasterAuthorization` means the broadcaster grant has not been
-  completed or was revoked. Reauthorize the broadcaster, not the bot.
-- `Reconnecting` means the in-process RTMP worker encountered an ingest/network
-  error. It retries with bounded exponential backoff and never buffers an
-  unbounded number of render frames.
-- `VerifyingTwitch` means Twitch has accepted at least one encoded video packet
-  and the app is waiting for the channel to appear in Twitch's public live API.
-  It is not used as a substitute for a real public-live confirmation.
-- Missing `avcodec-62.dll` (or another FFmpeg/OpenH264 DLL) means a development
-  build was launched without the pinned vcpkg runtime on `PATH`; packaged builds
-  put the replaceable DLLs beside the executable.
+## Optional bandwidth test
 
-Official references:
+A bandwidth test sends video to Twitch for inspection without publishing a live channel. It tests transport and encoding while the town remains **paused**.
 
-- [Register a Twitch app](https://dev.twitch.tv/docs/authentication/register-app)
-- [Twitch device-code OAuth](https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/#device-code-grant-flow)
-- [Twitch IRC authentication and scopes](https://dev.twitch.tv/docs/chat/irc/#authenticating-with-the-twitch-irc-server)
-- [Twitch token validation](https://dev.twitch.tv/docs/authentication/validate-tokens/)
-- [Twitch video broadcast requirements](https://dev.twitch.tv/docs/video-broadcast/)
-- [Twitch Get Stream Key API](https://dev.twitch.tv/docs/api/reference#get-stream-key)
-- [Twitch Ban User API](https://dev.twitch.tv/docs/api/reference/#ban-user)
-- [FFmpeg LGPL compliance guidance](https://ffmpeg.org/legal.html)
+1. Before starting a session, enable **Bandwidth test** in Connections.
+2. Start/load a town and accept the stream confirmation.
+3. Open [Twitch Inspector](https://inspector.twitch.tv/) as the streamer and check the session's connection stability and bitrate.
+4. Finish with **End Stream**, then disable bandwidth testing.
+5. Start the real stream and wait for public-live confirmation to begin gameplay.
+
+## Stopping and reconnecting
+
+- **End Stream** closes the broadcast and gameplay pauses.
+- **Go Live** starts another session from the loaded town; play resumes after Twitch confirms it is live.
+- **Restart stream** rebuilds the encoder connection and checks Twitch again. It keeps town progress.
+- At the main menu, `F1` disconnects bot chat and `F2` reconnects it. These shortcuts do not operate during gameplay. Use Connections to change account setup.
+- Normal startup opens the main menu offline. The **Redeploy** desktop shortcut deliberately resumes a saved town and requests go-live automatically.
+
+## Troubleshooting
+
+| What you see | What to check |
+| --- | --- |
+| Wrong-account error | Use the bot for **Authorize bot account**, and the streamer for **Authorize stream account**. Check both saved logins. |
+| Activation page does not open | Open the displayed address manually. Enter the current device code; request a new code if it expires. |
+| Missing Client ID / invalid client | Copy the app's **Client ID**, save it, and ensure its client type is **Public**. |
+| Login authentication failed | Reauthorize the bot; its grant may be revoked or belong to another app. |
+| Channel join times out | Check the stream account login and internet connection, then reconnect the bot. |
+| Broadcaster authorization missing | Complete **Authorize stream account**. Authorizing the bot alone does not fix it. |
+| Connecting/verifying; town paused | Wait for the public-live check. Check the broadcaster grant, network, and Twitch channel; ensure bandwidth testing is off. Failed verification retries automatically. |
+| Bandwidth test / not publicly live | End the test, disable it, and go live again. A paused town is expected during the test. |
+| Reconnecting | Gameplay pauses during reconnection and resumes after public-live confirmation. Check the operator status for the connection error. |
+| Missing media DLL | Use the desktop launcher or a complete packaged build. Copying only the executable omits required libraries. |
+| Operator chat/moderation fails | Reauthorize the stream account with all three permissions in Step 4. |
+| Discord disconnected | This does not block Twitch or gameplay. Follow the optional [Discord guide](DISCORD_SETUP.md) to set it up. |
+
+The old Fish God Channel Points reward maps to `!praise`, which is recognized but not implemented. Redeeming it does not complete the event. The command reference lists supported event controls.
+
+## Using Tools instead
+
+**Tools > Twitch** exposes the same account authorizations and public settings. Its **Open Twitch setup guide** and **Open command guide** links open these documents. Use the same Client ID, logins, and permissions described above. Save settings in Tools, authorize both accounts, then launch or reconnect in the game. Save and close one editor before editing the same settings in the other.
+
+## Credentials and permissions
+
+Public settings are saved in `bevy-port/.stream-town/config.ron` for this desktop installation. OAuth tokens live in the OS credential vault, with separate entries for bot and streamer. Stream keys are fetched in memory and are not displayed or saved. Keep secrets out of source files, chat, issue reports, and documentation.
+
+The bot token is validated at startup and periodically, and refreshed automatically when possible. Revoked authorization requires signing in again. Twitch moderator and broadcaster badges grant staff commands. Game-master cheats require an exact numeric Twitch ID in `twitch.game_master_ids`; its default list is empty. The [command guide](TWITCH_COMMANDS.md) explains each permission.
+
+## Scheduled fresh Beanville launch
+
+The requested one-time launch is **Tuesday 22 September 2026 at 8am Adelaide time**. It closes an existing game normally, archives Beanville's save and rotating backups under `bevy-port/.stream-town/town-backups/Beanville-<timestamp>/`, verifies hashes, then starts a **new Beanville** and goes live. Other towns and saved credentials are kept. The new town waits for Twitch's public-live check before progressing.
+
+The task uses the already-built release game and does not compile at 8am. Its launcher is `bevy-port/scripts/restart-beanville.ps1`; `-PlanOnly` previews actions without closing the game, moving saves, or broadcasting. Keep this PC awake and Codex open for the local task to run. [Codex local automation requirements](https://learn.chatgpt.com/docs/automations)
+
+To restore the old town, close the game, preserve any new Beanville save, and copy the archived `Beanville.stbevy` back to `.stream-town/saves/`. Select **Load Town**; avoid the fresh-reset launcher when restoring a backup.

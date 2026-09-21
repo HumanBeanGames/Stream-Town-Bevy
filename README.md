@@ -4,6 +4,14 @@ Stream Town is a Bevy-based town simulation controlled through Twitch chat. The
 shipping Rust workspace, authored data, runtime assets, tools, and deployment
 scripts live in [`bevy-port`](bevy-port/README.md).
 
+For both required Twitch accounts, follow the [Twitch setup walkthrough](TWITCH_SETUP.md).
+The game pauses town gameplay until Twitch confirms the stream is publicly live.
+To connect the optional announcement bot, follow the
+[Discord bot setup walkthrough](DISCORD_SETUP.md). It covers setup through the
+game, event choices, and troubleshooting; no coding is required.
+Both setup tabs in the game and Tools link to their guides. The Twitch tab also links
+to the [complete command guide](TWITCH_COMMANDS.md).
+
 The former Unity source and one-time conversion pipeline have been retired. The
 checked-in RON catalogs and GLB/texture assets are now the project’s native
 authoring source. Historical engine provenance retained inside those catalogs is
@@ -15,14 +23,22 @@ metadata only and is not a build-time dependency.
 cd bevy-port
 cargo run -p xtask -- validate
 cargo test --workspace
-cargo run -p stream_town_tools
+cargo build --release --workspace
+.\scripts\launch-tools.ps1
 .\scripts\launch-game.ps1
 ```
 
 For the crate boundaries and ECS conventions, see
 [`ARCHITECTURE.md`](ARCHITECTURE.md). Twitch setup is documented in
 [`TWITCH_SETUP.md`](TWITCH_SETUP.md), and the public command list is in
-[`TWITCH_COMMANDS.md`](TWITCH_COMMANDS.md).
+[`TWITCH_COMMANDS.md`](TWITCH_COMMANDS.md). The optional Discord bot is configured
+in the game's Connections screen, with event switches in Settings > Discord.
+Bevy Tools supports the same configuration; see [`DISCORD_SETUP.md`](DISCORD_SETUP.md).
+
+All Tools-authored data loads at runtime. Saving footprints, models, materials,
+roles, and other existing tool fields never requires recompilation. Restart the
+game to load saved catalog edits. See the
+[runtime authoring audit](bevy-port/docs/runtime-authoring-audit.md).
 
 ## License and media
 
