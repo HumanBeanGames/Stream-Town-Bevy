@@ -115,13 +115,13 @@ A bandwidth test sends video to Twitch for inspection without publishing a live 
 1. Before starting a session, enable **Bandwidth test** in Connections.
 2. Start/load a town and accept the stream confirmation.
 3. Open [Twitch Inspector](https://inspector.twitch.tv/) as the streamer and check the session's connection stability and bitrate.
-4. Finish with **End Stream**, then disable bandwidth testing.
-5. Start the real stream and wait for public-live confirmation to begin gameplay.
+4. Select **End Test** to save the town and return to the main menu. Open **Connections > Twitch accounts** and disable **Bandwidth test**.
+5. Choose **Load Town**, accept the go-live confirmation, and wait for public-live confirmation to begin gameplay.
 
 ## Stopping and reconnecting
 
-- **End Stream** closes the broadcast and gameplay pauses.
-- **Go Live** starts another session from the loaded town; play resumes after Twitch confirms it is live.
+- **End Stream** closes the broadcast, saves the town, and returns to the main menu. To resume, choose **Load Town** and accept the go-live confirmation. Play resumes after Twitch confirms it is live.
+- If an inactive or failed stream leaves a town loaded, the operator panel's **Go Live** button retries that session.
 - **Restart stream** rebuilds the encoder connection and checks Twitch again. It keeps town progress.
 - At the main menu, `F1` disconnects bot chat and `F2` reconnects it. These shortcuts do not operate during gameplay. Use Connections to change account setup.
 - Normal startup opens the main menu offline. The **Redeploy** desktop shortcut deliberately resumes a saved town and requests go-live automatically.
@@ -137,7 +137,7 @@ A bandwidth test sends video to Twitch for inspection without publishing a live 
 | Channel join times out | Check the stream account login and internet connection, then reconnect the bot. |
 | Broadcaster authorization missing | Complete **Authorize stream account**. Authorizing the bot alone does not fix it. |
 | Connecting/verifying; town paused | Wait for the public-live check. Check the broadcaster grant, network, and Twitch channel; ensure bandwidth testing is off. Failed verification retries automatically. |
-| Bandwidth test / not publicly live | End the test, disable it, and go live again. A paused town is expected during the test. |
+| Bandwidth test / not publicly live | Select **End Test**, disable **Bandwidth test** in Connections, then choose **Load Town** and accept go-live. A paused town is expected during the test. |
 | Reconnecting | Gameplay pauses during reconnection and resumes after public-live confirmation. Check the operator status for the connection error. |
 | Missing media DLL | Use the desktop launcher or a complete packaged build. Copying only the executable omits required libraries. |
 | Operator chat/moderation fails | Reauthorize the stream account with all three permissions in Step 4. |
